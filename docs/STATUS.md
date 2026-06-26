@@ -83,6 +83,7 @@ bun run lint     # oxlint
 | 0 | 架构地基 5 原则（图移植治理） | ✅ 见 §6 + foundation spec |
 | 0 | rename 设计（双名 / 致敬） | ✅ 见 rename spec |
 | 0 | **rename 执行（子项目 0）** | ✅ 已完成 |
+| 0 | graph-vibe 关键抽象提炼到 `docs/graph-vibe/`（移植不再依赖旧 Go 项目） | ✅ |
 | 1+ | 图移植深谈 + 各子项目 spec（节点模型 / 落到 opencode / Plan-Build / 派生 / 可视化 / MVP） | ⏳ 待办 |
 
 ## 6. 架构决策摘要（图移植地基，治理所有后续图功能）
@@ -102,6 +103,7 @@ bun run lint     # oxlint
 - bin shim：`packages/opencode/bin/opencode`（npm 安装版找平台二进制；dev 不走它）
 - TUI logo：CLI 文本路径 `packages/opencode/src/cli/ui.ts` 的 `logo()`；TUI 首屏 `packages/tui/src/component/logo.tsx` 的 `Logo()`
 - 设计 spec：`docs/superpowers/specs/`
+- 图移植概念参考：`docs/graph-vibe/`（README + data-model + domain + workflow；从旧 Go 项目提炼，移植不再依赖旧项目）
 - 本文档：`docs/STATUS.md`（持续更新）
 
 ## 8. rename 执行清单（子项目 0，✅ 已完成）
