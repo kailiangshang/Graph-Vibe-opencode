@@ -46,6 +46,7 @@ export function empty() {
 }
 
 export function logo(pad?: string) {
+  const subtitle = "Graph Vibe OpenCode · forked from anomalyco/opencode"
   if (!process.stdout.isTTY && !process.stderr.isTTY) {
     const result = []
     for (const row of wordmark) {
@@ -53,7 +54,7 @@ export function logo(pad?: string) {
       result.push(row)
       result.push(EOL)
     }
-    return result.join("").trimEnd()
+    return result.join("").trimEnd() + EOL + (pad ?? "") + subtitle
   }
 
   const result: string[] = []
@@ -100,7 +101,7 @@ export function logo(pad?: string) {
     result.push(draw(other, right.fg, right.shadow, right.bg))
     result.push(EOL)
   })
-  return result.join("").trimEnd()
+  return result.join("").trimEnd() + EOL + "\x1b[90m" + (pad ?? "") + subtitle + reset
 }
 
 export async function input(prompt: string): Promise<string> {

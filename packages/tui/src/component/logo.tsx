@@ -56,6 +56,9 @@ export function Logo() {
           </box>
         )}
       </For>
+      <text fg={theme.textMuted} selectable={false}>
+        Graph Vibe OpenCode · forked from anomalyco/opencode
+      </text>
     </box>
   )
 }
