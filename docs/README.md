@@ -8,13 +8,13 @@
 **活文档（持续更新，唯一来源）**
 - [`STATUS.md`](./STATUS.md) — 现状 / 进度 / 环境搭建 / 路径速查（**唯一进度入口**）
 - [`UPSTREAM-DIVERGENCE.md`](./UPSTREAM-DIVERGENCE.md) — 上游同步追踪 +「扩展不修改」总则 + merge 流程
+- [`graph-port-principles.md`](./graph-port-principles.md) — 图移植 6 条治理原则（所有子项目受其约束）
 
 **概念参考（稳定，少改）**
 - [`graph-vibe/`](./graph-vibe/README.md) — 图核心抽象：README（总览）/ data-model / domain / workflow
 
 **设计 spec（每子项目一份，活跃）**
-- [`specs/2026-06-26-graph-port-foundation.md`](./specs/2026-06-26-graph-port-foundation.md) — 图移植 6 条治理原则（地基）
-- [`specs/2026-06-27-graph-storage-foundation.md`](./specs/2026-06-27-graph-storage-foundation.md) — 子项目 1：图存储地基
+- [`specs/2026-06-27-graph-storage.md`](./specs/2026-06-27-graph-storage.md) — 子项目 1：图存储地基
 
 **实施计划（每子项目一份，活跃）**
 - [`plans/`](./plans/) — writing-plans 产出放这（暂空）

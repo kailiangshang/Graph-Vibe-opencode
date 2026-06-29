@@ -2,7 +2,7 @@
 
 - **日期**：2026-06-27
 - **状态**：已 brainstorm，待评审 → writing-plans
-- **治理**：受 `2026-06-26-graph-port-foundation.md` 6 条原则约束；遵循 `docs/UPSTREAM-DIVERGENCE.md`「扩展不修改」；**原则 6：无 MVP、完整生产级实现**。
+- **治理**：受 `docs/graph-port-principles.md` 6 条原则约束；遵循 `docs/UPSTREAM-DIVERGENCE.md`「扩展不修改」；**原则 6：无 MVP、完整生产级实现**。
 - **前置决策**：A=图表进 opencode 全局 `opencode.db`（`project_id` 分区）；B1=graph-vibe 分支 = opencode session。
 
 ## 1. 目标与背景

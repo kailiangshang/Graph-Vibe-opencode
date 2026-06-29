@@ -98,7 +98,7 @@ bun run lint     # oxlint
 4. **约束不对称：用户软、agent 硬。**
 5. **agent 硬锁 = 工具 affordance + 运行时 gate（结构约束硬执行）+ 提示词手册（行为约束软引导）。**
 
-→ 详见 `docs/specs/2026-06-26-graph-port-foundation.md`
+→ 详见 `docs/graph-port-principles.md`
 → rename（已完成）见 `docs/archive/2026-06-26-minimal-rename-design.md`
 
 ## 7. 重要路径速查

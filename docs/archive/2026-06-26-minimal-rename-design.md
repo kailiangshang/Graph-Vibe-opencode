@@ -9,7 +9,7 @@
 Rebrand the fork to **"Graph Vibe OpenCode"** while honoring the upstream
 (`anomalyco/opencode`). Surface-level and mechanical: minimal churn, zero friction for
 future `merge upstream/dev`. This is branding scaffolding only — it does **not** touch the
-graph feature (see `2026-06-26-graph-port-foundation.md` and future graph-port specs).
+graph feature (see `docs/graph-port-principles.md` and future graph-port specs).
 
 ## Decisions
 

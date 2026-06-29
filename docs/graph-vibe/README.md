@@ -37,7 +37,7 @@ Session 层   Session(=Branch) · CurrentPlan
 
 ## 映射到 opencode（本 fork 的移植地基）
 
-> 治理原则见 `docs/specs/2026-06-26-graph-port-foundation.md`。摘要：
+> 治理原则见 `docs/graph-port-principles.md`。摘要：
 
 - **混合**：opencode 为主（session/provider/agent 循环不变），叠加图驱动 Plan/Build 模式。
 - **代码才是真相**：图 = 可从代码重新派生的「结构子图」+ 叠加的「意图子图」（PRD/Plan/决策/审计）。
