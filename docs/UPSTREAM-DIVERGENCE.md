@@ -21,7 +21,7 @@
 |---|---|---|---|---|
 | `package.json`（根） | `name` → `graph-vibe-opencode`；加 `graph-vibe` dev 脚本 | fork 身份 + 双名 | 低（小、局部） | 长期保留；上游大改 scripts 段时重解 |
 | `packages/opencode/package.json` | `bin` 加 `"graph-vibe"` 别名 | 双名 | 低 | 长期保留 |
-| `README.md` | 标题改为 Graph Vibe OpenCode + fork 致敬行 | 品牌 | 低 | 长期保留 |
+| `README.md` | 重写为 graph-vibe-opencode 俯瞰（核心思想/做什么/架构/优势/指路）+ 保留 opencode 运行说明 | 品牌与项目门面 | 中（与上游 README 差异大） | 长期保留；merge 时不追求与上游 README 同步 |
 | `packages/opencode/src/cli/ui.ts` | `logo()` 加副标题字符串 | 品牌（CLI 输出路径） | 低 | 长期保留 |
 | `packages/tui/src/component/logo.tsx` | `Logo()` 组件加副标题 `<text>` | 品牌（TUI 首屏） | 中（组件结构） | 长期保留；上游重构该组件时重解 |
 
