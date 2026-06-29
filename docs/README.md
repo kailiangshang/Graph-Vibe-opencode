@@ -17,7 +17,7 @@
 - [`specs/2026-06-27-graph-storage.md`](./specs/2026-06-27-graph-storage.md) — 子项目 1：图存储地基
 
 **实施计划（每子项目一份，活跃）**
-- [`plans/`](./plans/) — writing-plans 产出放这（暂空）
+- [`plans/2026-06-27-graph-storage.md`](./plans/2026-06-27-graph-storage.md) — 子项目 1：图存储地基 TDD 实施计划
 
 **归档（已完成 / 过期）**
 - [`archive/`](./archive/) — rename 的 spec + plan（已完成）
