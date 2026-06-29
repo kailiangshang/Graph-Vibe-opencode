@@ -77,6 +77,21 @@ Maps onto opencode's existing mechanisms: tool registry (swap in the gated set f
 graph-mode), permissions (Build gate judged here), system-prompt / agents config (graph
 workflow lives here).
 
+## 6. No MVP — complete, production-quality implementation (development discipline)
+
+Every piece is built **completely and correctly the first time** — no thin MVP slices, no
+throwaway stubs, no "defer-and-rework." Goal: a solid first launch, not a quick-and-dirty
+demo.
+
+How this applies to the sub-project decomposition:
+- The decomposition is by **layer** (storage → domain → derivation → Plan/Build → AI → viz),
+  for design coherence — NOT for MVP-thinning. You can't design merge before storage.
+- **Within each sub-project**: implement its layer fully — complete schema for that layer,
+  complete logic, tests, production quality. No half-implementations.
+- Don't build speculative tables/features for not-yet-designed layers (that's guessing, not
+  completeness). Design each layer's persistence **when** you design that layer, completely.
+- Tests are mandatory (test-driven), matching opencode's `bun test` setup.
+
 ## Why the graph cannot become unmaintainable
 
 The structural subgraph is always rebuildable from code; the intent subgraph degrades to
@@ -87,5 +102,6 @@ broken session can be dropped and rebuilt.
 ## Out of scope for this document
 
 Node/edge model details, graph↔opencode storage mapping, CurrentPlan / Plan / Build /
-Autopilot mechanics, structural derivation flow, web visualization, and the MVP slice.
-Each is a separate spec in a future graph-port brainstorm, governed by these principles.
+Autopilot mechanics, structural derivation flow, web visualization. Each is a separate spec
+in a future graph-port brainstorm, governed by these principles (incl. principle 6:
+complete, no-MVP implementation).

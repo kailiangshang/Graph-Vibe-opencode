@@ -86,7 +86,9 @@ bun run lint     # oxlint
 | 0 | graph-vibe 关键抽象提炼到 `docs/graph-vibe/`（移植不再依赖旧 Go 项目） | ✅ |
 | 0 | 上游同步策略 + 分叉追踪（`docs/UPSTREAM-DIVERGENCE.md`，「扩展不修改」总则） | ✅ |
 | 0 | 会话恢复：旧主会话合并进当前会话；项目身份统一（A→B） | ✅ |
-| 1+ | 图移植深谈 + 各子项目 spec（节点模型 / 落到 opencode / Plan-Build / 派生 / 可视化 / MVP） | ⏳ 待办 |
+| 0 | 原则6「无 MVP、完整实现」加入 foundation spec | ✅ |
+| 1 | 图存储地基 spec（graph_node/edge/version + CurrentPlan + TDD） | ✅ spec，待 writing-plans |
+| 2+ | 领域核心/派生/Plan-Build/AI/可视化 各子项目 spec | ⏳ 待办 |
 
 ## 6. 架构决策摘要（图移植地基，治理所有后续图功能）
 
