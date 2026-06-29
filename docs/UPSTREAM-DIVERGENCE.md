@@ -32,7 +32,7 @@
 这些是纯新增，merge 时安全：
 - `docs/STATUS.md`、`docs/UPSTREAM-DIVERGENCE.md`（本文）
 - `docs/graph-vibe/`（README / data-model / domain / workflow）
-- `docs/superpowers/specs/`、`docs/superpowers/plans/`
+- `docs/specs/`、`docs/plans/`、`docs/graph-vibe/`
 - 未来的图子系统：新包（如 `packages/graph/`）、新表 + migration、新工具/protocol 组/handler、agents 配置
 
 > 原则上 graph-vibe 的**所有逻辑实现**都应落在这里，而不是改 §2 之外的 opencode 原文件。

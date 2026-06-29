@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun monorepo, TypeScript, yargs CLI.
 
-**Spec:** `docs/superpowers/specs/2026-06-26-minimal-rename-design.md`
+**Spec:** `docs/archive/2026-06-26-minimal-rename-design.md`
 
 ---
 

@@ -98,15 +98,16 @@ bun run lint     # oxlint
 4. **约束不对称：用户软、agent 硬。**
 5. **agent 硬锁 = 工具 affordance + 运行时 gate（结构约束硬执行）+ 提示词手册（行为约束软引导）。**
 
-→ 详见 `docs/superpowers/specs/2026-06-26-graph-port-foundation.md`
-→ rename 详见 `docs/superpowers/specs/2026-06-26-minimal-rename-design.md`
+→ 详见 `docs/specs/2026-06-26-graph-port-foundation.md`
+→ rename（已完成）见 `docs/archive/2026-06-26-minimal-rename-design.md`
 
 ## 7. 重要路径速查
 
 - CLI/TUI+server 入口：`packages/opencode/src/index.ts`（yargs，`.scriptName("opencode")`）
 - bin shim：`packages/opencode/bin/opencode`（npm 安装版找平台二进制；dev 不走它）
 - TUI logo：CLI 文本路径 `packages/opencode/src/cli/ui.ts` 的 `logo()`；TUI 首屏 `packages/tui/src/component/logo.tsx` 的 `Logo()`
-- 设计 spec：`docs/superpowers/specs/`
+- **文档总索引 + 规则**：`docs/README.md`（写新文档先看这，防堆积）
+- 设计 spec：`docs/specs/`；实施计划：`docs/plans/`；归档：`docs/archive/`
 - 图移植概念参考：`docs/graph-vibe/`（README + data-model + domain + workflow；从旧 Go 项目提炼，移植不再依赖旧项目）
 - 上游同步追踪：`docs/UPSTREAM-DIVERGENCE.md`（分叉登记表 +「扩展不修改」总则 + merge 流程）
 - 本文档：`docs/STATUS.md`（持续更新）
