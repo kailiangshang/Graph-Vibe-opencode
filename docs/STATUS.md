@@ -84,6 +84,8 @@ bun run lint     # oxlint
 | 0 | rename 设计（双名 / 致敬） | ✅ 见 rename spec |
 | 0 | **rename 执行（子项目 0）** | ✅ 已完成 |
 | 0 | graph-vibe 关键抽象提炼到 `docs/graph-vibe/`（移植不再依赖旧 Go 项目） | ✅ |
+| 0 | 上游同步策略 + 分叉追踪（`docs/UPSTREAM-DIVERGENCE.md`，「扩展不修改」总则） | ✅ |
+| 0 | 会话恢复：旧主会话合并进当前会话；项目身份统一（A→B） | ✅ |
 | 1+ | 图移植深谈 + 各子项目 spec（节点模型 / 落到 opencode / Plan-Build / 派生 / 可视化 / MVP） | ⏳ 待办 |
 
 ## 6. 架构决策摘要（图移植地基，治理所有后续图功能）
@@ -104,6 +106,7 @@ bun run lint     # oxlint
 - TUI logo：CLI 文本路径 `packages/opencode/src/cli/ui.ts` 的 `logo()`；TUI 首屏 `packages/tui/src/component/logo.tsx` 的 `Logo()`
 - 设计 spec：`docs/superpowers/specs/`
 - 图移植概念参考：`docs/graph-vibe/`（README + data-model + domain + workflow；从旧 Go 项目提炼，移植不再依赖旧项目）
+- 上游同步追踪：`docs/UPSTREAM-DIVERGENCE.md`（分叉登记表 +「扩展不修改」总则 + merge 流程）
 - 本文档：`docs/STATUS.md`（持续更新）
 
 ## 8. rename 执行清单（子项目 0，✅ 已完成）
