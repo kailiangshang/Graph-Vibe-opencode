@@ -42,7 +42,7 @@ opencode 底座要点（来自 explore）：单全局 DB；多项目靠 `project
 | `session_id` | TEXT | FK→`session(id)` ON DELETE CASCADE，**NULL=主图；非空=该会话 CurrentPlan** |
 | `type` | TEXT | NOT NULL，CHECK IN (`prd`,`composite`,`atomic`) |
 | `name` | TEXT | NOT NULL |
-| `level` | TEXT | CHECK IN (`L1`,`L2`)（prd=L1, composite=L2；atomic 可空） |
+| `level` | TEXT NOT NULL | CHECK IN (`L1`,`L2`)（**必填**：prd=L1, composite=L2, atomic=L2） |
 | `priority` | TEXT | CHECK IN (`P0`,`P1`,`P2`,`P3`) |
 | `category` | TEXT | 仅 atomic 用 |
 | `status` | TEXT | NOT NULL DEFAULT `pending`，CHECK IN (`pending`,`implemented`,`verified`,`deprecated`) |
