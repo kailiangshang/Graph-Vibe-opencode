@@ -116,23 +116,22 @@ Layer：`GraphStorage.layer`（依赖 `Database.Service`）。
 - **Effect 化**：用 `Effect.gen` / `Effect.fn`；错误用 `Schema.TaggedErrorClass`；服务用 `Context.Service` 模式（参考 opencode `session`/`project`）。
 - **事务**：`promote` 及多写操作用 drizzle 事务；`busy_timeout` 由 `Database.Service` 的 PRAGMA 已设。
 - **DB 访问**：经 `@opencode-ai/core/database/database` 的 `Database.Service`（**不**用死的 `#db` 别名）。
-- **最小接触 opencode 原文件**：业务逻辑全部为新增文件；仅对 `packages/core/src/database/schema.gen.ts` 与 `migration.gen.ts` 做**注册性追加**（见 §7），不改既有 migration 文件与数据库连接/PRAGMA 等逻辑。
+- **零手改 opencode 原文件**：业务逻辑全部为新增文件；`schema.gen.ts`/`migration.gen.ts` 由**生成器自动重生**（见 §7），不手改。
 - **命名**：snake_case 字段；Effect 服务命名与自重导出遵循 `packages/opencode/AGENTS.md`。
 - **无 `any`**；content/snapshot JSON 用 Schema 定义结构（`GraphNodeContent` 等）。
 
-## 7. migration 集成
+## 7. migration 集成（用生成器，不手改）
 
-opencode migration 系统：全新 DB 跑 `schema.gen.ts` 的 `up(tx)`；已有 DB 跑 `migration/*.ts` 增量。因此：
-- 新建 `packages/core/src/graph/sql.ts` 定义 3 表（drizzle）。
-- 在 `packages/core/src/database/schema.gen.ts` 的 `up(tx)` 里**新增** 3 表的建表语句（纯追加，不改既有）。
-- 新建一个 migration 文件 `packages/core/src/database/migration/<时间戳>_graph.sql.ts`，`up(tx)` 创建同样 3 表（供已有 DB 增量），并登记进 `migration.gen.ts` 的静态列表。
-- migration 在 `Semaphore.makeUnsafe(1)` 锁下运行（已有机制），无需额外处理并发。
+opencode 有 drizzle migration **生成器**（`packages/core/drizzle.config.ts` 扫描 `src/**/*.sql.ts` + `src/**/sql.ts`）：
+1. 新建 `packages/core/src/graph/sql.ts` 定义 3 张 drizzle 表（自动被发现）。
+2. 在 `packages/core` 跑 `bun run script/migration.ts --name graph` → 生成器自动：重生 `schema.gen.ts`（新 DB 的 `up`）、重生 `migration.gen.ts`（枚举）、新增一个 `migration/<时间戳>_graph.ts`（增量）、更新 `schema.json`。
+3. 校验：`bun run script/migration.ts --check` 应输出 "No schema changes, nothing to migrate"（有测试 `test/database-migration.test.ts` 守护，linux 上禁止漂移）。
 
-> 注：动 `schema.gen.ts` 与 `migration.gen.ts` 属**注册性新增**（往列表/快照里加条目），不是修改 opencode 逻辑——记进 `docs/UPSTREAM-DIVERGENCE.md` §2（低风险）。
+`schema.gen.ts`/`migration.gen.ts`/migration 文件都是**生成产物**——生成器重生成它们**不算手分叉**。本子项目对 opencode 的人工改动 = **0**（纯新增 `graph/sql.ts` + service + schema 包契约 + 测试）。无需在 `docs/UPSTREAM-DIVERGENCE.md` 登记。
 
 ## 8. 测试计划（TDD，`bun test`）
 
-测试位于 `packages/core/src/graph/storage.test.ts`（或 `test/`，遵循 opencode 测试惯例）。用例（先写测试再实现）：
+测试位于 `packages/core/test/graph.test.ts`（opencode 测试惯例：在 `test/` 下，不在 `src/`）。用例（先写测试再实现）：
 1. **节点 CRUD**：create（默认 status=pending/test_status=none 生效）、get、update、delete；update 刷 `time_updated`。
 2. **节点约束**：非法 type/level/status/priority 被 CHECK 拒绝；confidence 越界拒绝；`desc` 超长由应用层挡（DB 不限）。
 3. **边 CRUD + 约束**：create/get/delete；source/target 不存在被 FK 拒；`UNIQUE(source,target,relation)` 重复拒绝；非法 relation 拒绝。
@@ -148,9 +147,9 @@ opencode migration 系统：全新 DB 跑 `schema.gen.ts` 的 `up(tx)`；已有 
 - `GraphStorage.Service` 全部方法工作，测试 1–8 全绿。
 - 主图/CurrentPlan/promote/版本 机制按 §4 行为正确。
 - `bun typecheck` 过；`bun test`（在 `packages/core`）过。
-- **零分叉**：除 §7 的注册性新增外，不改动任何 opencode 原文件；`docs/UPSTREAM-DIVERGENCE.md` 登记 §7 两处。
+- **零分叉**：不手改任何 opencode 原文件；`schema.gen.ts`/`migration.gen.ts`/migration 文件由生成器自动重生（生成产物，非手分叉）；无需登记 UPSTREAM-DIVERGENCE。
 - `git merge upstream/dev` 无冲突（新增文件）。
 
 ## 10. 与上游同步
 
-本子项目全部为新增文件（`packages/core/src/graph/*` + migration 注册条目），符合「扩展不修改」。merge 上游时唯一可能需要核对的是 §7 那两处注册文件（`schema.gen.ts`/`migration.gen.ts`）——若上游重构了 migration 机制，按其新机制重新登记即可。
+本子项目全部为新增文件（`packages/core/src/graph/*` + `packages/schema/src/graph*` + `test/graph.test.ts`）+ 生成器产出的 migration。符合「扩展不修改」。merge 上游时若与生成的 migration 文件冲突，重跑生成器即可。
