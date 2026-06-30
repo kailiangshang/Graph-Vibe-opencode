@@ -279,9 +279,176 @@ export const layer = Layer.effect(
       return rows.map(nodeRow)
     })
 
+    const edgeCreate = Effect.fn("GraphStorage.edge.create")(function* (input: EdgeCreate) {
+      const id = EdgeID.create()
+      yield* db
+        .insert(GraphEdgeTable)
+        .values({
+          id,
+          project_id: input.projectID,
+          session_id: input.sessionID ?? null,
+          source_id: input.sourceID,
+          target_id: input.targetID,
+          relation: input.relation,
+          confidence: input.confidence ?? 1,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      return id
+    })
+
+    const edgeGet = Effect.fn("GraphStorage.edge.get")(function* (id: EdgeID) {
+      const r = yield* db.select().from(GraphEdgeTable).where(eq(GraphEdgeTable.id, id)).get().pipe(Effect.orDie)
+      if (!r) return yield* new NotFoundError({ kind: "edge", id })
+      return edgeRow(r)
+    })
+
+    const edgeDelete = Effect.fn("GraphStorage.edge.delete")(function* (id: EdgeID) {
+      yield* db.delete(GraphEdgeTable).where(eq(GraphEdgeTable.id, id)).run().pipe(Effect.orDie)
+    })
+
+    const edgeList = Effect.fn("GraphStorage.edge.list")(function* (filter: EdgeFilter) {
+      const conds = [eq(GraphEdgeTable.project_id, filter.projectID)]
+      if (filter.sessionID !== undefined) conds.push(eq(GraphEdgeTable.session_id, filter.sessionID))
+      if (filter.sourceID !== undefined) conds.push(eq(GraphEdgeTable.source_id, filter.sourceID))
+      if (filter.targetID !== undefined) conds.push(eq(GraphEdgeTable.target_id, filter.targetID))
+      if (filter.relation !== undefined) conds.push(eq(GraphEdgeTable.relation, filter.relation))
+      const rows = yield* db.select().from(GraphEdgeTable).where(and(...conds)).all().pipe(Effect.orDie)
+      return rows.map(edgeRow)
+    })
+
+    const main = Effect.fn("GraphStorage.main")(function* (input: { projectID: ProjectV2.ID }) {
+      const nodes = yield* db
+        .select()
+        .from(GraphNodeTable)
+        .where(and(eq(GraphNodeTable.project_id, input.projectID), isNull(GraphNodeTable.session_id)))
+        .all()
+        .pipe(Effect.orDie)
+      const edges = yield* db
+        .select()
+        .from(GraphEdgeTable)
+        .where(and(eq(GraphEdgeTable.project_id, input.projectID), isNull(GraphEdgeTable.session_id)))
+        .all()
+        .pipe(Effect.orDie)
+      return { nodes: nodes.map(nodeRow), edges: edges.map(edgeRow) }
+    })
+
+    const currentPlan = Effect.fn("GraphStorage.currentPlan")(function* (input: { sessionID: string }) {
+      const nodes = yield* db
+        .select()
+        .from(GraphNodeTable)
+        .where(eq(GraphNodeTable.session_id, input.sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      const edges = yield* db
+        .select()
+        .from(GraphEdgeTable)
+        .where(eq(GraphEdgeTable.session_id, input.sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      return { nodes: nodes.map(nodeRow), edges: edges.map(edgeRow) }
+    })
+
+    const promote = Effect.fn("GraphStorage.promote")(function* (input: PromoteInput) {
+      return yield* db
+        .transaction(
+          () =>
+            Effect.gen(function* () {
+              const planNodes = yield* db
+                .select()
+                .from(GraphNodeTable)
+                .where(and(eq(GraphNodeTable.project_id, input.projectID), eq(GraphNodeTable.session_id, input.sessionID)))
+                .all()
+                .pipe(Effect.orDie)
+              const planEdges = yield* db
+                .select()
+                .from(GraphEdgeTable)
+                .where(and(eq(GraphEdgeTable.project_id, input.projectID), eq(GraphEdgeTable.session_id, input.sessionID)))
+                .all()
+                .pipe(Effect.orDie)
+
+              if (planNodes.length > 0) {
+                yield* db
+                  .update(GraphNodeTable)
+                  .set({ session_id: null })
+                  .where(eq(GraphNodeTable.session_id, input.sessionID))
+                  .run()
+                  .pipe(Effect.orDie)
+              }
+              if (planEdges.length > 0) {
+                yield* db
+                  .update(GraphEdgeTable)
+                  .set({ session_id: null })
+                  .where(eq(GraphEdgeTable.session_id, input.sessionID))
+                  .run()
+                  .pipe(Effect.orDie)
+              }
+
+              const maxRow = yield* db
+                .select()
+                .from(GraphVersionTable)
+                .where(eq(GraphVersionTable.project_id, input.projectID))
+                .all()
+                .pipe(Effect.orDie)
+              const versionNumber = maxRow.reduce((m, r) => Math.max(m, r.version_number), 0) + 1
+              const versionID = VersionID.create()
+              yield* db
+                .insert(GraphVersionTable)
+                .values({
+                  id: versionID,
+                  project_id: input.projectID,
+                  session_id: input.sessionID,
+                  version_number: versionNumber,
+                  message: input.message ?? null,
+                  snapshot: { nodes: planNodes, edges: planEdges },
+                })
+                .run()
+                .pipe(Effect.orDie)
+
+              return {
+                versionID,
+                versionNumber,
+                nodes: planNodes.length,
+                edges: planEdges.length,
+              }
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+    })
+
+    const versionList = Effect.fn("GraphStorage.version.list")(function* (input: { projectID: ProjectV2.ID }) {
+      const rows = yield* db
+        .select()
+        .from(GraphVersionTable)
+        .where(eq(GraphVersionTable.project_id, input.projectID))
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map(versionRow)
+    })
+
+    const versionGet = Effect.fn("GraphStorage.version.get")(function* (input: {
+      projectID: ProjectV2.ID
+      versionNumber: number
+    }) {
+      const r = yield* db
+        .select()
+        .from(GraphVersionTable)
+        .where(and(eq(GraphVersionTable.project_id, input.projectID), eq(GraphVersionTable.version_number, input.versionNumber)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!r) return yield* new NotFoundError({ kind: "version", id: String(input.versionNumber) })
+      return versionRow(r)
+    })
+
     return Service.of({
       node: { create: nodeCreate, get: nodeGet, update: nodeUpdate, delete: nodeDelete, list: nodeList },
-    } as any)
+      edge: { create: edgeCreate, get: edgeGet, delete: edgeDelete, list: edgeList },
+      main,
+      currentPlan,
+      promote,
+      version: { list: versionList, get: versionGet },
+    })
   }),
 )
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { eq } from "drizzle-orm"
 import { Effect, Exit, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
@@ -86,6 +87,152 @@ describe("GraphStorage.node", () => {
         const atomics = yield* g.node.list({ projectID: PID, type: "atomic" })
         expect(atomics.length).toBe(1)
         expect(atomics[0].name).toBe("A")
+      }),
+    )
+  })
+})
+
+describe("GraphStorage.edge", () => {
+  test("create/get/delete edge + list by relation", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const a = yield* g.node.create({ projectID: PID, type: "atomic", name: "A", level: "L2" })
+        const b = yield* g.node.create({ projectID: PID, type: "atomic", name: "B", level: "L2" })
+        const eid = yield* g.edge.create({ projectID: PID, sourceID: a, targetID: b, relation: "uses" })
+        const e = yield* g.edge.get(eid)
+        expect(e.relation).toBe("uses")
+        expect(e.sourceID).toBe(a)
+        const all = yield* g.edge.list({ projectID: PID })
+        expect(all.length).toBe(1)
+        yield* g.edge.delete(eid)
+        const exit = yield* Effect.exit(g.edge.get(eid))
+        expect(Exit.isFailure(exit)).toBe(true)
+      }),
+    )
+  })
+
+  test("duplicate (source,target,relation) is rejected by UNIQUE", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const a = yield* g.node.create({ projectID: PID, type: "atomic", name: "A", level: "L2" })
+        const b = yield* g.node.create({ projectID: PID, type: "atomic", name: "B", level: "L2" })
+        yield* g.edge.create({ projectID: PID, sourceID: a, targetID: b, relation: "uses" })
+        const exit = yield* Effect.exit(g.edge.create({ projectID: PID, sourceID: a, targetID: b, relation: "uses" }))
+        expect(Exit.isFailure(exit)).toBe(true)
+      }),
+    )
+  })
+
+  test("delete node cascades to its edges", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const a = yield* g.node.create({ projectID: PID, type: "atomic", name: "A", level: "L2" })
+        const b = yield* g.node.create({ projectID: PID, type: "atomic", name: "B", level: "L2" })
+        yield* g.edge.create({ projectID: PID, sourceID: a, targetID: b, relation: "uses" })
+        yield* g.node.delete(a)
+        const remaining = yield* g.edge.list({ projectID: PID })
+        expect(remaining.length).toBe(0)
+      }),
+    )
+  })
+})
+
+describe("GraphStorage.main / currentPlan", () => {
+  test("session_id null = main; session_id set = currentPlan; mutually exclusive", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const mainNode = yield* g.node.create({ projectID: PID, type: "atomic", name: "M", level: "L2" })
+        const planNode = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "P", level: "L2" })
+        const m = yield* g.main({ projectID: PID })
+        expect(m.nodes.map((n) => n.id)).toContain(mainNode)
+        expect(m.nodes.map((n) => n.id)).not.toContain(planNode)
+        const cp = yield* g.currentPlan({ sessionID: SID })
+        expect(cp.nodes.map((n) => n.id)).toContain(planNode)
+        expect(cp.nodes.map((n) => n.id)).not.toContain(mainNode)
+      }),
+    )
+  })
+
+  test("project_id scoping: project B nodes invisible", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const { db } = yield* Database.Service
+        const otherPID = "proj_other" as any
+        yield* db.insert(ProjectTable).values({ id: otherPID, worktree: "/tmp/other" as any, vcs: "git", sandboxes: [] as any, time_created: 0, time_updated: 0 } as any).run().pipe(Effect.orDie)
+        yield* g.node.create({ projectID: PID, type: "atomic", name: "A", level: "L2" })
+        yield* g.node.create({ projectID: otherPID, type: "atomic", name: "X", level: "L2" })
+        const mine = yield* g.node.list({ projectID: PID })
+        expect(mine.length).toBe(1)
+        expect(mine[0].name).toBe("A")
+        const theirs = yield* g.node.list({ projectID: otherPID })
+        expect(theirs.length).toBe(1)
+        expect(theirs[0].name).toBe("X")
+      }),
+    )
+  })
+})
+
+describe("GraphStorage.promote + version", () => {
+  test("promote moves plan to main + writes version snapshot; currentPlan emptied", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const n1 = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "A", level: "L2" })
+        const n2 = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "B", level: "L2" })
+        yield* g.edge.create({ projectID: PID, sessionID: SID, sourceID: n1, targetID: n2, relation: "uses" })
+        const res = yield* g.promote({ projectID: PID, sessionID: SID, message: "merge 1" })
+        expect(res.versionNumber).toBe(1)
+        expect(res.nodes).toBe(2)
+        expect(res.edges).toBe(1)
+        const m = yield* g.main({ projectID: PID })
+        expect(m.nodes.length).toBe(2)
+        expect(m.edges.length).toBe(1)
+        const cp = yield* g.currentPlan({ sessionID: SID })
+        expect(cp.nodes.length).toBe(0)
+        const vs = yield* g.version.list({ projectID: PID })
+        expect(vs.length).toBe(1)
+        const v1 = yield* g.version.get({ projectID: PID, versionNumber: 1 })
+        expect(v1.message).toBe("merge 1")
+      }),
+    )
+  })
+
+  test("version_number increments per promote", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const SID2 = "ses_two" as any
+        const { db } = yield* Database.Service
+        yield* db.insert(SessionTable).values({ id: SID2, project_id: PID, slug: "two", directory: "/tmp", title: "two", version: "0", time_created: 0, time_updated: 0 } as any).run().pipe(Effect.orDie)
+        yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "A", level: "L2" })
+        const r1 = yield* g.promote({ projectID: PID, sessionID: SID })
+        yield* g.node.create({ projectID: PID, sessionID: SID2, type: "atomic", name: "B", level: "L2" })
+        const r2 = yield* g.promote({ projectID: PID, sessionID: SID2 })
+        expect(r1.versionNumber).toBe(1)
+        expect(r2.versionNumber).toBe(2)
+      }),
+    )
+  })
+})
+
+describe("GraphStorage.cascade", () => {
+  test("delete session cascades to its graph nodes/edges", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const a = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "A", level: "L2" })
+        const b = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "B", level: "L2" })
+        yield* g.edge.create({ projectID: PID, sessionID: SID, sourceID: a, targetID: b, relation: "uses" })
+        const { db } = yield* Database.Service
+        yield* db.delete(SessionTable).where(eq(SessionTable.id, SID)).run().pipe(Effect.orDie)
+        const cp = yield* g.currentPlan({ sessionID: SID })
+        expect(cp.nodes.length).toBe(0)
+        expect(cp.edges.length).toBe(0)
       }),
     )
   })
