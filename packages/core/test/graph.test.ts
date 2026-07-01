@@ -6,10 +6,10 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import * as GraphStorage from "@opencode-ai/core/graph/storage"
 
-// Database.defaultLayer uses OPENCODE_DB=:memory: (set by test/preload.ts).
+// layerFromPath(":memory:") provides an in-memory sqlite DB (test/preload.ts sets OPENCODE_DB=:memory:).
 // provideMerge keeps Database.Service in the output while feeding it to GraphStorage.
-// (cast: Layer.unwrap inside Database.defaultLayer defeats the pipe overload resolver; runtime is correct.)
-const layer = GraphStorage.layer.pipe(Layer.provideMerge(Database.defaultLayer)) as Layer.Layer<
+// (cast: Layer.unwrap inside layerFromPath defeats the pipe overload resolver; runtime is correct.)
+const layer = GraphStorage.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:"))) as Layer.Layer<
   Database.Service | GraphStorage.Service
 >
 

@@ -6,7 +6,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import * as GraphStorage from "@opencode-ai/core/graph/storage"
 import * as GraphDomain from "@opencode-ai/core/graph/domain"
 
-const storageLayer = GraphStorage.layer.pipe(Layer.provideMerge(Database.defaultLayer)) as Layer.Layer<
+const storageLayer = GraphStorage.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:"))) as Layer.Layer<
   Database.Service | GraphStorage.Service
 >
 const domainLayer = GraphDomain.layer.pipe(Layer.provideMerge(storageLayer)) as Layer.Layer<
