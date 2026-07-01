@@ -30,7 +30,7 @@ export function checkConsistency(
   const expectedEdgeMap = new Map(expected.edges.map((e) => [e.id, e]))
 
   const storedImported = stored.nodes.filter((n) => isImportedCodeNode(n))
-  const storedNodeMap = new Map(storedImported.map((n) => [n.id, n]))
+  const storedNodeMap = new Map(storedImported.map((n) => [n.id as string, n]))
 
   for (const expNode of expected.nodes) {
     const storedNode = storedNodeMap.get(expNode.id)
@@ -48,7 +48,7 @@ export function checkConsistency(
   }
 
   const storedImportedEdges = stored.edges.filter((e) => e.id.startsWith("ged_import:"))
-  const storedEdgeMap = new Map(storedImportedEdges.map((e) => [e.id, e]))
+  const storedEdgeMap = new Map(storedImportedEdges.map((e) => [e.id as string, e]))
 
   for (const expEdge of expected.edges) {
     if (!storedEdgeMap.has(expEdge.id)) {

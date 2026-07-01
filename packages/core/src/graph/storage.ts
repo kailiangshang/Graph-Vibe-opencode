@@ -76,6 +76,7 @@ export interface GraphView {
 export const NodeCreate = Schema.Struct({
   projectID: ProjectV2.ID,
   sessionID: Schema.String.pipe(Schema.optional),
+  id: Schema.String.pipe(Schema.optional),
   type: Graph.NodeType,
   name: Schema.String,
   level: Graph.Level,
@@ -114,6 +115,7 @@ export type NodeFilter = typeof NodeFilter.Type
 export const EdgeCreate = Schema.Struct({
   projectID: ProjectV2.ID,
   sessionID: Schema.String.pipe(Schema.optional),
+  id: Schema.String.pipe(Schema.optional),
   sourceID: NodeID,
   targetID: NodeID,
   relation: Graph.EdgeRelation,
@@ -215,7 +217,7 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
 
     const nodeCreate = Effect.fn("GraphStorage.node.create")(function* (input: NodeCreate) {
-      const id = NodeID.create()
+      const id = (input.id ?? NodeID.create()) as NodeID
       yield* db
         .insert(GraphNodeTable)
         .values({
@@ -280,7 +282,7 @@ export const layer = Layer.effect(
     })
 
     const edgeCreate = Effect.fn("GraphStorage.edge.create")(function* (input: EdgeCreate) {
-      const id = EdgeID.create()
+      const id = (input.id ?? EdgeID.create()) as EdgeID
       yield* db
         .insert(GraphEdgeTable)
         .values({

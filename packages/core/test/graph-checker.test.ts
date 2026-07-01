@@ -7,19 +7,20 @@ const nid = (s: string): NodeID => s as unknown as NodeID
 
 function makeImportedNode(over: Partial<NodeRow> & Pick<NodeRow, "id" | "name" | "category" | "codeHash">): NodeRow {
   return {
-    projectID: "p" as any, sessionID: null, type: "atomic", name: "n",
-    level: "L2", priority: null, category: "file", status: "implemented", desc: null,
-    content: null, codeHash: "hash", testStatus: "none", confidence: 1,
+    projectID: "p" as any, sessionID: null, type: "atomic",
+    level: "L2", priority: null, status: "implemented", desc: null,
+    content: null, testStatus: "none", confidence: 1,
     timeCreated: 0, timeUpdated: 0, ...over,
   } as NodeRow
 }
 
 function makeIntentNode(over: Partial<NodeRow> & Pick<NodeRow, "id" | "name">): NodeRow {
   return {
-    projectID: "p" as any, sessionID: null, type: "atomic", name: "n",
+    projectID: "p" as any, sessionID: null, type: "atomic",
     level: "L2", priority: null, category: null, status: "implemented", desc: null,
     content: { code_ref: { path: "src/svc.ts", type: "file" } }, codeHash: "oldhash",
-    testStatus: "none", confidence: 1, timeCreated: 0, timeUpdated: 0, ...over,
+    testStatus: "none", confidence: 1,
+    timeCreated: 0, timeUpdated: 0, ...over,
   } as NodeRow
 }
 
