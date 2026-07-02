@@ -1,6 +1,10 @@
 import type { ProjectV2 } from "@opencode-ai/core/project"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import type { Artifact } from "@opencode-ai/core/graph/workflow/artifact"
 import type { GateResult } from "@opencode-ai/core/graph/workflow/gate"
+import path from "path"
 import { Effect } from "effect"
+import type { InstanceContext } from "@/project/instance-context"
 import { Session } from "@/session/session"
 import type { SessionID } from "@/session/schema"
 import type { Tool } from "../tool"
@@ -9,6 +13,11 @@ export interface GraphSession {
   readonly projectID: ProjectV2.ID
   readonly sessionID: SessionID
   readonly directory: string
+}
+
+export interface ArtifactPath {
+  readonly relative: string
+  readonly absolute: string
 }
 
 export function resolveGraphSession(
@@ -28,4 +37,33 @@ export function formatJson(value: unknown) {
 export function summarizeGate(result: GateResult) {
   if (result.allowed) return "allowed"
   return `blocked:${result.issues.length}`
+}
+
+export function resolveArtifactPaths(artifact: Artifact, instance: InstanceContext): ReadonlyArray<ArtifactPath> {
+  return Array.from(new Map(artifactPaths(artifact).map((item) => [item.relative, item])).values())
+    .map((item) => normalizeArtifactPath(item, instance))
+}
+
+function artifactPaths(artifact: Artifact) {
+  if (artifact.mode === "full") return [{ relative: artifact.path }]
+  return artifact.operations.map((operation) => ({ relative: operation.path }))
+}
+
+function normalizeArtifactPath(input: { readonly relative: string }, instance: InstanceContext): ArtifactPath {
+  if (path.isAbsolute(input.relative) || path.win32.isAbsolute(input.relative)) {
+    throw new Error(`Artifact path must be relative: ${input.relative}`)
+  }
+
+  const relative = path.posix.normalize(input.relative.replaceAll("\\", "/"))
+  if (relative === "." || relative === ".." || relative.startsWith("../")) {
+    throw new Error(`Artifact path escapes the worktree: ${input.relative}`)
+  }
+
+  const base = instance.worktree === "/" ? instance.directory : instance.worktree
+  const absolute = path.resolve(base, ...relative.split("/"))
+  if (!FSUtil.contains(base, absolute)) {
+    throw new Error(`Artifact path escapes the worktree: ${input.relative}`)
+  }
+
+  return { relative, absolute }
 }
