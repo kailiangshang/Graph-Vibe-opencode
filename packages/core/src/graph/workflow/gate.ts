@@ -129,29 +129,29 @@ function staleIntentIssues(currentPlan: GraphView): GateIssue[] {
 }
 
 function consistencyIssues(issues: ReadonlyArray<ConsistencyIssue>): GateIssue[] {
-  return issues.flatMap((issue) => {
+  return issues.map((issue): GateIssue => {
     if (["missing_code", "missing_code_ref", "invalid_code_ref"].includes(issue.type)) {
-      return [{
+      return {
         code: "missing_code_reference" as const,
         severity: "block" as const,
         nodeID: issue.nodeId as NodeID | undefined,
         message: issue.detail,
-      }]
+      }
     }
     if (issue.type === "intent_stale") {
-      return [{
+      return {
         code: "stale_intent" as const,
         severity: "block" as const,
         nodeID: issue.nodeId as NodeID | undefined,
         message: issue.detail,
-      }]
+      }
     }
-    return [{
+    return {
       code: "structural_drift" as const,
       severity: "block" as const,
       nodeID: issue.nodeId as NodeID | undefined,
       message: issue.detail,
-    }]
+    }
   })
 }
 

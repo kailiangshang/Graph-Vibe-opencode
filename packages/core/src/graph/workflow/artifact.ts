@@ -85,23 +85,25 @@ export function planArtifactApplication(
 }
 
 function validateFullArtifact(artifact: FullArtifact): ArtifactIssue[] {
-  return [
-    artifact.path.length === 0 ? { code: "empty_path" as const, message: "full artifact path is required" } : undefined,
-    artifact.code.length === 0
-      ? { code: "empty_code" as const, path: artifact.path || undefined, message: "full artifact code is required" }
-      : undefined,
-    artifact.test.length === 0
-      ? { code: "empty_test" as const, path: artifact.path || undefined, message: "full artifact test is required" }
-      : undefined,
-  ].filter((issue): issue is ArtifactIssue => issue !== undefined)
+  const issues: ArtifactIssue[] = []
+  if (artifact.path.length === 0) issues.push({ code: "empty_path", message: "full artifact path is required" })
+  if (artifact.code.length === 0) {
+    issues.push({ code: "empty_code", path: artifact.path || undefined, message: "full artifact code is required" })
+  }
+  if (artifact.test.length === 0) {
+    issues.push({ code: "empty_test", path: artifact.path || undefined, message: "full artifact test is required" })
+  }
+  return issues
 }
 
 function validatePatchArtifact(artifact: PatchArtifact): ArtifactIssue[] {
   if (artifact.operations.length === 0) return [{ code: "empty_patch", message: "patch artifact needs at least one operation" }]
-  return artifact.operations.flatMap((operation) => [
-    operation.path.length === 0 ? { code: "empty_path" as const, message: "patch operation path is required" } : undefined,
-    operation.old.length === 0
-      ? { code: "empty_old" as const, path: operation.path || undefined, message: "patch operation old text is required" }
-      : undefined,
-  ]).filter((issue): issue is ArtifactIssue => issue !== undefined)
+  return artifact.operations.flatMap((operation) => {
+    const issues: ArtifactIssue[] = []
+    if (operation.path.length === 0) issues.push({ code: "empty_path", message: "patch operation path is required" })
+    if (operation.old.length === 0) {
+      issues.push({ code: "empty_old", path: operation.path || undefined, message: "patch operation old text is required" })
+    }
+    return issues
+  })
 }
