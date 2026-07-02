@@ -2,6 +2,7 @@ export * as GraphPlan from "./plan"
 
 import { Context, Effect, Layer } from "effect"
 import { LayerNode } from "../../effect/layer-node"
+import { Database } from "../../database/database"
 import * as GraphDomain from "../domain"
 import * as GraphStorage from "../storage"
 import { validateSubgraph } from "../validation"
@@ -34,6 +35,7 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const { db } = yield* Database.Service
     const domain = yield* GraphDomain.Service
 
     const admit = Effect.fn("GraphPlan.admit")(function* (input: AdmitPlanInput) {
@@ -43,18 +45,25 @@ export const layer = Layer.effect(
         return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: true }
       }
 
-      yield* Effect.forEach(input.nodes, (node) => domain.node.create({ ...node, projectID: input.projectID, sessionID: input.sessionID }))
-      yield* Effect.forEach(input.edges, (edge) => domain.edge.create({ ...edge, projectID: input.projectID, sessionID: input.sessionID }))
-      return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: false }
+      return yield* db.transaction(() =>
+        Effect.gen(function* () {
+          yield* Effect.forEach(input.nodes, (node) => domain.node.create({ ...node, projectID: input.projectID, sessionID: input.sessionID }))
+          yield* Effect.forEach(input.edges, (edge) => domain.edge.create({ ...edge, projectID: input.projectID, sessionID: input.sessionID }))
+          return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: false }
+        }),
+      ).pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
     })
 
     return Service.of({ admit })
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer, deps: [GraphDomain.node] })
+export const node = LayerNode.make({ service: Service, layer, deps: [Database.node, GraphDomain.node] })
 
-export const defaultLayer = layer.pipe(Layer.provide(GraphDomain.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(GraphDomain.defaultLayer),
+  Layer.provide(Database.layerFromPath(Database.path())),
+)
 
 function validateDryRun(input: AdmitPlanInput) {
   const nodes = input.nodes.map((node): NodeRow => ({

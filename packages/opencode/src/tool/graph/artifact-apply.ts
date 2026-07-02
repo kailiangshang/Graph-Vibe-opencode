@@ -11,7 +11,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Session } from "@/session/session"
 import { Tool } from "../tool"
 import { Artifact } from "./build-gate"
-import { formatJson, resolveArtifactPaths, resolveGraphSession, summarizeGate } from "./util"
+import { formatJson, normalizeArtifact, resolveArtifactPaths, resolveGraphSession, summarizeGate } from "./util"
 
 export const Parameters = Schema.Struct({
   targetNodeID: GraphStorage.NodeID,
@@ -35,12 +35,13 @@ export const GraphArtifactApplyTool = Tool.define(
         Effect.gen(function* () {
           const session = yield* resolveGraphSession(ctx, sessions)
           const instance = yield* InstanceState.context
-          const paths = resolveArtifactPaths(params.artifact, instance)
+          const artifact = normalizeArtifact(params.artifact, instance)
+          const paths = resolveArtifactPaths(artifact, instance)
           const gate = yield* build.evaluate({
             projectID: session.projectID,
             sessionID: session.sessionID,
             targetNodeID: params.targetNodeID,
-            artifact: params.artifact,
+            artifact,
             executor: "manual",
           })
 
@@ -76,7 +77,7 @@ export const GraphArtifactApplyTool = Tool.define(
             }),
           )
           const plan = planArtifactApplication(
-            params.artifact,
+            artifact,
             Object.fromEntries(existing.map((item) => [item.relative, item.content])),
           )
 

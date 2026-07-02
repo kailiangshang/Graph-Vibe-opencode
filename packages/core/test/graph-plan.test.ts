@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { SessionTable } from "@opencode-ai/core/session/sql"
@@ -72,6 +72,24 @@ describe("GraphPlan.admit", () => {
       const currentPlan = yield* storage.currentPlan({ sessionID: SID })
       expect(currentPlan.nodes.map((node) => node.sessionID)).toEqual([SID, SID])
       expect(currentPlan.edges.map((edge) => edge.sessionID)).toEqual([SID])
+    }))
+  })
+
+  test("does not persist partial CurrentPlan when edge validation fails", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const exit = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [{ id: A, type: "atomic", name: "A", level: "L2" }],
+        edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const storage = yield* GraphStorage.Service
+      const currentPlan = yield* storage.currentPlan({ sessionID: SID })
+      expect(currentPlan.nodes.length).toBe(0)
+      expect(currentPlan.edges.length).toBe(0)
     }))
   })
 })

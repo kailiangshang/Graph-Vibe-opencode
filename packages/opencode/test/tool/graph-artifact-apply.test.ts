@@ -153,7 +153,7 @@ describe("graph_artifact_apply", () => {
       const result = yield* tool.execute(
         {
           targetNodeID,
-          artifact: { mode: "full", path: "src/ok.ts", code: "export const ok = true\n", test: "bun test\n" },
+          artifact: { mode: "full", path: "./src/ok.ts", code: "export const ok = true\n", test: "bun test\n" },
         },
         context(permissionRequests),
       )

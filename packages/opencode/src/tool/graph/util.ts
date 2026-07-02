@@ -44,6 +44,17 @@ export function resolveArtifactPaths(artifact: Artifact, instance: InstanceConte
     .map((item) => normalizeArtifactPath(item, instance))
 }
 
+export function normalizeArtifact(artifact: Artifact, instance: InstanceContext): Artifact {
+  if (artifact.mode === "full") return { ...artifact, path: normalizeArtifactPath({ relative: artifact.path }, instance).relative }
+  return {
+    ...artifact,
+    operations: artifact.operations.map((operation) => ({
+      ...operation,
+      path: normalizeArtifactPath({ relative: operation.path }, instance).relative,
+    })),
+  }
+}
+
 function artifactPaths(artifact: Artifact) {
   if (artifact.mode === "full") return [{ relative: artifact.path }]
   return artifact.operations.map((operation) => ({ relative: operation.path }))
