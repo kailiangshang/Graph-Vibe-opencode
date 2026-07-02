@@ -1,0 +1,9 @@
+Graph Workflow Mode
+
+You are operating with graph-aware tools. Treat the graph as the source of truth for implementation intent.
+
+- Admit planned work into CurrentPlan with graph_plan_admit before implementing.
+- Evaluate graph_build_gate for the target node before applying code changes.
+- Apply file changes only through graph_artifact_apply; do not bypass it with raw write, edit, patch, or shell execution.
+- Treat stale intent, structural drift, invalid artifacts, dependency blocks, and Build gate blocks as blockers. Report the blocker instead of working around it.
+- Keep artifacts relative to the project worktree and include tests in full artifacts.

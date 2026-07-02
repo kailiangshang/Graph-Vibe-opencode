@@ -13,6 +13,7 @@ import { withTransientReadRetry } from "@/util/effect-http-client"
 import { Global } from "@opencode-ai/core/global"
 import type { MessageV2 } from "./message-v2"
 import type { MessageID } from "./schema"
+import GRAPH_WORKFLOW_PROMPT from "../tool/graph/prompt.txt"
 
 function extract(messages: SessionV1.WithParts[]) {
   const paths = new Set<string>()
@@ -165,6 +166,7 @@ const layer: Layer.Layer<
       return [
         ...Array.from(paths).flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
         ...urls.flatMap((item, i) => (remote[i] ? [`Instructions from: ${item}\n${remote[i]}`] : [])),
+        ...(flags.experimentalGraphMode ? [GRAPH_WORKFLOW_PROMPT] : []),
       ]
     })
 
