@@ -56,6 +56,7 @@ describe("RuntimeFlags", () => {
       expect(flags.experimentalLspTool).toBe(true)
       expect(flags.experimentalOxfmt).toBe(true)
       expect(flags.experimentalPlanMode).toBe(true)
+      expect(flags.experimentalGraphMode).toBe(true)
       expect(flags.experimentalEventSystem).toBe(true)
       expect(flags.experimentalWorkspaces).toBe(true)
       expect(flags.experimentalIconDiscovery).toBe(true)
@@ -116,6 +117,7 @@ describe("RuntimeFlags", () => {
       expect(flags.enableExa).toBe(false)
       expect(flags.experimentalIconDiscovery).toBe(false)
       expect(flags.experimentalOxfmt).toBe(false)
+      expect(flags.experimentalGraphMode).toBe(false)
       expect(flags.outputTokenMax).toBeUndefined()
       expect(flags.bashDefaultTimeoutMs).toBe(1_000)
       expect(flags.enableExperimentalModels).toBe(false)
@@ -251,6 +253,42 @@ describe("RuntimeFlags", () => {
       )
 
       expect(flags.experimentalOxfmt).toBe(true)
+    }),
+  )
+
+  it.effect("experimentalGraphMode defaults to false", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+
+      expect(flags.experimentalGraphMode).toBe(false)
+    }),
+  )
+
+  it.effect("experimentalGraphMode is enabled by OPENCODE_EXPERIMENTAL_GRAPH_MODE", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(
+          fromConfig({
+            OPENCODE_EXPERIMENTAL_GRAPH_MODE: "true",
+          }),
+        ),
+      )
+
+      expect(flags.experimentalGraphMode).toBe(true)
+    }),
+  )
+
+  it.effect("experimentalGraphMode inherits OPENCODE_EXPERIMENTAL", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(
+          fromConfig({
+            OPENCODE_EXPERIMENTAL: "true",
+          }),
+        ),
+      )
+
+      expect(flags.experimentalGraphMode).toBe(true)
     }),
   )
 

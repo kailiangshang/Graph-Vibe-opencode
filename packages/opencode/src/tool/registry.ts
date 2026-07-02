@@ -1,6 +1,10 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
+import { GraphStorage } from "@opencode-ai/core/graph/storage"
+import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
+import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
+import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
@@ -29,6 +33,9 @@ import { WebSearchTool } from "./websearch"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
+import { GraphArtifactApplyTool } from "./graph/artifact-apply"
+import { GraphBuildGateTool } from "./graph/build-gate"
+import { GraphPlanAdmitTool } from "./graph/plan-admit"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -105,6 +112,9 @@ const layer = Layer.effect(
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
     const agent = yield* Agent.Service
+    const graphPlanTool = flags.experimentalGraphMode ? yield* GraphPlanAdmitTool : undefined
+    const graphBuildTool = flags.experimentalGraphMode ? yield* GraphBuildGateTool : undefined
+    const graphArtifactTool = flags.experimentalGraphMode ? yield* GraphArtifactApplyTool : undefined
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
@@ -212,27 +222,36 @@ const layer = Layer.effect(
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
         })
+        const graphTools =
+          graphPlanTool && graphBuildTool && graphArtifactTool
+            ? [
+                yield* Tool.init(graphPlanTool),
+                yield* Tool.init(graphBuildTool),
+                yield* Tool.init(graphArtifactTool),
+              ]
+            : []
+        const builtin = [
+          tool.invalid,
+          ...(questionEnabled ? [tool.question] : []),
+          tool.shell,
+          tool.read,
+          tool.glob,
+          tool.grep,
+          tool.edit,
+          tool.write,
+          tool.task,
+          tool.fetch,
+          tool.todo,
+          tool.search,
+          tool.skill,
+          tool.patch,
+          ...(flags.experimentalLspTool ? [tool.lsp] : []),
+          ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
+        ]
 
         return {
           custom,
-          builtin: [
-            tool.invalid,
-            ...(questionEnabled ? [tool.question] : []),
-            tool.shell,
-            tool.read,
-            tool.glob,
-            tool.grep,
-            tool.edit,
-            tool.write,
-            tool.task,
-            tool.fetch,
-            tool.todo,
-            tool.search,
-            tool.skill,
-            tool.patch,
-            ...(flags.experimentalLspTool ? [tool.lsp] : []),
-            ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
-          ],
+          builtin: flags.experimentalGraphMode ? [...builtin.filter(graphSafeBuiltin), ...graphTools] : builtin,
           task: tool.task,
           read: tool.read,
         }
@@ -320,6 +339,12 @@ function isZodType(value: unknown): value is z.ZodType {
 
 function isPluginTool(value: unknown): value is ToolDefinition {
   return typeof value === "object" && value !== null && "args" in value && "description" in value && "execute" in value
+}
+
+const graphUnsafeBuiltinIDs = new Set<string>([ShellTool.id, EditTool.id, WriteTool.id, ApplyPatchTool.id])
+
+function graphSafeBuiltin(tool: Tool.Def) {
+  return !graphUnsafeBuiltinIDs.has(tool.id)
 }
 
 function isJsonSchemaDefinition(value: unknown): value is JSONSchema7Definition {
@@ -413,6 +438,10 @@ export const node = LayerNode.make({
     Truncate.node,
     RuntimeFlags.node,
     Database.node,
+    GraphStorage.node,
+    GraphAudit.node,
+    GraphPlan.node,
+    GraphBuild.node,
     Ripgrep.node,
   ],
 })
