@@ -3,6 +3,7 @@ export * as GraphStorage from "./storage"
 import { and, eq, isNull } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
+import { LayerNode } from "../effect/layer-node"
 import { ProjectV2 } from "../project"
 import { GraphNodeTable, GraphEdgeTable, GraphVersionTable } from "./sql"
 import * as Graph from "@opencode-ai/schema/graph"
@@ -453,5 +454,7 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const node = LayerNode.make({ service: Service, layer, deps: [Database.node] })
 
 export const defaultLayer = layer.pipe(Layer.provide(Database.layerFromPath(Database.path())))

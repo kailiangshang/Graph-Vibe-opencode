@@ -1,6 +1,7 @@
 export * as GraphPlan from "./plan"
 
 import { Context, Effect, Layer } from "effect"
+import { LayerNode } from "../../effect/layer-node"
 import * as GraphDomain from "../domain"
 import * as GraphStorage from "../storage"
 import { validateSubgraph } from "../validation"
@@ -50,6 +51,8 @@ export const layer = Layer.effect(
     return Service.of({ admit })
   }),
 )
+
+export const node = LayerNode.make({ service: Service, layer, deps: [GraphDomain.node] })
 
 export const defaultLayer = layer.pipe(Layer.provide(GraphDomain.defaultLayer))
 

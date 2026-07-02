@@ -1,6 +1,7 @@
 export * as GraphBuild from "./build"
 
 import { Context, Effect, Layer } from "effect"
+import { LayerNode } from "../../effect/layer-node"
 import type { ProjectV2 } from "../../project"
 import type { ConsistencyIssue } from "../derivation/checker"
 import * as GraphStorage from "../storage"
@@ -78,6 +79,8 @@ export const layer = Layer.effect(
     return Service.of({ evaluate })
   }),
 )
+
+export const node = LayerNode.make({ service: Service, layer, deps: [GraphStorage.node, GraphAudit.node] })
 
 export const defaultLayer = layer.pipe(Layer.provide(GraphAudit.defaultLayer), Layer.provide(GraphStorage.defaultLayer))
 

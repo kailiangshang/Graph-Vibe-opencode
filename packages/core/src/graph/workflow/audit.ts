@@ -3,6 +3,7 @@ export * as GraphAudit from "./audit"
 import { and, asc, eq } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../../database/database"
+import { LayerNode } from "../../effect/layer-node"
 import type { ProjectV2 } from "../../project"
 import type { NodeID } from "../storage"
 import { GraphGenerationRunTable, GraphToolRunTable } from "./audit.sql"
@@ -203,5 +204,7 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const node = LayerNode.make({ service: Service, layer, deps: [Database.node] })
 
 export const defaultLayer = layer.pipe(Layer.provide(Database.layerFromPath(Database.path())))

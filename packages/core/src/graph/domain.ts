@@ -1,6 +1,7 @@
 export * as GraphDomain from "./domain"
 
 import { Context, Effect, Layer, Schema } from "effect"
+import { LayerNode } from "../effect/layer-node"
 import * as GraphStorage from "./storage"
 import type { NodeRow, EdgeRow, NodeID, EdgeID } from "./storage"
 import { validateNode, validateEdge, validateSubgraph } from "./validation"
@@ -124,5 +125,7 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const node = LayerNode.make({ service: Service, layer, deps: [GraphStorage.node] })
 
 export const defaultLayer = layer.pipe(Layer.provide(GraphStorage.defaultLayer))
