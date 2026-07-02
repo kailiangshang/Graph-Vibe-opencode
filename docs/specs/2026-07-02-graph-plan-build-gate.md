@@ -123,7 +123,7 @@ Build gate 是唯一硬阻断点，阻断条件包括：
 packages/core/src/graph/workflow/
   artifact.ts  — 纯: Artifact schema/types, validate, hash, apply plan
   gate.ts      — 纯: Build gate evaluator
-  audit-sql.ts — Drizzle tables for graph_tool_run / graph_generation_run
+  audit.sql.ts — Drizzle tables for graph_tool_run / graph_generation_run
   audit.ts     — Effect: GraphAudit.Service
   plan.ts      — Effect: CurrentPlan admission service
   build.ts     — Effect: BuildWorkflow.Service

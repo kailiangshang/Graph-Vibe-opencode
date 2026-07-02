@@ -18,8 +18,8 @@
 |---|---|
 | `packages/core/src/graph/workflow/artifact.ts` | Pure Artifact types, SHA-256 hashing, validation, pure application plan |
 | `packages/core/src/graph/workflow/gate.ts` | Pure Build gate evaluator using graph views, domain validation, conflicts, derivation issues, artifact issues |
-| `packages/core/src/graph/workflow/audit-sql.ts` | Drizzle table definitions for `graph_tool_run` and `graph_generation_run` |
-| `packages/core/src/database/migration/20260702000000_graph_workflow.ts` | SQL migration for audit tables and indexes |
+| `packages/core/src/graph/workflow/audit.sql.ts` | Drizzle table definitions for `graph_tool_run` and `graph_generation_run` |
+| `packages/core/src/database/migration/20260702022948_graph_workflow.ts` | SQL migration for audit tables and indexes |
 | `packages/core/src/graph/workflow/audit.ts` | `GraphAudit.Service` record/list APIs |
 | `packages/core/src/graph/workflow/plan.ts` | `GraphPlan.Service` CurrentPlan admission, dry-run and persisted modes |
 | `packages/core/src/graph/workflow/build.ts` | `GraphBuild.Service` loads graph state, evaluates gate, records audit |
@@ -245,9 +245,9 @@ git commit -m "feat(core/graph): build gate evaluator"
 ### Task 3: Audit Tables and Service
 
 **Files:**
-- Create: `packages/core/src/graph/workflow/audit-sql.ts`
+- Create: `packages/core/src/graph/workflow/audit.sql.ts`
 - Create: `packages/core/src/graph/workflow/audit.ts`
-- Create: `packages/core/src/database/migration/20260702000000_graph_workflow.ts`
+- Create: `packages/core/src/database/migration/20260702022948_graph_workflow.ts`
 - Test: `packages/core/test/graph-audit.test.ts`
 
 - [ ] **Step 1: Write failing persistence tests**
@@ -323,7 +323,7 @@ Expected: no drift.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add packages/core/src/graph/workflow/audit-sql.ts packages/core/src/graph/workflow/audit.ts packages/core/src/database/migration/20260702000000_graph_workflow.ts packages/core/test/graph-audit.test.ts
+git add packages/core/src/graph/workflow/audit.sql.ts packages/core/src/graph/workflow/audit.ts packages/core/src/database/migration/20260702022948_graph_workflow.ts packages/core/test/graph-audit.test.ts
 git commit -m "feat(core/graph): workflow audit persistence"
 ```
 
