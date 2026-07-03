@@ -58,6 +58,7 @@ import { SessionPage, TargetSessionRoute as TargetSessionRouteContent } from "@/
 import { NewHome, LegacyHome } from "@/pages/home"
 
 const NewSession = lazy(() => import("@/pages/new-session"))
+const GraphPage = lazy(() => import("@/pages/graph"))
 
 const SessionRoute = () => {
   const settings = useSettings()
@@ -524,6 +525,7 @@ function Routes() {
         <Route path="/:dir" component={DirectoryLayout}>
           <Route path="/" component={() => <Navigate href="session" />} />
           <Route path="/session/:id?" component={SessionRoute} />
+          <Route path="/session/:id/graph" component={GraphPage} />
         </Route>
       </Route>
       <Show when={settings.general.newLayoutDesigns()}>
