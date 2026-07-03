@@ -2295,6 +2295,95 @@ export type File = {
   status: "added" | "deleted" | "modified"
 }
 
+export type GraphNode = {
+  id: string
+  projectID: string
+  sessionID: string
+  type: "prd" | "composite" | "atomic"
+  name: string
+  level: "L1" | "L2"
+  priority: "P0" | "P1" | "P2" | "P3"
+  category: string
+  status: "pending" | "implemented" | "verified" | "deprecated"
+  desc: string
+  content: {
+    [key: string]: unknown
+  }
+  codeHash: string
+  testStatus: "none" | "pending" | "passed" | "failed"
+  confidence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  timeUpdated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type GraphEdge = {
+  id: string
+  sourceID: string
+  targetID: string
+  relation: "contains" | "blocks" | "addresses" | "uses" | "deprecated_by"
+  confidence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type GraphView = {
+  nodes: Array<GraphNode>
+  edges: Array<GraphEdge>
+}
+
+export type NotFoundError = {
+  name: "NotFoundError"
+  data: {
+    message: string
+  }
+}
+
+export type GraphNodeBlocker = {
+  nodeID: string
+  nodeName: string
+  nodeStatus: "pending" | "implemented" | "verified" | "deprecated"
+}
+
+export type GraphValidationIssue = {
+  rule: string
+  message: string
+}
+
+export type GraphNodeReadiness = {
+  nodeID: string
+  status: "pending" | "implemented" | "verified" | "deprecated"
+  inCurrentPlan: boolean
+  blockers: Array<GraphNodeBlocker>
+  validationIssues: Array<GraphValidationIssue>
+}
+
+export type GraphToolRun = {
+  id: string
+  toolName: string
+  toolType: string
+  status: string
+  timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type GraphGenerationRun = {
+  id: string
+  executor: string
+  status: string
+  gateAllowed: boolean
+  timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type GraphNodeAudit = {
+  toolRuns: Array<GraphToolRun>
+  generationRuns: Array<GraphGenerationRun>
+}
+
+export type GraphVersion = {
+  id: string
+  versionNumber: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  message: string
+  timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type Path = {
   home: string
   state: string
@@ -2532,13 +2621,6 @@ export type ProviderAuthError1 = {
     field?: string
     message?: string
     kind?: string
-  }
-}
-
-export type NotFoundError = {
-  name: "NotFoundError"
-  data: {
-    message: string
   }
 }
 
@@ -8075,6 +8157,207 @@ export type FileStatusResponses = {
 }
 
 export type FileStatusResponse = FileStatusResponses[keyof FileStatusResponses]
+
+export type GraphMainData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/graph/main"
+}
+
+export type GraphMainErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
+}
+
+export type GraphMainError = GraphMainErrors[keyof GraphMainErrors]
+
+export type GraphMainResponses = {
+  /**
+   * Project main graph
+   */
+  200: GraphView
+}
+
+export type GraphMainResponse = GraphMainResponses[keyof GraphMainResponses]
+
+export type GraphCurrentPlanData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    session: string
+  }
+  url: "/graph/current-plan"
+}
+
+export type GraphCurrentPlanErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type GraphCurrentPlanError = GraphCurrentPlanErrors[keyof GraphCurrentPlanErrors]
+
+export type GraphCurrentPlanResponses = {
+  /**
+   * Session CurrentPlan graph
+   */
+  200: GraphView
+}
+
+export type GraphCurrentPlanResponse = GraphCurrentPlanResponses[keyof GraphCurrentPlanResponses]
+
+export type GraphNodeData = {
+  body?: never
+  path: {
+    nodeID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/graph/node/{nodeID}"
+}
+
+export type GraphNodeErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type GraphNodeError = GraphNodeErrors[keyof GraphNodeErrors]
+
+export type GraphNodeResponses = {
+  /**
+   * Graph node detail
+   */
+  200: GraphNode
+}
+
+export type GraphNodeResponse = GraphNodeResponses[keyof GraphNodeResponses]
+
+export type GraphNodeReadinessData = {
+  body?: never
+  path: {
+    nodeID: string
+  }
+  query: {
+    directory?: string
+    workspace?: string
+    session: string
+  }
+  url: "/graph/node/{nodeID}/readiness"
+}
+
+export type GraphNodeReadinessErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type GraphNodeReadinessError = GraphNodeReadinessErrors[keyof GraphNodeReadinessErrors]
+
+export type GraphNodeReadinessResponses = {
+  /**
+   * Node build readiness
+   */
+  200: GraphNodeReadiness
+}
+
+export type GraphNodeReadinessResponse = GraphNodeReadinessResponses[keyof GraphNodeReadinessResponses]
+
+export type GraphNodeAuditData = {
+  body?: never
+  path: {
+    nodeID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    session?: string
+  }
+  url: "/graph/node/{nodeID}/audit"
+}
+
+export type GraphNodeAuditErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type GraphNodeAuditError = GraphNodeAuditErrors[keyof GraphNodeAuditErrors]
+
+export type GraphNodeAuditResponses = {
+  /**
+   * Node audit history
+   */
+  200: GraphNodeAudit
+}
+
+export type GraphNodeAuditResponse = GraphNodeAuditResponses[keyof GraphNodeAuditResponses]
+
+export type GraphVersionsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/graph/versions"
+}
+
+export type GraphVersionsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
+}
+
+export type GraphVersionsError = GraphVersionsErrors[keyof GraphVersionsErrors]
+
+export type GraphVersionsResponses = {
+  /**
+   * Graph version snapshots
+   */
+  200: Array<GraphVersion>
+}
+
+export type GraphVersionsResponse = GraphVersionsResponses[keyof GraphVersionsResponses]
 
 export type InstanceDisposeData = {
   body?: never

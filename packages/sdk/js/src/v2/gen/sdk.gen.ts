@@ -88,6 +88,18 @@ import type {
   GlobalHealthResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
+  GraphCurrentPlanErrors,
+  GraphCurrentPlanResponses,
+  GraphMainErrors,
+  GraphMainResponses,
+  GraphNodeAuditErrors,
+  GraphNodeAuditResponses,
+  GraphNodeErrors,
+  GraphNodeReadinessErrors,
+  GraphNodeReadinessResponses,
+  GraphNodeResponses,
+  GraphVersionsErrors,
+  GraphVersionsResponses,
   InstanceDisposeErrors,
   InstanceDisposeResponses,
   LocationRef,
@@ -1916,6 +1928,200 @@ export class File extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<FileStatusResponses, FileStatusErrors, ThrowOnError>({
       url: "/file/status",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Graph extends HeyApiClient {
+  /**
+   * Get project main graph
+   *
+   * Retrieve the project main graph (committed nodes and edges with session_id IS NULL).
+   */
+  public main<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<GraphMainResponses, GraphMainErrors, ThrowOnError>({
+      url: "/graph/main",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get session CurrentPlan
+   *
+   * Retrieve the session-scoped CurrentPlan graph (nodes and edges with session_id = session).
+   */
+  public currentPlan<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      session: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "session" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<GraphCurrentPlanResponses, GraphCurrentPlanErrors, ThrowOnError>({
+      url: "/graph/current-plan",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get graph node
+   *
+   * Retrieve a single graph node by ID.
+   */
+  public node<ThrowOnError extends boolean = false>(
+    parameters: {
+      nodeID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "nodeID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<GraphNodeResponses, GraphNodeErrors, ThrowOnError>({
+      url: "/graph/node/{nodeID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get node build readiness
+   *
+   * Check whether a node is ready to build: blockers, dependency status, validation issues.
+   */
+  public nodeReadiness<ThrowOnError extends boolean = false>(
+    parameters: {
+      nodeID: string
+      directory?: string
+      workspace?: string
+      session: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "nodeID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "session" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<GraphNodeReadinessResponses, GraphNodeReadinessErrors, ThrowOnError>({
+      url: "/graph/node/{nodeID}/readiness",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get node audit history
+   *
+   * Retrieve tool runs and generation runs for a specific node.
+   */
+  public nodeAudit<ThrowOnError extends boolean = false>(
+    parameters: {
+      nodeID: string
+      directory?: string
+      workspace?: string
+      session?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "nodeID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "session" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<GraphNodeAuditResponses, GraphNodeAuditErrors, ThrowOnError>({
+      url: "/graph/node/{nodeID}/audit",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List graph versions
+   *
+   * Retrieve version snapshots for the project graph.
+   */
+  public versions<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<GraphVersionsResponses, GraphVersionsErrors, ThrowOnError>({
+      url: "/graph/versions",
       ...options,
       ...params,
     })
@@ -7130,6 +7336,11 @@ export class OpencodeClient extends HeyApiClient {
   private _file?: File
   get file(): File {
     return (this._file ??= new File({ client: this.client }))
+  }
+
+  private _graph?: Graph
+  get graph(): Graph {
+    return (this._graph ??= new Graph({ client: this.client }))
   }
 
   private _instance?: Instance
