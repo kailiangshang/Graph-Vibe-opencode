@@ -51,6 +51,8 @@ import { Worktree } from "@/worktree"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { Database } from "@opencode-ai/core/database/database"
+import { GraphDomain } from "@opencode-ai/core/graph/domain"
+import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
@@ -87,6 +89,7 @@ import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
+import { graphHandlers } from "./handlers/graph"
 import { globalHandlers } from "./handlers/global"
 import { instanceHandlers } from "./handlers/instance"
 import { mcpHandlers } from "./handlers/mcp"
@@ -156,6 +159,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     configHandlers,
     experimentalHandlers,
     fileHandlers,
+    graphHandlers,
     instanceHandlers,
     mcpHandlers,
     projectHandlers,
@@ -213,6 +217,8 @@ const app = LayerNode.group([
   Npm.node,
   FSUtil.node,
   Database.node,
+  GraphDomain.node,
+  GraphAudit.node,
   Auth.node,
   Account.node,
   Config.node,

@@ -87,16 +87,16 @@ const NodeAuditResponse = Schema.Struct({
   generationRuns: Schema.Array(GenerationRunItem),
 }).annotate({ identifier: "GraphNodeAudit" })
 
-const ProjectQuery = Schema.Struct({
+export const ProjectQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
 })
 
-const SessionRequiredQuery = Schema.Struct({
+export const SessionRequiredQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   session: Schema.String,
 })
 
-const SessionOptionalQuery = Schema.Struct({
+export const SessionOptionalQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   session: Schema.optional(Schema.String),
 })
