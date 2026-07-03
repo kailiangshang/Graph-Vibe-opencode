@@ -47,7 +47,10 @@ describe("graph workflow instructions", () => {
       expect(system).toContain("graph_plan_admit")
       expect(system).toContain("graph_build_gate")
       expect(system).toContain("graph_artifact_apply")
-      expect(system).toContain("Build gate")
+      expect(system).toContain("graph_diagnostics_run")
+      expect(system).toContain("Autopilot")
+      expect(system).toContain("Plan Phase")
+      expect(system).toContain("Fix Phase")
     }),
   )
 })

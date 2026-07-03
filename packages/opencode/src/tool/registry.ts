@@ -35,6 +35,7 @@ import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
 import { GraphArtifactApplyTool } from "./graph/artifact-apply"
 import { GraphBuildGateTool } from "./graph/build-gate"
+import { GraphDiagnosticsRunTool } from "./graph/diagnostics-run"
 import { GraphPlanAdmitTool } from "./graph/plan-admit"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
@@ -115,6 +116,7 @@ const layer = Layer.effect(
     const graphPlanTool = flags.experimentalGraphMode ? yield* GraphPlanAdmitTool : undefined
     const graphBuildTool = flags.experimentalGraphMode ? yield* GraphBuildGateTool : undefined
     const graphArtifactTool = flags.experimentalGraphMode ? yield* GraphArtifactApplyTool : undefined
+    const graphDiagnosticsTool = flags.experimentalGraphMode ? yield* GraphDiagnosticsRunTool : undefined
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
@@ -223,11 +225,12 @@ const layer = Layer.effect(
           plan: Tool.init(plan),
         })
         const graphTools =
-          graphPlanTool && graphBuildTool && graphArtifactTool
+          graphPlanTool && graphBuildTool && graphArtifactTool && graphDiagnosticsTool
             ? [
                 yield* Tool.init(graphPlanTool),
                 yield* Tool.init(graphBuildTool),
                 yield* Tool.init(graphArtifactTool),
+                yield* Tool.init(graphDiagnosticsTool),
               ]
             : []
         const builtin = [
