@@ -1,7 +1,7 @@
 # Graph Vibe OpenCode — 文档索引与规则
 
 > **单一入口**。写新文档前先看这里「放哪」；完成的及时归档。目的：防止文档越堆越多、无法维护。
-> 最后更新：2026-06-27
+> 最后更新：2026-07-04
 
 ## 文档地图
 
@@ -15,9 +15,20 @@
 
 **设计 spec（每子项目一份，活跃）**
 - [`specs/2026-06-27-graph-storage.md`](./specs/2026-06-27-graph-storage.md) — 子项目 1：图存储地基
+- [`specs/2026-07-01-graph-domain.md`](./specs/2026-07-01-graph-domain.md) — 子项目 2：图领域核心
+- [`specs/2026-07-01-graph-derivation.md`](./specs/2026-07-01-graph-derivation.md) — 子项目 3：结构派生
+- [`specs/2026-07-02-graph-plan-build-gate.md`](./specs/2026-07-02-graph-plan-build-gate.md) — 子项目 4：Plan/Build Gate
+- [`specs/2026-07-02-graph-tool-integration.md`](./specs/2026-07-02-graph-tool-integration.md) — 子项目 5：Graph Mode 工具集成
+- [`specs/2026-07-03-graph-read-api-visualization.md`](./specs/2026-07-03-graph-read-api-visualization.md) — 子项目 6A：Graph Read API
+- [`specs/2026-07-03-graph-autopilot-workflow.md`](./specs/2026-07-03-graph-autopilot-workflow.md) — 子项目 7：Autopilot 工作流
 
 **实施计划（每子项目一份，活跃）**
-- [`plans/2026-06-27-graph-storage.md`](./plans/2026-06-27-graph-storage.md) — 子项目 1：图存储地基 TDD 实施计划
+- [`plans/2026-06-27-graph-storage.md`](./plans/2026-06-27-graph-storage.md) — 子项目 1
+- [`plans/2026-07-01-graph-domain.md`](./plans/2026-07-01-graph-domain.md) — 子项目 2
+- [`plans/2026-07-01-graph-derivation.md`](./plans/2026-07-01-graph-derivation.md) — 子项目 3
+- [`plans/2026-07-02-graph-plan-build-gate.md`](./plans/2026-07-02-graph-plan-build-gate.md) — 子项目 4
+- [`plans/2026-07-02-graph-tool-integration.md`](./plans/2026-07-02-graph-tool-integration.md) — 子项目 5
+- [`plans/2026-07-03-graph-read-api-visualization.md`](./plans/2026-07-03-graph-read-api-visualization.md) — 子项目 6A
 
 **归档（已完成 / 过期）**
 - [`archive/`](./archive/) — rename 的 spec + plan（已完成）

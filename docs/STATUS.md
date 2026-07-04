@@ -1,7 +1,7 @@
 # Graph Vibe OpenCode — 现状与开发进度
 
 > 这是一份**活文档**，每次有进展就更新。目的是让任何人（包括在另一台机器上的我）能快速接续开发。
-> 最后更新：2026-06-26
+> 最后更新：2026-07-04
 
 ## 1. 这是什么
 
@@ -17,9 +17,8 @@
 | `origin` | `git@github.com:kailiangshang/Graph-Vibe-opencode.git` (SSH) | 推/拉都走这里 |
 | `upstream` | `https://github.com/anomalyco/opencode.git` | **只 fetch**（push 已禁，防误推上游） |
 
-- 默认分支：`dev`（= 上游 `219ba24`，全量历史 14475 提交）
-- 设计 spec 分支：`docs-specs`
-- 同步上游新提交：`git fetch upstream && git merge upstream/dev`（上游已前进到 `eeb5b1d8b`，比我们新 3 个提交，待同步）
+- 默认分支：`dev`
+- 同步上游：`git fetch upstream && git merge upstream/dev`（最近同步 2026-07-04）
 
 ## 3. 环境搭建（新机器必读）
 
@@ -77,18 +76,16 @@ bun run lint     # oxlint
 
 | # | 内容 | 状态 |
 |---|---|---|
-| 0 | 环境搭建（Bun / 镜像 / node-gyp / install） | ✅ |
-| 0 | 原版 OpenCode 最新 TUI 跑通验证 | ✅ |
-| 0 | git 归位（origin SSH / upstream 只读 / 全量历史） | ✅ |
-| 0 | 架构地基 5 原则（图移植治理） | ✅ 见 §6 + foundation spec |
-| 0 | rename 设计（双名 / 致敬） | ✅ 见 rename spec |
-| 0 | **rename 执行（子项目 0）** | ✅ 已完成 |
-| 0 | graph-vibe 关键抽象提炼到 `docs/graph-vibe/`（移植不再依赖旧 Go 项目） | ✅ |
-| 0 | 上游同步策略 + 分叉追踪（`docs/UPSTREAM-DIVERGENCE.md`，「扩展不修改」总则） | ✅ |
-| 0 | 会话恢复：旧主会话合并进当前会话；项目身份统一（A→B） | ✅ |
-| 0 | 原则6「无 MVP、完整实现」加入 foundation spec | ✅ |
-| 1 | 图存储地基 spec（graph_node/edge/version + CurrentPlan + TDD） | ✅ spec，待 writing-plans |
-| 2+ | 领域核心/派生/Plan-Build/AI/可视化 各子项目 spec | ⏳ 待办 |
+| 0 | 环境搭建 / git 归位 / 架构地基 / rename / 概念提炼 / 上游策略 | ✅ |
+| 1 | 图存储地基（graph_node/edge/version + CurrentPlan + TDD） | ✅ |
+| 2 | 图领域核心（校验/冲突/影响/路径分析） | ✅ |
+| 3 | 结构派生（tree-sitter 扫描/一致性/和解） | ✅ |
+| 4 | Plan/Build Gate（GraphPlan.admit / GraphBuild.evaluate / GateResult / 审计） | ✅ |
+| 5 | Graph mode 工具集成（plan_admit / build_gate / artifact_apply / registry / prompt） | ✅ |
+| 6A | Graph Read API + CurrentPlan 面板（6 个 HTTP 端点 + Hey-API SDK + Web 页面） | ✅ |
+| 6B | Canvas 力导向图可视化（力导向布局/Canvas 渲染/拖拽缩放/视图切换） | ✅ |
+| 7 | Autopilot 工作流（graph_diagnostics_run + Plan→Build→Check→Fix→Summary 提示词） | ✅ |
+| — | 上游同步（2026-07-04，code-mode 等上游变更已合并） | ✅ |
 
 ## 6. 架构决策摘要（图移植地基，治理所有后续图功能）
 
