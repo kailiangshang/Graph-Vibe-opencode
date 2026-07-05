@@ -52,7 +52,11 @@ export function validateEdge(source: NodeRow, target: NodeRow, edge: EdgeRow): V
           (source.type === "composite" && target.type === "atomic") ||
           (source.type === "atomic" && target.type === "atomic")
       } else {
-        valid = source.type === target.type && source.level === "L1" && target.level === "L2"
+        valid =
+          (source.type === "prd" && target.type === "composite") ||
+          (source.type === "composite" && target.type === "atomic") ||
+          (source.type === "atomic" && target.type === "atomic") ||
+          (source.type === target.type && source.level === "L1" && target.level === "L2")
       }
       break
     case "blocks":

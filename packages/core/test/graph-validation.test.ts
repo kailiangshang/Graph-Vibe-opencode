@@ -61,9 +61,19 @@ describe("validation.validateEdge — type matrix (normal nodes)", () => {
     const tgt = makeNode({ id: "T", type: "prd", level: "L2" })
     expect(Validation.validateEdge(src, tgt, makeEdge("e1", "S", "T", "contains"))).toEqual([])
   })
-  test("contains: cross-type rejected", () => {
+  test("contains: prd→composite valid (natural hierarchy)", () => {
     const src = makeNode({ id: "S", type: "prd", level: "L1" })
     const tgt = makeNode({ id: "T", type: "composite", level: "L2" })
+    expect(Validation.validateEdge(src, tgt, makeEdge("e1", "S", "T", "contains"))).toEqual([])
+  })
+  test("contains: composite→atomic valid (natural hierarchy)", () => {
+    const src = makeNode({ id: "S", type: "composite", level: "L1" })
+    const tgt = makeNode({ id: "T", type: "atomic", level: "L2" })
+    expect(Validation.validateEdge(src, tgt, makeEdge("e1", "S", "T", "contains"))).toEqual([])
+  })
+  test("contains: atomic→prd rejected (wrong direction)", () => {
+    const src = makeNode({ id: "S", type: "atomic", level: "L2" })
+    const tgt = makeNode({ id: "T", type: "prd", level: "L1" })
     const issues = Validation.validateEdge(src, tgt, makeEdge("e1", "S", "T", "contains"))
     expect(issues.some((i) => i.rule === "edge.type_matrix")).toBe(true)
   })
