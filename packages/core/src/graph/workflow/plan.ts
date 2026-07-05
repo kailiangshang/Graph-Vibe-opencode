@@ -10,7 +10,10 @@ import type { EdgeRow, NodeRow } from "../storage"
 import type { ProjectV2 } from "../../project"
 
 export type PlanNodeCreate = Omit<GraphStorage.NodeCreate, "projectID" | "sessionID">
-export type PlanEdgeCreate = Omit<GraphStorage.EdgeCreate, "projectID" | "sessionID">
+export type PlanEdgeCreate = Omit<GraphStorage.EdgeCreate, "projectID" | "sessionID" | "sourceID" | "targetID"> & {
+  sourceID: string
+  targetID: string
+}
 
 export interface AdmitPlanInput {
   readonly projectID: ProjectV2.ID
@@ -47,8 +50,31 @@ export const layer = Layer.effect(
 
       return yield* db.transaction(() =>
         Effect.gen(function* () {
-          yield* Effect.forEach(input.nodes, (node) => domain.node.create({ ...node, projectID: input.projectID, sessionID: input.sessionID }))
-          yield* Effect.forEach(input.edges, (edge) => domain.edge.create({ ...edge, projectID: input.projectID, sessionID: input.sessionID }))
+          const nodeIDs: GraphStorage.NodeID[] = []
+          yield* Effect.forEach(input.nodes, (node) =>
+            Effect.gen(function* () {
+              const id = yield* domain.node.create({ ...node, projectID: input.projectID, sessionID: input.sessionID })
+              nodeIDs.push(id)
+            }),
+          )
+          const resolveRef = (ref: string): GraphStorage.NodeID => {
+            if (ref.startsWith("@")) {
+              const idx = Number.parseInt(ref.slice(1), 10)
+              const resolved = nodeIDs[idx]
+              if (!resolved) throw new Error(`Edge references unknown node index: ${ref}`)
+              return resolved
+            }
+            return ref as GraphStorage.NodeID
+          }
+          yield* Effect.forEach(input.edges, (edge) =>
+            domain.edge.create({
+              ...edge,
+              sourceID: resolveRef(edge.sourceID),
+              targetID: resolveRef(edge.targetID),
+              projectID: input.projectID,
+              sessionID: input.sessionID,
+            }),
+          )
           return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: false }
         }),
       ).pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
@@ -66,8 +92,16 @@ export const defaultLayer = layer.pipe(
 )
 
 function validateDryRun(input: AdmitPlanInput) {
-  const nodes = input.nodes.map((node): NodeRow => ({
-    id: (node.id ?? GraphStorage.NodeID.create()) as GraphStorage.NodeID,
+  const nodeIDs = input.nodes.map((node) => (node.id ?? GraphStorage.NodeID.create()) as GraphStorage.NodeID)
+  const resolveRef = (ref: string): GraphStorage.NodeID => {
+    if (ref.startsWith("@")) {
+      const idx = Number.parseInt(ref.slice(1), 10)
+      return nodeIDs[idx] ?? ref
+    }
+    return ref as GraphStorage.NodeID
+  }
+  const nodes = input.nodes.map((node, i): NodeRow => ({
+    id: nodeIDs[i],
     projectID: input.projectID,
     sessionID: input.sessionID,
     type: node.type,
@@ -88,8 +122,8 @@ function validateDryRun(input: AdmitPlanInput) {
     id: (edge.id ?? GraphStorage.EdgeID.create()) as GraphStorage.EdgeID,
     projectID: input.projectID,
     sessionID: input.sessionID,
-    sourceID: edge.sourceID,
-    targetID: edge.targetID,
+    sourceID: resolveRef(edge.sourceID),
+    targetID: resolveRef(edge.targetID),
     relation: edge.relation,
     confidence: edge.confidence ?? 1,
     timeCreated: 0,

@@ -92,4 +92,70 @@ describe("GraphPlan.admit", () => {
       expect(currentPlan.edges.length).toBe(0)
     }))
   })
+
+  test("index-based edge references (@N) resolve to created node IDs", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const result = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [
+          { type: "composite", name: "Parent", level: "L1" },
+          { type: "atomic", name: "Child", level: "L2" },
+        ],
+        edges: [{ sourceID: "@0", targetID: "@1", relation: "contains" }],
+      })
+
+      expect(result.nodesCreated).toBe(2)
+      expect(result.edgesCreated).toBe(1)
+      const storage = yield* GraphStorage.Service
+      const currentPlan = yield* storage.currentPlan({ sessionID: SID })
+      expect(currentPlan.nodes.length).toBe(2)
+      expect(currentPlan.edges.length).toBe(1)
+      expect(currentPlan.edges[0].sourceID).toBe(currentPlan.nodes[0].id)
+      expect(currentPlan.edges[0].targetID).toBe(currentPlan.nodes[1].id)
+    }))
+  })
+
+  test("index references work in dry-run validation", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const result = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        dryRun: true,
+        nodes: [
+          { type: "prd", name: "PRD", level: "L1" },
+          { type: "composite", name: "Feature", level: "L1" },
+        ],
+        edges: [{ sourceID: "@0", targetID: "@1", relation: "contains" }],
+      })
+
+      expect(result.dryRun).toBe(true)
+      expect(result.edgesCreated).toBe(1)
+    }))
+  })
+
+  test("mixing index references and explicit IDs", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const result = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [
+          { id: "mix_root", type: "prd", name: "Root", level: "L1" },
+          { type: "composite", name: "Branch", level: "L1" },
+        ],
+        edges: [
+          { sourceID: "mix_root", targetID: "@1", relation: "contains" },
+        ],
+      })
+
+      expect(result.nodesCreated).toBe(2)
+      const storage = yield* GraphStorage.Service
+      const currentPlan = yield* storage.currentPlan({ sessionID: SID })
+      expect(currentPlan.edges[0].sourceID).toBe("mix_root" as GraphStorage.NodeID)
+      expect(currentPlan.edges[0].targetID).toBe(currentPlan.nodes[1].id)
+    }))
+  })
 })
