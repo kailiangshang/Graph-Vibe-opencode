@@ -1,15 +1,16 @@
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
+import { graphDiff } from "@opencode-ai/core/graph/diff"
 import { Graph } from "@opencode-ai/schema"
 import type { ProjectV2 } from "@opencode-ai/core/project"
 import { Effect } from "effect"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { Project } from "@/project/project"
 import { Session } from "@/session/session"
 import type { SessionID } from "@/session/schema"
 import { InstanceHttpApi } from "../api"
 import { notFound } from "../errors"
-import { ProjectQuery, SessionRequiredQuery, SessionOptionalQuery } from "../groups/graph"
+import { ProjectQuery, SessionRequiredQuery, SessionOptionalQuery, DiffQuery } from "../groups/graph"
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { mapStorageNotFound } from "./session-errors"
 
@@ -161,6 +162,50 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       return true
     })
 
+    const diff = Effect.fn("GraphHttpApi.diff")(function* (ctx: {
+      query: typeof DiffQuery.Type
+    }) {
+      const routeCtx = yield* WorkspaceRouteContext
+      const { project: proj } = yield* projectSvc.fromDirectory(routeCtx.directory)
+      const projectID = proj.id
+
+      const loadSide = (side: string) =>
+        Effect.gen(function* () {
+          if (side === "currentPlan") {
+            const sessionID = ctx.query.session
+            if (!sessionID) return yield* Effect.fail(new HttpApiError.BadRequest({}))
+            return yield* domain.currentPlan({ sessionID })
+          }
+          if (side === "main") {
+            return yield* domain.main({ projectID })
+          }
+          const match = side.match(/^version:(\d+)$/)
+          if (match) {
+            const version = yield* domain.version
+              .get({ projectID, versionNumber: Number(match[1]) })
+              .pipe(Effect.catchTag("GraphV2.NotFoundError", () => Effect.fail(new HttpApiError.BadRequest({}))))
+            return {
+              nodes: (version.snapshot.nodes ?? []) as any,
+              edges: (version.snapshot.edges ?? []) as any,
+            }
+          }
+          return yield* Effect.fail(new HttpApiError.BadRequest({}))
+        })
+
+      const leftView = yield* loadSide(ctx.query.left)
+      const rightView = yield* loadSide(ctx.query.right)
+      const result = graphDiff(leftView, rightView)
+
+      return {
+        summary: result.summary,
+        nodesAdded: result.nodes.added.map((n) => n.name ?? n.id),
+        nodesRemoved: result.nodes.removed.map((n) => n.name ?? n.id),
+        nodesModified: result.nodes.modified.map((m) => ({ id: m.id, fields: m.fields })),
+        edgesAdded: result.edges.added.length,
+        edgesRemoved: result.edges.removed.length,
+      }
+    })
+
     return handlers
       .handle("main", main)
       .handle("currentPlan", currentPlan)
@@ -170,5 +215,6 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       .handle("versions", versions)
       .handle("deleteNode", deleteNode)
       .handle("deleteEdge", deleteEdge)
+      .handle("diff", diff)
   }),
 )

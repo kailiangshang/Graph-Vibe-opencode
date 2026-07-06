@@ -94,6 +94,8 @@ import type {
   GraphDeleteEdgeResponses,
   GraphDeleteNodeErrors,
   GraphDeleteNodeResponses,
+  GraphDiffErrors,
+  GraphDiffResponses,
   GraphMainErrors,
   GraphMainResponses,
   GraphNodeAuditErrors,
@@ -2190,6 +2192,42 @@ export class Graph extends HeyApiClient {
     )
     return (options?.client ?? this.client).delete<GraphDeleteEdgeResponses, GraphDeleteEdgeErrors, ThrowOnError>({
       url: "/graph/edge/{edgeID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Compare two graph states
+   *
+   * Compare graph states: left/right can be 'currentPlan', 'main', or 'version:N'.
+   */
+  public diff<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      left: string
+      right: string
+      session?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "left" },
+            { in: "query", key: "right" },
+            { in: "query", key: "session" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<GraphDiffResponses, GraphDiffErrors, ThrowOnError>({
+      url: "/graph/diff",
       ...options,
       ...params,
     })

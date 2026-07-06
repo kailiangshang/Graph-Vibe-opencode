@@ -4,6 +4,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
+import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { ProjectV2 } from "@opencode-ai/core/project"
@@ -35,6 +36,7 @@ const it = testEffect(
       Database.node,
       Session.node,
       GraphStorage.node,
+      GraphDomain.node,
       GraphAudit.node,
       GraphBuild.node,
       CrossSpawnSpawner.node,

@@ -1,6 +1,8 @@
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
+import { topologicalOrder } from "@opencode-ai/core/graph/build-order"
+import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { Graph } from "@opencode-ai/schema/graph"
 import { Effect, Schema } from "effect"
 import { Session } from "@/session/session"
@@ -42,6 +44,7 @@ export const GraphPlanAdmitTool = Tool.define(
     const sessions = yield* Session.Service
     const plan = yield* GraphPlan.Service
     const audit = yield* GraphAudit.Service
+    const domain = yield* GraphDomain.Service
 
     return {
       description: "Admit nodes and edges into the session CurrentPlan graph before implementation.",
@@ -65,9 +68,17 @@ export const GraphPlanAdmitTool = Tool.define(
             inputSummary: `nodes=${params.nodes.length} edges=${params.edges.length}`,
             outputSummary: `nodes=${result.nodesCreated} edges=${result.edgesCreated}`,
           })
+
+          let suggestedOrder: string[] = []
+          if (!params.dryRun) {
+            const cp = yield* domain.currentPlan({ sessionID: session.sessionID })
+            const order = topologicalOrder(cp.nodes, cp.edges)
+            suggestedOrder = order.map((n, i) => `${i + 1}. ${n.name} [${n.status}]`)
+          }
+
           return {
             title: params.dryRun ? "CurrentPlan dry-run" : "CurrentPlan admitted",
-            metadata: { result },
+            metadata: { result, suggestedOrder },
             output: formatJson(result),
           }
         }).pipe(Effect.orDie),

@@ -2384,6 +2384,24 @@ export type GraphVersion = {
   timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
+export type GraphDiff = {
+  summary: {
+    nodesAdded: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    nodesRemoved: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    nodesModified: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    edgesAdded: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    edgesRemoved: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  nodesAdded: Array<string>
+  nodesRemoved: Array<string>
+  nodesModified: Array<{
+    id: string
+    fields: Array<string>
+  }>
+  edgesAdded: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  edgesRemoved: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type Path = {
   home: string
   state: string
@@ -8426,6 +8444,37 @@ export type GraphDeleteEdgeResponses = {
 }
 
 export type GraphDeleteEdgeResponse = GraphDeleteEdgeResponses[keyof GraphDeleteEdgeResponses]
+
+export type GraphDiffData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    left: string
+    right: string
+    session?: string
+  }
+  url: "/graph/diff"
+}
+
+export type GraphDiffErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GraphDiffError = GraphDiffErrors[keyof GraphDiffErrors]
+
+export type GraphDiffResponses = {
+  /**
+   * Graph diff
+   */
+  200: GraphDiff
+}
+
+export type GraphDiffResponse = GraphDiffResponses[keyof GraphDiffResponses]
 
 export type InstanceDisposeData = {
   body?: never

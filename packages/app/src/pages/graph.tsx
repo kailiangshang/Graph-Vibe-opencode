@@ -71,6 +71,7 @@ export default function GraphPage() {
   const [selectedNodeID, setSelectedNodeID] = createSignal<string | null>(null)
   const [viewMode, setViewMode] = createSignal<"list" | "graph">("graph")
   const [dataSource, setDataSource] = createSignal<"currentPlan" | "main">("currentPlan")
+  const [levelFilter, setLevelFilter] = createSignal<"all" | "L1" | "L2">("all")
 
   onMount(() => {
     const stop = sdk().event.listen((evt: { details: { type: string } }) => {
@@ -122,6 +123,20 @@ export default function GraphPage() {
     return counts
   })
 
+  const filteredData = createMemo(() => {
+    const data = graphQuery.data
+    if (!data) return { nodes: [], edges: [] }
+    const filter = levelFilter()
+    if (filter === "all") return data
+    const filteredNodes = data.nodes.filter((n) => {
+      if (filter === "L1") return n.type === "prd" || n.type === "composite"
+      return n.type === "atomic"
+    })
+    const nodeIDs = new Set(filteredNodes.map((n) => n.id))
+    const filteredEdges = data.edges.filter((e) => nodeIDs.has(e.sourceID) && nodeIDs.has(e.targetID))
+    return { nodes: filteredNodes, edges: filteredEdges }
+  })
+
   return (
     <div class="flex h-full flex-col">
       <div class="border-b p-4">
@@ -146,6 +161,29 @@ export default function GraphPage() {
                 Main
               </button>
             </div>
+          </div>
+          <div class="flex gap-1 rounded-lg bg-muted p-0.5">
+            <button
+              class="rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors"
+              classList={{ "bg-background shadow-sm": levelFilter() === "all", "text-muted-foreground": levelFilter() !== "all" }}
+              onClick={() => setLevelFilter("all")}
+            >
+              All
+            </button>
+            <button
+              class="rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors"
+              classList={{ "bg-background shadow-sm": levelFilter() === "L1", "text-muted-foreground": levelFilter() !== "L1" }}
+              onClick={() => setLevelFilter("L1")}
+            >
+              L1
+            </button>
+            <button
+              class="rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors"
+              classList={{ "bg-background shadow-sm": levelFilter() === "L2", "text-muted-foreground": levelFilter() !== "L2" }}
+              onClick={() => setLevelFilter("L2")}
+            >
+              L2
+            </button>
           </div>
           <div class="flex gap-1 rounded-lg bg-muted p-0.5">
             <button
@@ -182,7 +220,7 @@ export default function GraphPage() {
       <div class="flex flex-1 overflow-hidden">
         <div class="flex-1 overflow-hidden">
           <Show
-            when={(graphQuery.data?.nodes ?? []).length > 0}
+            when={(filteredData().nodes ?? []).length > 0}
             fallback={
               <div class="flex h-full items-center justify-center text-muted-foreground">
                 {dataSource() === "currentPlan"
@@ -195,7 +233,7 @@ export default function GraphPage() {
               when={viewMode() === "graph"}
               fallback={
                 <div class="h-full divide-y overflow-auto">
-                  <For each={graphQuery.data?.nodes}>
+                  <For each={filteredData().nodes}>
                     {(node) => (
                       <button
                         class="flex w-full items-center gap-3 p-3 text-left hover:bg-accent"
@@ -216,7 +254,7 @@ export default function GraphPage() {
               }
             >
               <GraphCanvas
-                data={graphQuery.data!}
+                data={filteredData()}
                 selectedNodeID={selectedNodeID()}
                 onSelectNode={setSelectedNodeID}
               />

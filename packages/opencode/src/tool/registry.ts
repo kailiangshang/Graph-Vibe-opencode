@@ -2,6 +2,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
+import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
@@ -472,6 +473,7 @@ export const node = LayerNode.make({
     MCP.node,
     Database.node,
     GraphStorage.node,
+    GraphDomain.node,
     GraphAudit.node,
     GraphPlan.node,
     GraphBuild.node,

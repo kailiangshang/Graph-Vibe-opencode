@@ -1,6 +1,8 @@
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
+import { buildableNodes } from "@opencode-ai/core/graph/build-order"
+import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ChildProcess } from "effect/unstable/process"
 import * as Stream from "effect/Stream"
@@ -44,6 +46,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
     const storage = yield* GraphStorage.Service
     const audit = yield* GraphAudit.Service
     const spawner = yield* ChildProcessSpawner
+    const domain = yield* GraphDomain.Service
 
     const runCmd = (cmd: NamedCommand, cwd: string, abort: AbortSignal, timeoutMs: number) =>
       Effect.gen(function* () {
@@ -198,6 +201,17 @@ export const GraphDiagnosticsRunTool = Tool.define(
             testStatus: allPassed ? "passed" : "failed",
             ...(allPassed ? { status: "verified" as const } : {}),
           })
+
+          let nextHint = ""
+          if (allPassed) {
+            const cp = yield* domain.currentPlan({ sessionID: session.sessionID })
+            const newlyBuildable = buildableNodes(cp.nodes, cp.edges)
+              .filter((n) => n.id !== params.targetNodeID)
+              .map((n) => n.name)
+            if (newlyBuildable.length > 0) {
+              nextHint = `\n\nNewly buildable: ${newlyBuildable.join(", ")}`
+            }
+          }
 
           yield* audit.tool.record({
             projectID: session.projectID,

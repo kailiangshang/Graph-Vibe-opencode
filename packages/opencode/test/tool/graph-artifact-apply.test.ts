@@ -4,6 +4,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
+import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { ProjectV2 } from "@opencode-ai/core/project"
@@ -30,10 +31,11 @@ const projectID = ProjectV2.ID.make("proj_graph_artifact")
 const sessionID = SessionID.descending("ses_graph_artifact")
 
 const it = testEffect(
-  LayerNode.compile(LayerNode.group([
+  LayerNode.compile(  LayerNode.group([
     Database.node,
     Session.node,
     GraphStorage.node,
+    GraphDomain.node,
     GraphAudit.node,
     GraphBuild.node,
     FSUtil.node,

@@ -101,6 +101,31 @@ export const SessionOptionalQuery = Schema.Struct({
   session: Schema.optional(Schema.String),
 })
 
+const DiffResponse = Schema.Struct({
+  summary: Schema.Struct({
+    nodesAdded: Schema.Number,
+    nodesRemoved: Schema.Number,
+    nodesModified: Schema.Number,
+    edgesAdded: Schema.Number,
+    edgesRemoved: Schema.Number,
+  }),
+  nodesAdded: Schema.Array(Schema.String),
+  nodesRemoved: Schema.Array(Schema.String),
+  nodesModified: Schema.Array(Schema.Struct({
+    id: Schema.String,
+    fields: Schema.Array(Schema.String),
+  })),
+  edgesAdded: Schema.Number,
+  edgesRemoved: Schema.Number,
+}).annotate({ identifier: "GraphDiff" })
+
+export const DiffQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  left: Schema.String,
+  right: Schema.String,
+  session: Schema.optional(Schema.String),
+})
+
 export const GraphPaths = {
   main: "/graph/main",
   currentPlan: "/graph/current-plan",
@@ -110,6 +135,7 @@ export const GraphPaths = {
   versions: "/graph/versions",
   deleteNode: "/graph/node/:nodeID",
   deleteEdge: "/graph/edge/:edgeID",
+  diff: "/graph/diff",
 } as const
 
 export const GraphApi = HttpApi.make("graph")
@@ -210,6 +236,17 @@ export const GraphApi = HttpApi.make("graph")
             identifier: "graph.deleteEdge",
             summary: "Delete graph edge",
             description: "Delete an edge from the graph.",
+          }),
+        ),
+        HttpApiEndpoint.get("diff", GraphPaths.diff, {
+          query: DiffQuery,
+          success: described(DiffResponse, "Graph diff"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.diff",
+            summary: "Compare two graph states",
+            description: "Compare graph states: left/right can be 'currentPlan', 'main', or 'version:N'.",
           }),
         ),
       )
