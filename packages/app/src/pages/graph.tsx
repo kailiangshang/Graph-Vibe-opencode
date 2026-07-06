@@ -69,10 +69,15 @@ export default function GraphPage() {
   const sdk = useSDK()
   const [selectedNodeID, setSelectedNodeID] = createSignal<string | null>(null)
   const [viewMode, setViewMode] = createSignal<"list" | "graph">("graph")
+  const [dataSource, setDataSource] = createSignal<"currentPlan" | "main">("currentPlan")
 
-  const currentPlanQuery = createQuery(() => ({
-    queryKey: [params.dir, params.id, "graph", "currentPlan"] as const,
+  const graphQuery = createQuery(() => ({
+    queryKey: [params.dir, params.id, "graph", dataSource()] as const,
     queryFn: async () => {
+      if (dataSource() === "main") {
+        const res = await sdk().client.graph.main({ directory: params.dir })
+        return res.data as GraphView
+      }
       const res = await sdk().client.graph.currentPlan({
         session: params.id!,
         directory: params.dir,
@@ -100,7 +105,7 @@ export default function GraphPage() {
   }))
 
   const statusCounts = createMemo(() => {
-    const nodes = currentPlanQuery.data?.nodes ?? []
+    const nodes = graphQuery.data?.nodes ?? []
     const counts: Record<string, number> = {}
     for (const n of nodes) counts[n.status] = (counts[n.status] ?? 0) + 1
     return counts
@@ -110,7 +115,27 @@ export default function GraphPage() {
     <div class="flex h-full flex-col">
       <div class="border-b p-4">
         <div class="flex items-center justify-between">
-          <h1 class="text-lg font-semibold">Current Plan</h1>
+          <div class="flex items-center gap-3">
+            <h1 class="text-lg font-semibold">
+              {dataSource() === "currentPlan" ? "Current Plan" : "Main Graph"}
+            </h1>
+            <div class="flex gap-1 rounded-lg bg-muted p-0.5">
+              <button
+                class="rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors"
+                classList={{ "bg-background shadow-sm": dataSource() === "currentPlan", "text-muted-foreground": dataSource() !== "currentPlan" }}
+                onClick={() => { setDataSource("currentPlan"); setSelectedNodeID(null) }}
+              >
+                Plan
+              </button>
+              <button
+                class="rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors"
+                classList={{ "bg-background shadow-sm": dataSource() === "main", "text-muted-foreground": dataSource() !== "main" }}
+                onClick={() => { setDataSource("main"); setSelectedNodeID(null) }}
+              >
+                Main
+              </button>
+            </div>
+          </div>
           <div class="flex gap-1 rounded-lg bg-muted p-0.5">
             <button
               class="rounded-md px-3 py-1 text-sm font-medium transition-colors"
@@ -128,10 +153,10 @@ export default function GraphPage() {
             </button>
           </div>
         </div>
-        <Show when={!currentPlanQuery.isLoading} fallback={<Spinner />}>
+        <Show when={!graphQuery.isLoading} fallback={<Spinner />}>
           <div class="mt-1 flex gap-4 text-sm text-muted-foreground">
-            <span>{currentPlanQuery.data?.nodes.length ?? 0} nodes</span>
-            <span>{currentPlanQuery.data?.edges.length ?? 0} edges</span>
+            <span>{graphQuery.data?.nodes.length ?? 0} nodes</span>
+            <span>{graphQuery.data?.edges.length ?? 0} edges</span>
             <For each={Object.entries(statusCounts())}>
               {([status, count]) => (
                 <span style={{ color: STATUS_COLORS[status] ?? "#999" }}>
@@ -146,10 +171,12 @@ export default function GraphPage() {
       <div class="flex flex-1 overflow-hidden">
         <div class="flex-1 overflow-hidden">
           <Show
-            when={(currentPlanQuery.data?.nodes ?? []).length > 0}
+            when={(graphQuery.data?.nodes ?? []).length > 0}
             fallback={
               <div class="flex h-full items-center justify-center text-muted-foreground">
-                No CurrentPlan nodes. Use the graph_plan_admit tool to create a plan.
+                {dataSource() === "currentPlan"
+                  ? "No CurrentPlan nodes. Use the graph_plan_admit tool to create a plan."
+                  : "No main graph nodes. Promote a CurrentPlan to populate the main graph."}
               </div>
             }
           >
@@ -157,7 +184,7 @@ export default function GraphPage() {
               when={viewMode() === "graph"}
               fallback={
                 <div class="h-full divide-y overflow-auto">
-                  <For each={currentPlanQuery.data?.nodes}>
+                  <For each={graphQuery.data?.nodes}>
                     {(node) => (
                       <button
                         class="flex w-full items-center gap-3 p-3 text-left hover:bg-accent"
@@ -178,7 +205,7 @@ export default function GraphPage() {
               }
             >
               <GraphCanvas
-                data={currentPlanQuery.data!}
+                data={graphQuery.data!}
                 selectedNodeID={selectedNodeID()}
                 onSelectNode={setSelectedNodeID}
               />
@@ -190,7 +217,7 @@ export default function GraphPage() {
           <div class="w-80 shrink-0 overflow-auto border-l p-4">
             <Show when={!nodeReadinessQuery.isLoading} fallback={<Spinner />}>
               <h2 class="mb-2 font-semibold">
-                {currentPlanQuery.data?.nodes.find((n) => n.id === selectedNodeID())?.name}
+                {graphQuery.data?.nodes.find((n) => n.id === selectedNodeID())?.name}
               </h2>
 
               <Show when={nodeReadinessQuery.data}>
