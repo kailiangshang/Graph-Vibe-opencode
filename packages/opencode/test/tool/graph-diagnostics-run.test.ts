@@ -1,4 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
+import path from "node:path"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -187,6 +188,69 @@ describe("graph_diagnostics_run", () => {
       expect(JSON.parse(result.output)).toMatchObject({ ran: true, passed: false })
       expect(node.testStatus).toBe("failed")
       expect(node.status).toBe("implemented")
+    }),
+  )
+
+  it.instance("timeout parameter causes command to be marked as timed out", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "SlowCmd",
+        level: "L2",
+        status: "implemented",
+      })
+
+      const tool = yield* init()
+
+      const result = yield* tool.execute(
+        { targetNodeID, commands: ["sleep 10"], timeout: 1000 },
+        context([]),
+      )
+
+      const parsed = JSON.parse(result.output)
+      expect(parsed.ran).toBe(true)
+      expect(parsed.passed).toBe(false)
+      expect(parsed.results[0].timedOut).toBe(true)
+    }),
+  )
+
+  it.instance("filter parameter selects matching auto-detected commands", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "FilteredDiag",
+        level: "L2",
+        status: "implemented",
+      })
+
+      yield* Effect.promise(async () => {
+        await Bun.write(
+          path.join(test.directory, "package.json"),
+          JSON.stringify({ scripts: { test: "true", typecheck: "true", lint: "false" } }),
+        )
+      })
+
+      const tool = yield* init()
+
+      const result = yield* tool.execute(
+        { targetNodeID, filter: "typecheck" },
+        context([]),
+      )
+
+      const parsed = JSON.parse(result.output)
+      expect(parsed.ran).toBe(true)
+      expect(parsed.results.length).toBe(1)
+      expect(parsed.results[0].name).toBe("typecheck")
     }),
   )
 })

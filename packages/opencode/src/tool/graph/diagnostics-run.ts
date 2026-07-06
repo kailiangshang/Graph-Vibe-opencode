@@ -10,15 +10,18 @@ import { Session } from "@/session/session"
 import { Tool } from "../tool"
 import { formatJson, resolveGraphSession, summarizeGate } from "./util"
 
-const DIAGNOSTICS_TIMEOUT_MS = 120_000
+const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_OUTPUT_CHARS = 64_000
 
 export const Parameters = Schema.Struct({
   targetNodeID: GraphStorage.NodeID,
   commands: Schema.Array(Schema.String).pipe(Schema.optional),
+  timeout: Schema.Number.pipe(Schema.optional),
+  filter: Schema.String.pipe(Schema.optional),
 })
 
 interface CommandResult {
+  name: string
   command: string
   exitCode: number | null
   output: string
@@ -26,6 +29,11 @@ interface CommandResult {
 }
 
 type ExitKind = { kind: "exit"; code: number } | { kind: "timeout"; code: null } | { kind: "abort"; code: null }
+
+interface NamedCommand {
+  name: string
+  command: string
+}
 
 export const GraphDiagnosticsRunTool = Tool.define(
   "graph_diagnostics_run",
@@ -36,9 +44,9 @@ export const GraphDiagnosticsRunTool = Tool.define(
     const audit = yield* GraphAudit.Service
     const spawner = yield* ChildProcessSpawner
 
-    const runCmd = (command: string, cwd: string, abort: AbortSignal) =>
+    const runCmd = (cmd: NamedCommand, cwd: string, abort: AbortSignal, timeoutMs: number) =>
       Effect.gen(function* () {
-        const spec = ChildProcess.make(command, [], {
+        const spec = ChildProcess.make(cmd.command, [], {
           shell: process.env.SHELL ?? "/bin/sh",
           cwd,
           env: process.env,
@@ -65,7 +73,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
 
         const exit: ExitKind = yield* Effect.raceAll([
           handle.exitCode.pipe(Effect.map((code): ExitKind => ({ kind: "exit", code }))),
-          Effect.sleep(`${DIAGNOSTICS_TIMEOUT_MS} millis`).pipe(
+          Effect.sleep(`${timeoutMs} millis`).pipe(
             Effect.map((): ExitKind => ({ kind: "timeout", code: null })),
           ),
           abortEffect.pipe(Effect.map((): ExitKind => ({ kind: "abort", code: null }))),
@@ -78,7 +86,8 @@ export const GraphDiagnosticsRunTool = Tool.define(
         yield* Effect.sleep("500 millis")
 
         return {
-          command,
+          name: cmd.name,
+          command: cmd.command,
           exitCode: exit.code,
           output: output.slice(0, MAX_OUTPUT_CHARS),
           timedOut: exit.kind === "timeout",
@@ -87,7 +96,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
 
     return {
       description:
-        "Run project diagnostics (tests, type checks, lint) for a graph node after artifact application. Updates node test status and promotes to verified on success.",
+        "Run project diagnostics (tests, type checks, lint) for a graph node after artifact application. Updates node test status and promotes to verified on success. Optional 'filter' selects auto-detected commands by name (e.g. 'test', 'typecheck'). Optional 'timeout' sets per-command timeout in milliseconds.",
       parameters: Parameters,
       execute: (params: typeof Parameters.Type, ctx: Tool.Context) =>
         Effect.gen(function* () {
@@ -125,13 +134,28 @@ export const GraphDiagnosticsRunTool = Tool.define(
             metadata: {},
           })
 
-          const commands =
-            params.commands ??
-            (yield* Effect.promise(() => detectDiagnosticsCommands(session.directory)))
+          const timeoutMs = params.timeout ?? DEFAULT_TIMEOUT_MS
+
+          let cmds: NamedCommand[]
+          if (params.commands) {
+            cmds = params.commands.map((c) => ({ name: c, command: c }))
+          } else {
+            const detected = yield* Effect.promise(() => detectDiagnosticsCommands(session.directory))
+            cmds = params.filter
+              ? detected.filter((c) => c.name.includes(params.filter!))
+              : detected
+            if (cmds.length === 0 && params.filter) {
+              return {
+                title: "Diagnostics skipped",
+                metadata: { gate: summarizeGate(gate), ran: false, passed: false, results: [] },
+                output: formatJson({ ran: false, reason: `No commands matched filter: ${params.filter}` }),
+              }
+            }
+          }
 
           const results: CommandResult[] = []
-          for (const cmd of commands) {
-            const result = yield* runCmd(cmd, session.directory, ctx.abort)
+          for (const cmd of cmds) {
+            const result = yield* runCmd(cmd, session.directory, ctx.abort, timeoutMs)
             results.push(result)
           }
 
@@ -149,8 +173,8 @@ export const GraphDiagnosticsRunTool = Tool.define(
             toolName: "graph.diagnostics.run",
             toolType: "diagnostics",
             status: allPassed ? "succeeded" : "failed",
-            inputSummary: commands.join("; "),
-            outputSummary: results.map((r) => `${r.command}:${r.exitCode}`).join(", "),
+            inputSummary: cmds.map((c) => c.name).join("; "),
+            outputSummary: results.map((r) => `${r.name}:${r.exitCode}`).join(", "),
           })
 
           return {
@@ -159,7 +183,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
               gate: summarizeGate(gate),
               ran: true,
               passed: allPassed,
-              results: results.map((r) => ({ command: r.command, exitCode: r.exitCode })),
+              results: results.map((r) => ({ name: r.name, exitCode: r.exitCode, timedOut: r.timedOut })),
             },
             output: formatJson({ ran: true, passed: allPassed, results }),
           }
@@ -168,14 +192,14 @@ export const GraphDiagnosticsRunTool = Tool.define(
   }),
 )
 
-async function detectDiagnosticsCommands(directory: string): Promise<string[]> {
+async function detectDiagnosticsCommands(directory: string): Promise<NamedCommand[]> {
   const pkg = await Bun.file(path.join(directory, "package.json"))
     .json()
     .catch(() => ({ scripts: {} }))
   const scripts = (pkg as { scripts?: Record<string, string> }).scripts ?? {}
-  const commands: string[] = []
-  if (scripts.test) commands.push("bun run test")
-  if (scripts.typecheck) commands.push("bun run typecheck")
-  if (scripts.lint) commands.push("bun run lint")
-  return commands.length > 0 ? commands : ["bun test"]
+  const commands: NamedCommand[] = []
+  if (scripts.test) commands.push({ name: "test", command: "bun run test" })
+  if (scripts.typecheck) commands.push({ name: "typecheck", command: "bun run typecheck" })
+  if (scripts.lint) commands.push({ name: "lint", command: "bun run lint" })
+  return commands.length > 0 ? commands : [{ name: "test", command: "bun test" }]
 }
