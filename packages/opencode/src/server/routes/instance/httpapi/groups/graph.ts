@@ -108,6 +108,8 @@ export const GraphPaths = {
   nodeReadiness: "/graph/node/:nodeID/readiness",
   nodeAudit: "/graph/node/:nodeID/audit",
   versions: "/graph/versions",
+  deleteNode: "/graph/node/:nodeID",
+  deleteEdge: "/graph/edge/:edgeID",
 } as const
 
 export const GraphApi = HttpApi.make("graph")
@@ -184,6 +186,30 @@ export const GraphApi = HttpApi.make("graph")
             identifier: "graph.versions",
             summary: "List graph versions",
             description: "Retrieve version snapshots for the project graph.",
+          }),
+        ),
+        HttpApiEndpoint.delete("deleteNode", GraphPaths.deleteNode, {
+          params: { nodeID: Schema.String },
+          query: ProjectQuery,
+          success: described(Schema.Boolean, "Node deleted"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.deleteNode",
+            summary: "Delete graph node",
+            description: "Delete a node from the graph. Cascades to connected edges.",
+          }),
+        ),
+        HttpApiEndpoint.delete("deleteEdge", GraphPaths.deleteEdge, {
+          params: { edgeID: Schema.String },
+          query: ProjectQuery,
+          success: described(Schema.Boolean, "Edge deleted"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.deleteEdge",
+            summary: "Delete graph edge",
+            description: "Delete an edge from the graph.",
           }),
         ),
       )

@@ -8223,6 +8223,40 @@ export type GraphCurrentPlanResponses = {
 
 export type GraphCurrentPlanResponse = GraphCurrentPlanResponses[keyof GraphCurrentPlanResponses]
 
+export type GraphDeleteNodeData = {
+  body?: never
+  path: {
+    nodeID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/graph/node/{nodeID}"
+}
+
+export type GraphDeleteNodeErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type GraphDeleteNodeError = GraphDeleteNodeErrors[keyof GraphDeleteNodeErrors]
+
+export type GraphDeleteNodeResponses = {
+  /**
+   * Node deleted
+   */
+  200: boolean
+}
+
+export type GraphDeleteNodeResponse = GraphDeleteNodeResponses[keyof GraphDeleteNodeResponses]
+
 export type GraphNodeData = {
   body?: never
   path: {
@@ -8358,6 +8392,40 @@ export type GraphVersionsResponses = {
 }
 
 export type GraphVersionsResponse = GraphVersionsResponses[keyof GraphVersionsResponses]
+
+export type GraphDeleteEdgeData = {
+  body?: never
+  path: {
+    edgeID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/graph/edge/{edgeID}"
+}
+
+export type GraphDeleteEdgeErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type GraphDeleteEdgeError = GraphDeleteEdgeErrors[keyof GraphDeleteEdgeErrors]
+
+export type GraphDeleteEdgeResponses = {
+  /**
+   * Edge deleted
+   */
+  200: boolean
+}
+
+export type GraphDeleteEdgeResponse = GraphDeleteEdgeResponses[keyof GraphDeleteEdgeResponses]
 
 export type InstanceDisposeData = {
   body?: never

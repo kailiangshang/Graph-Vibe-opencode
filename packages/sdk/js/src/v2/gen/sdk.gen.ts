@@ -90,6 +90,10 @@ import type {
   GlobalUpgradeResponses,
   GraphCurrentPlanErrors,
   GraphCurrentPlanResponses,
+  GraphDeleteEdgeErrors,
+  GraphDeleteEdgeResponses,
+  GraphDeleteNodeErrors,
+  GraphDeleteNodeResponses,
   GraphMainErrors,
   GraphMainResponses,
   GraphNodeAuditErrors,
@@ -1998,6 +2002,38 @@ export class Graph extends HeyApiClient {
   }
 
   /**
+   * Delete graph node
+   *
+   * Delete a node from the graph. Cascades to connected edges.
+   */
+  public deleteNode<ThrowOnError extends boolean = false>(
+    parameters: {
+      nodeID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "nodeID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<GraphDeleteNodeResponses, GraphDeleteNodeErrors, ThrowOnError>({
+      url: "/graph/node/{nodeID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Get graph node
    *
    * Retrieve a single graph node by ID.
@@ -2122,6 +2158,38 @@ export class Graph extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<GraphVersionsResponses, GraphVersionsErrors, ThrowOnError>({
       url: "/graph/versions",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Delete graph edge
+   *
+   * Delete an edge from the graph.
+   */
+  public deleteEdge<ThrowOnError extends boolean = false>(
+    parameters: {
+      edgeID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "edgeID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<GraphDeleteEdgeResponses, GraphDeleteEdgeErrors, ThrowOnError>({
+      url: "/graph/edge/{edgeID}",
       ...options,
       ...params,
     })

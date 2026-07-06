@@ -11,6 +11,7 @@ import { Tool } from "../tool"
 import { formatJson, resolveGraphSession, summarizeGate } from "./util"
 
 const DEFAULT_TIMEOUT_MS = 120_000
+const MAX_FIX_ATTEMPTS = 2
 const MAX_OUTPUT_CHARS = 64_000
 
 export const Parameters = Schema.Struct({
@@ -133,6 +134,38 @@ export const GraphDiagnosticsRunTool = Tool.define(
             always: ["*"],
             metadata: {},
           })
+
+          const previousFailures = yield* audit.tool.list({
+            projectID: session.projectID,
+            nodeID: params.targetNodeID,
+          })
+          const failedDiagCount = previousFailures.filter(
+            (r) => r.toolName === "graph.diagnostics.run" && r.status === "failed",
+          ).length
+          if (failedDiagCount >= MAX_FIX_ATTEMPTS) {
+            yield* audit.tool.record({
+              projectID: session.projectID,
+              sessionID: session.sessionID,
+              nodeID: params.targetNodeID,
+              toolName: "graph.diagnostics.run",
+              toolType: "diagnostics",
+              status: "blocked",
+              outputSummary: `budget_exhausted:${failedDiagCount}`,
+            })
+            return {
+              title: "Diagnostics blocked — fix budget exhausted",
+              metadata: {
+                gate: summarizeGate(gate),
+                ran: false,
+                passed: false,
+                results: [],
+              },
+              output: formatJson({
+                ran: false,
+                reason: `Node has ${failedDiagCount} previous failed diagnostics (max ${MAX_FIX_ATTEMPTS}). Review the failures and revise the plan or seek human input.`,
+              }),
+            }
+          }
 
           const timeoutMs = params.timeout ?? DEFAULT_TIMEOUT_MS
 

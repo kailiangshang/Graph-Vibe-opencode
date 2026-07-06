@@ -147,6 +147,20 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       }))
     })
 
+    const deleteNode = Effect.fn("GraphHttpApi.deleteNode")(function* (ctx: {
+      params: { nodeID: string }
+    }) {
+      yield* domain.node.delete(ctx.params.nodeID as Graph.NodeID)
+      return true
+    })
+
+    const deleteEdge = Effect.fn("GraphHttpApi.deleteEdge")(function* (ctx: {
+      params: { edgeID: string }
+    }) {
+      yield* domain.edge.delete(ctx.params.edgeID as Graph.EdgeID)
+      return true
+    })
+
     return handlers
       .handle("main", main)
       .handle("currentPlan", currentPlan)
@@ -154,5 +168,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       .handle("nodeReadiness", nodeReadiness)
       .handle("nodeAudit", nodeAudit)
       .handle("versions", versions)
+      .handle("deleteNode", deleteNode)
+      .handle("deleteEdge", deleteEdge)
   }),
 )

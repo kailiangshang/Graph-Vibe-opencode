@@ -1,4 +1,4 @@
-import { createQuery } from "@tanstack/solid-query"
+import { createQuery, useQueryClient } from "@tanstack/solid-query"
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
@@ -67,9 +67,20 @@ interface SimNode {
 export default function GraphPage() {
   const params = useParams()
   const sdk = useSDK()
+  const queryClient = useQueryClient()
   const [selectedNodeID, setSelectedNodeID] = createSignal<string | null>(null)
   const [viewMode, setViewMode] = createSignal<"list" | "graph">("graph")
   const [dataSource, setDataSource] = createSignal<"currentPlan" | "main">("currentPlan")
+
+  onMount(() => {
+    const stop = sdk().event.listen((evt: { details: { type: string } }) => {
+      const type = evt.details.type
+      if (type === "message.updated" || type === "file.watcher.updated" || type === "session.updated") {
+        queryClient.invalidateQueries({ queryKey: [params.dir, params.id, "graph"] })
+      }
+    })
+    onCleanup(stop)
+  })
 
   const graphQuery = createQuery(() => ({
     queryKey: [params.dir, params.id, "graph", dataSource()] as const,

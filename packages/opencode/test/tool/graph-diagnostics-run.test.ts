@@ -253,4 +253,52 @@ describe("graph_diagnostics_run", () => {
       expect(parsed.results[0].name).toBe("typecheck")
     }),
   )
+
+  it.instance("blocks after max fix attempts exceeded", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const audit = yield* GraphAudit.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "BudgetNode",
+        level: "L2",
+        status: "implemented",
+      })
+
+      yield* audit.tool.record({
+        projectID,
+        sessionID,
+        nodeID: targetNodeID,
+        toolName: "graph.diagnostics.run",
+        toolType: "diagnostics",
+        status: "failed",
+        inputSummary: "bun test",
+        outputSummary: "bun test:1",
+      })
+      yield* audit.tool.record({
+        projectID,
+        sessionID,
+        nodeID: targetNodeID,
+        toolName: "graph.diagnostics.run",
+        toolType: "diagnostics",
+        status: "failed",
+        inputSummary: "bun test",
+        outputSummary: "bun test:1",
+      })
+
+      const tool = yield* init()
+      const result = yield* tool.execute(
+        { targetNodeID, commands: ["true"] },
+        context([]),
+      )
+
+      const parsed = JSON.parse(result.output)
+      expect(parsed.ran).toBe(false)
+      expect(parsed.reason).toContain("previous failed diagnostics")
+    }),
+  )
 })
