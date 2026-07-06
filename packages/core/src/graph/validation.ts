@@ -54,6 +54,7 @@ export function validateEdge(source: NodeRow, target: NodeRow, edge: EdgeRow): V
       } else {
         valid =
           (source.type === "prd" && target.type === "composite") ||
+          (source.type === "prd" && target.type === "atomic") ||
           (source.type === "composite" && target.type === "atomic") ||
           (source.type === "atomic" && target.type === "atomic") ||
           (source.type === target.type && source.level === "L1" && target.level === "L2")
