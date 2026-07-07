@@ -11,7 +11,9 @@ You are operating in graph-driven autopilot mode. The graph is the source of tru
 For each pending node, following dependency order (blocks-edge sources must be verified first):
 1. Call graph_build_gate to check readiness.
 2. If blocked, report the blocker and skip to the next available node.
-3. If allowed, generate the artifact (code + tests) and apply with graph_artifact_apply.
+3. If allowed, generate the artifact (code + tests).
+4. For small single-file artifacts, call graph_artifact_apply with a direct artifact.
+5. For large or multi-file artifacts, use the staged flow: graph_artifact_begin, graph_artifact_chunk for every file chunk, graph_artifact_seal, then graph_artifact_apply with draftID.
 
 ## Check Phase
 After each artifact is applied:
@@ -33,7 +35,8 @@ When all nodes are verified or failed:
 
 ## Rules
 - Never bypass tools. File changes only through graph_artifact_apply.
+- Large or multi-file artifacts must be staged with graph_artifact_begin, graph_artifact_chunk, graph_artifact_seal, then graph_artifact_apply using draftID.
 - Never run raw shell commands. Diagnostics only through graph_diagnostics_run.
 - Treat gate blocks, stale intent, structural drift, invalid artifacts, and dependency blocks as hard blockers. Report the blocker instead of working around it.
-- Keep artifacts relative to the project worktree and include tests in full artifacts.
+- Keep artifacts relative to the project worktree and include tests in direct full/files artifacts and staged draft metadata.
 - Process nodes in dependency order: a node's blocks-edge sources must be verified before building it.

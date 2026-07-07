@@ -1,7 +1,10 @@
 import { afterEach, describe, expect } from "bun:test"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Effect } from "effect"
+import { GraphStorage } from "@opencode-ai/core/graph/storage"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { Effect, Result, Schema } from "effect"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -51,10 +54,40 @@ describe("graph mode tool registry", () => {
       expect(ids).not.toContain("apply_patch")
       expect(ids).toContain("graph_plan_admit")
       expect(ids).toContain("graph_build_gate")
+      expect(ids).toContain("graph_artifact_begin")
+      expect(ids).toContain("graph_artifact_chunk")
+      expect(ids).toContain("graph_artifact_seal")
       expect(ids).toContain("graph_artifact_apply")
       expect(ids).toContain("read")
       expect(ids).toContain("grep")
       expect(ids).toContain("glob")
+    }),
+  )
+
+  graphMode.instance("exposes files artifacts in graph build gate parameters", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.opencode,
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })
+      const buildGate = tools.find((tool) => tool.id === "graph_build_gate")
+      if (!buildGate) throw new Error("graph_build_gate was not registered")
+
+      expect(
+        Result.isSuccess(
+          Schema.decodeUnknownResult(buildGate.parameters)({
+            targetNodeID: GraphStorage.NodeID.create(),
+            artifact: {
+              mode: "files",
+              test: "bun test\n",
+              files: [{ path: "src/a.ts", code: "export const a = 1\n" }],
+            },
+          }),
+        ),
+      ).toBe(true)
     }),
   )
 })
