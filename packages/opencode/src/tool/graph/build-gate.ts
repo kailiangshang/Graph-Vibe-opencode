@@ -12,6 +12,17 @@ export const FullArtifact = Schema.Struct({
   test: Schema.String,
 })
 
+export const FilesArtifactFile = Schema.Struct({
+  path: Schema.String,
+  code: Schema.String,
+})
+
+export const FilesArtifact = Schema.Struct({
+  mode: Schema.Literal("files"),
+  files: Schema.Array(FilesArtifactFile),
+  test: Schema.String,
+})
+
 export const PatchOperation = Schema.Struct({
   path: Schema.String,
   preimageHash: Schema.String,
@@ -24,7 +35,7 @@ export const PatchArtifact = Schema.Struct({
   operations: Schema.Array(PatchOperation),
 })
 
-export const Artifact = Schema.Union([FullArtifact, PatchArtifact])
+export const Artifact = Schema.Union([FullArtifact, FilesArtifact, PatchArtifact])
 
 export const Parameters = Schema.Struct({
   targetNodeID: GraphStorage.NodeID,

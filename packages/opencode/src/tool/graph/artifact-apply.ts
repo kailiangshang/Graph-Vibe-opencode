@@ -192,6 +192,7 @@ function summarizePaths(paths: ReadonlyArray<{ readonly relative: string }>) {
 
 function artifactInputBytes(artifact: typeof Artifact.Type) {
   if (artifact.mode === "full") return byteLength(artifact.code)
+  if (artifact.mode === "files") return artifact.files.reduce((sum, file) => sum + byteLength(file.code), 0)
   return artifact.operations.reduce((sum, operation) => sum + byteLength(operation.replacement), 0)
 }
 
