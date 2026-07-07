@@ -26,6 +26,7 @@ import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 type PermissionRequest = Parameters<Tool.Context["ask"]>[0]
+type MetadataUpdate = Parameters<Tool.Context["metadata"]>[0]
 
 const projectID = ProjectV2.ID.make("proj_graph_artifact")
 const sessionID = SessionID.descending("ses_graph_artifact")
@@ -86,14 +87,17 @@ function seed(directory: string) {
   )
 }
 
-function context(requests: PermissionRequest[] = []): Tool.Context {
+function context(requests: PermissionRequest[] = [], updates: MetadataUpdate[] = []): Tool.Context {
   return {
     sessionID,
     messageID: MessageID.ascending(),
     agent: "build",
     abort: new AbortController().signal,
     messages: [],
-    metadata: () => Effect.void,
+    metadata: (input) =>
+      Effect.sync(() => {
+        updates.push(input)
+      }),
     ask: (input) =>
       Effect.sync(() => {
         requests.push(input)
@@ -149,21 +153,56 @@ describe("graph_artifact_apply", () => {
         level: "L2",
       })
       const permissionRequests: PermissionRequest[] = []
+      const metadataUpdates: MetadataUpdate[] = []
       const tool = yield* init()
       const fs = yield* FSUtil.Service
+      const code = "export const ok = '你好'\n"
+      const codeBytes = new TextEncoder().encode(code).byteLength
 
       const result = yield* tool.execute(
         {
           targetNodeID,
-          artifact: { mode: "full", path: "./src/ok.ts", code: "export const ok = true\n", test: "bun test\n" },
+          artifact: { mode: "full", path: "./src/ok.ts", code, test: "bun test\n" },
         },
-        context(permissionRequests),
+        context(permissionRequests, metadataUpdates),
       )
 
       const node = yield* storage.node.get(targetNodeID)
       expect(JSON.parse(result.output)).toMatchObject({ applied: true, files: ["src/ok.ts"] })
       expect(permissionRequests).toMatchObject([{ permission: "graph.artifact_write", patterns: ["src/ok.ts"] }])
-      expect(yield* fs.readFileString(path.join(test.directory, "src/ok.ts"))).toBe("export const ok = true\n")
+      expect(metadataUpdates.map((item) => item.metadata?.stage)).toEqual([
+        "preparing",
+        "permission",
+        "reading",
+        "planning",
+        "writing",
+        "updating_graph",
+        "completed",
+      ])
+      expect(metadataUpdates.find((item) => item.metadata?.stage === "writing")?.metadata).toMatchObject({
+        bytesPlanned: codeBytes,
+        bytesWritten: codeBytes,
+        currentFile: "src/ok.ts",
+      })
+      expect(metadataUpdates.at(-1)?.metadata).toMatchObject({
+        applied: true,
+        bytesPlanned: codeBytes,
+        bytesWritten: codeBytes,
+        currentFile: "src/ok.ts",
+        fileCount: 1,
+        files: ["src/ok.ts"],
+        stage: "completed",
+      })
+      expect(result.metadata).toMatchObject({
+        applied: true,
+        bytesPlanned: codeBytes,
+        bytesWritten: codeBytes,
+        currentFile: "src/ok.ts",
+        fileCount: 1,
+        files: ["src/ok.ts"],
+        stage: "completed",
+      })
+      expect(yield* fs.readFileString(path.join(test.directory, "src/ok.ts"))).toBe(code)
       expect(node.status).toBe("implemented")
       expect(node.testStatus).toBe("pending")
     }),
