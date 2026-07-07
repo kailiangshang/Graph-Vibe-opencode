@@ -4,6 +4,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { planArtifactApplication } from "@opencode-ai/core/graph/workflow/artifact"
+import type { Artifact as CoreArtifact } from "@opencode-ai/core/graph/workflow/artifact"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { buildableNodes } from "@opencode-ai/core/graph/build-order"
@@ -190,7 +191,7 @@ function summarizePaths(paths: ReadonlyArray<{ readonly relative: string }>) {
   return `files=${paths.map((item) => item.relative).join(",")}`
 }
 
-function artifactInputBytes(artifact: typeof Artifact.Type) {
+function artifactInputBytes(artifact: CoreArtifact) {
   if (artifact.mode === "full") return byteLength(artifact.code)
   if (artifact.mode === "files") return artifact.files.reduce((sum, file) => sum + byteLength(file.code), 0)
   return artifact.operations.reduce((sum, operation) => sum + byteLength(operation.replacement), 0)
