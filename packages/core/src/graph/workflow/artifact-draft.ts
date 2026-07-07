@@ -4,6 +4,9 @@ import { and, asc, eq } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../../database/database"
 import { LayerNode } from "../../effect/layer-node"
+import { SessionSchema } from "../../session/schema"
+import { SessionTable } from "../../session/sql"
+import { GraphNodeTable } from "../sql"
 import { GraphArtifact } from "./artifact"
 import { GraphArtifactDraftTable } from "./artifact-draft.sql"
 import type { ProjectV2 } from "../../project"
@@ -108,21 +111,73 @@ export const layer = Layer.effect(
     const create = Effect.fn("GraphArtifactDraft.create")(function* (input: CreateInput) {
       const validation = validateCreate(input)
       if (validation) return yield* validation
-      const id = DraftID.create()
-      yield* db
-        .insert(GraphArtifactDraftTable)
-        .values({
-          id,
-          project_id: input.projectID,
-          session_id: input.sessionID,
-          node_id: input.nodeID,
-          status: "open",
-          test: input.test,
-          files: input.files.map(createFile),
-        })
-        .run()
-        .pipe(Effect.orDie)
-      return id
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const session = yield* tx
+                .select({ projectID: SessionTable.project_id })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, SessionSchema.ID.make(input.sessionID)))
+                .get()
+                .pipe(Effect.orDie)
+              if (!session) {
+                return yield* new ValidationError({
+                  rule: "draft.unknown_session",
+                  message: `artifact draft session ${input.sessionID} does not exist`,
+                })
+              }
+              if (session.projectID !== input.projectID) {
+                return yield* new ValidationError({
+                  rule: "draft.session_project_mismatch",
+                  message: `artifact draft session ${input.sessionID} does not belong to project ${input.projectID}`,
+                })
+              }
+
+              const node = yield* tx
+                .select({ projectID: GraphNodeTable.project_id, sessionID: GraphNodeTable.session_id })
+                .from(GraphNodeTable)
+                .where(eq(GraphNodeTable.id, input.nodeID))
+                .get()
+                .pipe(Effect.orDie)
+              if (!node) {
+                return yield* new ValidationError({
+                  rule: "draft.unknown_node",
+                  message: `artifact draft node ${input.nodeID} does not exist`,
+                })
+              }
+              if (node.projectID !== input.projectID) {
+                return yield* new ValidationError({
+                  rule: "draft.node_project_mismatch",
+                  message: `artifact draft node ${input.nodeID} does not belong to project ${input.projectID}`,
+                })
+              }
+              if (node.sessionID !== input.sessionID) {
+                return yield* new ValidationError({
+                  rule: "draft.node_session_mismatch",
+                  message: `artifact draft node ${input.nodeID} does not belong to session ${input.sessionID}`,
+                })
+              }
+
+              const id = DraftID.create()
+              yield* tx
+                .insert(GraphArtifactDraftTable)
+                .values({
+                  id,
+                  project_id: input.projectID,
+                  session_id: input.sessionID,
+                  node_id: input.nodeID,
+                  status: "open",
+                  test: input.test,
+                  files: input.files.map(createFile),
+                })
+                .run()
+                .pipe(Effect.orDie)
+              return id
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
     })
 
     const list = Effect.fn("GraphArtifactDraft.list")(function* (filter: DraftFilter) {
@@ -140,75 +195,138 @@ export const layer = Layer.effect(
       return rows.map(draftFromRow)
     })
 
-    const updateFiles = Effect.fn("GraphArtifactDraft.updateFiles")(function* (
-      id: DraftID,
-      files: ReadonlyArray<DraftFile>,
-    ) {
-      const row = yield* db
-        .update(GraphArtifactDraftTable)
-        .set({ files })
-        .where(eq(GraphArtifactDraftTable.id, id))
-        .returning()
-        .get()
-        .pipe(Effect.orDie)
-      if (!row) return yield* new NotFoundError({ id })
-      return draftFromRow(row)
-    })
-
-    const updateStatus = Effect.fn("GraphArtifactDraft.updateStatus")(function* (id: DraftID, status: Status) {
-      const row = yield* db
-        .update(GraphArtifactDraftTable)
-        .set({ status })
-        .where(eq(GraphArtifactDraftTable.id, id))
-        .returning()
-        .get()
-        .pipe(Effect.orDie)
-      if (!row) return yield* new NotFoundError({ id })
-      return draftFromRow(row)
-    })
-
     const putChunk = Effect.fn("GraphArtifactDraft.putChunk")(function* (input: PutChunkInput) {
-      const draft = yield* get(input.id)
-      const validation = validatePutChunk(draft, input)
-      if (validation) return yield* validation
-      return yield* updateFiles(
-        input.id,
-        draft.files.map((file) =>
-          file.path === input.path
-            ? {
-                ...file,
-                chunks: [
-                  ...file.chunks.filter((chunk) => chunk.index !== input.index),
-                  { index: input.index, content: input.content },
-                ].sort((a, b) => a.index - b.index),
-              }
-            : file,
-        ),
-      )
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx
+                .select()
+                .from(GraphArtifactDraftTable)
+                .where(eq(GraphArtifactDraftTable.id, input.id))
+                .get()
+                .pipe(Effect.orDie)
+              if (!row) return yield* new NotFoundError({ id: input.id })
+              const draft = draftFromRow(row)
+              const validation = validatePutChunk(draft, input)
+              if (validation) return yield* validation
+              const updated = yield* tx
+                .update(GraphArtifactDraftTable)
+                .set({
+                  files: draft.files.map((file) =>
+                    file.path === input.path
+                      ? {
+                          ...file,
+                          chunks: [
+                            ...file.chunks.filter((chunk) => chunk.index !== input.index),
+                            { index: input.index, content: input.content },
+                          ].sort((a, b) => a.index - b.index),
+                        }
+                      : file,
+                  ),
+                })
+                .where(eq(GraphArtifactDraftTable.id, input.id))
+                .returning()
+                .get()
+                .pipe(Effect.orDie)
+              if (!updated) return yield* new NotFoundError({ id: input.id })
+              return draftFromRow(updated)
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
     })
 
     const seal = Effect.fn("GraphArtifactDraft.seal")(function* (id: DraftID) {
-      const draft = yield* get(id)
-      const openValidation = validateStatus(draft, "open", "seal.open_draft_required")
-      if (openValidation) return yield* openValidation
-      const artifact = validateSeal(draft)
-      if (artifact instanceof ValidationError) return yield* artifact
-      const sealed = yield* updateStatus(id, "sealed")
-      return { ...sealed, status: "sealed" as const, artifact }
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx
+                .select()
+                .from(GraphArtifactDraftTable)
+                .where(eq(GraphArtifactDraftTable.id, id))
+                .get()
+                .pipe(Effect.orDie)
+              if (!row) return yield* new NotFoundError({ id })
+              const draft = draftFromRow(row)
+              const openValidation = validateStatus(draft, "open", "seal.open_draft_required")
+              if (openValidation) return yield* openValidation
+              const artifact = validateSeal(draft)
+              if (artifact instanceof ValidationError) return yield* artifact
+              const updated = yield* tx
+                .update(GraphArtifactDraftTable)
+                .set({ status: "sealed" })
+                .where(eq(GraphArtifactDraftTable.id, id))
+                .returning()
+                .get()
+                .pipe(Effect.orDie)
+              if (!updated) return yield* new NotFoundError({ id })
+              return { ...draftFromRow(updated), status: "sealed" as const, artifact }
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
     })
 
     const markApplied = Effect.fn("GraphArtifactDraft.markApplied")(function* (id: DraftID) {
-      const draft = yield* get(id)
-      const validation = validateStatus(draft, "sealed", "mark_applied.sealed_draft_required")
-      if (validation) return yield* validation
-      return yield* updateStatus(id, "applied")
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx
+                .select()
+                .from(GraphArtifactDraftTable)
+                .where(eq(GraphArtifactDraftTable.id, id))
+                .get()
+                .pipe(Effect.orDie)
+              if (!row) return yield* new NotFoundError({ id })
+              const draft = draftFromRow(row)
+              const validation = validateStatus(draft, "sealed", "mark_applied.sealed_draft_required")
+              if (validation) return yield* validation
+              const updated = yield* tx
+                .update(GraphArtifactDraftTable)
+                .set({ status: "applied" })
+                .where(eq(GraphArtifactDraftTable.id, id))
+                .returning()
+                .get()
+                .pipe(Effect.orDie)
+              if (!updated) return yield* new NotFoundError({ id })
+              return draftFromRow(updated)
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
     })
 
     const cancel = Effect.fn("GraphArtifactDraft.cancel")(function* (id: DraftID) {
-      const draft = yield* get(id)
-      const validation = validateStatus(draft, "open", "cancel.open_draft_required")
-      if (validation) return yield* validation
-      return yield* updateStatus(id, "cancelled")
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx
+                .select()
+                .from(GraphArtifactDraftTable)
+                .where(eq(GraphArtifactDraftTable.id, id))
+                .get()
+                .pipe(Effect.orDie)
+              if (!row) return yield* new NotFoundError({ id })
+              const draft = draftFromRow(row)
+              const validation = validateStatus(draft, "open", "cancel.open_draft_required")
+              if (validation) return yield* validation
+              const updated = yield* tx
+                .update(GraphArtifactDraftTable)
+                .set({ status: "cancelled" })
+                .where(eq(GraphArtifactDraftTable.id, id))
+                .returning()
+                .get()
+                .pipe(Effect.orDie)
+              if (!updated) return yield* new NotFoundError({ id })
+              return draftFromRow(updated)
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
     })
 
     return Service.of({ create, get, list, putChunk, seal, markApplied, cancel })
