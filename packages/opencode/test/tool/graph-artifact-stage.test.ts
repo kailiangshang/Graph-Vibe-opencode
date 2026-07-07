@@ -211,4 +211,98 @@ describe("graph artifact staging tools", () => {
       expect(yield* fs.existsSafe(path.join(test.directory, "src/b.ts"))).toBe(false)
     }),
   )
+
+  it.instance("begin returns blocked output for paths escaping the worktree", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "BadDraftPath",
+        level: "L2",
+      })
+      const permissionRequests: PermissionRequest[] = []
+      const beginInfo = yield* GraphArtifactBeginTool
+      const begin = yield* Tool.init(beginInfo)
+
+      const result = yield* begin.execute(
+        { targetNodeID, test: "bun test\n", files: [{ path: "../escape.ts" }] },
+        context(permissionRequests),
+      )
+
+      expect(JSON.parse(result.output)).toMatchObject({ applied: false, reason: "path_escape", path: "../escape.ts" })
+      expect(result.metadata).toMatchObject({ applied: false, reason: "path_escape", path: "../escape.ts" })
+      expect(permissionRequests).toEqual([])
+    }),
+  )
+
+  it.instance("chunk returns blocked output for unknown drafts", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const permissionRequests: PermissionRequest[] = []
+      const chunkInfo = yield* GraphArtifactChunkTool
+      const chunk = yield* Tool.init(chunkInfo)
+
+      const result = yield* chunk.execute(
+        {
+          draftID: GraphArtifactDraft.DraftID.make("gad_missing"),
+          path: "src/missing.ts",
+          index: 0,
+          content: "export const missing = true\n",
+        },
+        context(permissionRequests),
+      )
+
+      expect(JSON.parse(result.output)).toMatchObject({
+        applied: false,
+        reason: "draft_not_found",
+        draftID: "gad_missing",
+      })
+      expect(result.metadata).toMatchObject({ applied: false, reason: "draft_not_found", draftID: "gad_missing" })
+      expect(permissionRequests).toEqual([])
+    }),
+  )
+
+  it.instance("seal returns blocked output for missing expected chunks", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const drafts = yield* GraphArtifactDraft.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "MissingChunk",
+        level: "L2",
+      })
+      const draftID = yield* drafts.create({
+        projectID,
+        sessionID,
+        nodeID: targetNodeID,
+        test: "bun test\n",
+        files: [{ path: "src/missing-chunk.ts", expectedChunks: 2 }],
+      })
+      yield* drafts.putChunk({ id: draftID, path: "src/missing-chunk.ts", index: 0, content: "export const " })
+      const permissionRequests: PermissionRequest[] = []
+      const sealInfo = yield* GraphArtifactSealTool
+      const seal = yield* Tool.init(sealInfo)
+
+      const result = yield* seal.execute({ draftID }, context(permissionRequests))
+
+      expect(JSON.parse(result.output)).toMatchObject({
+        applied: false,
+        draftID,
+        reason: "seal.missing_chunk",
+        error: { path: "src/missing-chunk.ts", index: 1 },
+      })
+      expect(result.metadata).toMatchObject({ applied: false, draftID, reason: "seal.missing_chunk" })
+      expect(permissionRequests).toEqual([])
+      expect((yield* drafts.get(draftID)).status).toBe("open")
+    }),
+  )
 })

@@ -5,7 +5,14 @@ import { InstanceState } from "@/effect/instance-state"
 import type { InstanceContext } from "@/project/instance-context"
 import { Session } from "@/session/session"
 import { Tool } from "../tool"
-import { formatJson, normalizeArtifact, resolveGraphSession } from "./util"
+import {
+  blockedArtifactDraft,
+  blockedArtifactPath,
+  formatJson,
+  isArtifactPathError,
+  normalizeArtifactSafe,
+  resolveGraphSession,
+} from "./util"
 
 export const DraftFile = Schema.Struct({
   path: Schema.String,
@@ -33,13 +40,21 @@ export const GraphArtifactBeginTool = Tool.define(
           const session = yield* resolveGraphSession(ctx, sessions)
           const instance = yield* InstanceState.context
           const files = normalizeDraftFiles(params.test, params.files, instance)
-          const draftID = yield* drafts.create({
+          if (isArtifactPathError(files)) return blockedArtifactPath(files)
+          const result = yield* drafts.create({
             projectID: session.projectID,
             sessionID: session.sessionID,
             nodeID: params.targetNodeID,
             test: params.test,
             files,
-          })
+          }).pipe(
+            Effect.map((draftID) => ({ _tag: "created" as const, draftID })),
+            Effect.catchTag("GraphArtifactDraft.ValidationError", (error) =>
+              Effect.succeed({ _tag: "blocked" as const, error }),
+            ),
+          )
+          if (result._tag === "blocked") return blockedArtifactDraft({ reason: result.error.rule, error: result.error })
+          const draftID = result.draftID
           const metadata: Record<string, unknown> = {
             stage: "draft_opened",
             opened: true,
@@ -62,10 +77,11 @@ export const GraphArtifactBeginTool = Tool.define(
 )
 
 function normalizeDraftFiles(test: string, files: ReadonlyArray<typeof DraftFile.Type>, instance: InstanceContext) {
-  const artifact = normalizeArtifact(
+  const artifact = normalizeArtifactSafe(
     { mode: "files", test, files: files.map((file) => ({ path: file.path, code: "x" })) },
     instance,
   )
+  if (isArtifactPathError(artifact)) return artifact
   if (artifact.mode !== "files") throw new Error("expected files artifact")
   return artifact.files.map((file, index) => ({
     path: file.path,

@@ -4,7 +4,14 @@ import { InstanceState } from "@/effect/instance-state"
 import type { InstanceContext } from "@/project/instance-context"
 import { Session } from "@/session/session"
 import { Tool } from "../tool"
-import { formatJson, normalizeArtifact, resolveGraphSession } from "./util"
+import {
+  blockedArtifactDraft,
+  blockedArtifactPath,
+  formatJson,
+  isArtifactPathError,
+  normalizeArtifactSafe,
+  resolveGraphSession,
+} from "./util"
 
 export const Parameters = Schema.Struct({
   draftID: Schema.String,
@@ -27,12 +34,36 @@ export const GraphArtifactChunkTool = Tool.define(
           const session = yield* resolveGraphSession(ctx, sessions)
           const instance = yield* InstanceState.context
           const draftID = GraphArtifactDraft.DraftID.make(params.draftID)
-          const draft = yield* drafts.get(draftID)
+          const draftResult = yield* drafts.get(draftID).pipe(
+            Effect.map((draft) => ({ _tag: "found" as const, draft })),
+            Effect.catchTag("GraphArtifactDraft.NotFoundError", (error) =>
+              Effect.succeed({ _tag: "blocked" as const, error }),
+            ),
+          )
+          if (draftResult._tag === "blocked") {
+            return blockedArtifactDraft({ reason: "draft_not_found", draftID, error: draftResult.error })
+          }
+          const draft = draftResult.draft
           if (draft.projectID !== session.projectID || draft.sessionID !== session.sessionID) {
-            return blockedDraft("draft_session_mismatch", draftID)
+            return blockedArtifactDraft({ reason: "draft_session_mismatch", draftID })
           }
           const path = normalizeDraftPath(params.path, instance)
-          const updated = yield* drafts.putChunk({ id: draftID, path, index: params.index, content: params.content })
+          if (isArtifactPathError(path)) return blockedArtifactPath(path)
+          const updatedResult = yield* drafts
+            .putChunk({ id: draftID, path, index: params.index, content: params.content })
+            .pipe(
+              Effect.map((draft) => ({ _tag: "updated" as const, draft })),
+              Effect.catchTags({
+                "GraphArtifactDraft.NotFoundError": (error) =>
+                  Effect.succeed({ _tag: "blocked" as const, reason: "draft_not_found", error }),
+                "GraphArtifactDraft.ValidationError": (error) =>
+                  Effect.succeed({ _tag: "blocked" as const, reason: error.rule, error }),
+              }),
+            )
+          if (updatedResult._tag === "blocked") {
+            return blockedArtifactDraft({ reason: updatedResult.reason, draftID, error: updatedResult.error })
+          }
+          const updated = updatedResult.draft
           const metadata: Record<string, unknown> = {
             stage: "chunk_stored",
             applied: false,
@@ -54,21 +85,12 @@ export const GraphArtifactChunkTool = Tool.define(
 )
 
 function normalizeDraftPath(input: string, instance: InstanceContext) {
-  const artifact = normalizeArtifact({ mode: "files", test: "x", files: [{ path: input, code: "x" }] }, instance)
+  const artifact = normalizeArtifactSafe({ mode: "files", test: "x", files: [{ path: input, code: "x" }] }, instance)
+  if (isArtifactPathError(artifact)) return artifact
   if (artifact.mode !== "files") throw new Error("expected files artifact")
   const file = artifact.files[0]
   if (!file) throw new Error("expected normalized file")
   return file.path
-}
-
-function blockedDraft(reason: string, draftID: GraphArtifactDraft.DraftID) {
-  const repairHints = ["Use the draft from the current graph session."]
-  const metadata: Record<string, unknown> = { stage: "blocked", applied: false, draftID, reason, repairHints }
-  return {
-    title: "Artifact draft blocked",
-    metadata,
-    output: formatJson({ applied: false, draftID, reason, repairHints }),
-  }
 }
 
 function byteLength(input: string) {

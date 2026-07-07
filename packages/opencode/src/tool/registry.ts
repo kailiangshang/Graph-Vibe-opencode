@@ -279,7 +279,7 @@ const layer = Layer.effect(
         ]
 
         return {
-          custom,
+          custom: flags.experimentalGraphMode ? [] : custom,
           builtin: flags.experimentalGraphMode ? [...builtin.filter(graphSafeBuiltin), ...graphTools] : builtin,
           task: tool.task,
           read: tool.read,

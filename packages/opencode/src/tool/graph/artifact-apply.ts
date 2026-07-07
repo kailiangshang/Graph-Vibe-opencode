@@ -15,7 +15,16 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Session } from "@/session/session"
 import { Tool } from "../tool"
 import { Artifact } from "./build-gate"
-import { formatJson, normalizeArtifact, resolveArtifactPaths, resolveGraphSession, summarizeGate } from "./util"
+import {
+  blockedArtifactDraft,
+  blockedArtifactPath,
+  formatJson,
+  isArtifactPathError,
+  normalizeArtifactSafe,
+  resolveArtifactPathsSafe,
+  resolveGraphSession,
+  summarizeGate,
+} from "./util"
 
 export const Parameters = Schema.Struct({
   targetNodeID: GraphStorage.NodeID,
@@ -59,8 +68,10 @@ export const GraphArtifactApplyTool = Tool.define(
           const session = yield* resolveGraphSession(ctx, sessions)
           const instance = yield* InstanceState.context
           if (params.artifact !== undefined) {
-            const artifact = normalizeArtifact(params.artifact, instance)
-            const paths = resolveArtifactPaths(artifact, instance)
+            const artifact = normalizeArtifactSafe(params.artifact, instance)
+            if (isArtifactPathError(artifact)) return blockedArtifactPath(artifact)
+            const paths = resolveArtifactPathsSafe(artifact, instance)
+            if (isArtifactPathError(paths)) return blockedArtifactPath(paths)
             const inputBytes = artifactInputBytes(artifact)
             if (inputBytes > MAX_DIRECT_ARTIFACT_BYTES) return blockedDirectArtifactTooLarge(paths, inputBytes)
             return yield* applyArtifact({ artifact, inputBytes })
@@ -69,10 +80,21 @@ export const GraphArtifactApplyTool = Tool.define(
           const requestedDraftID = params.draftID
           if (requestedDraftID === undefined) return blockedArtifactSource(undefined)
           const draftID = GraphArtifactDraft.DraftID.make(requestedDraftID)
-          const draft = yield* drafts
-            .get(draftID)
-            .pipe(Effect.catchTag("GraphArtifactDraft.NotFoundError", () => Effect.succeed(undefined)))
-          if (!draft) return blockedDraft("draft_not_found", draftID)
+          const draftResult = yield* drafts.get(draftID).pipe(
+            Effect.map((draft) => ({ _tag: "found" as const, draft })),
+            Effect.catchTag("GraphArtifactDraft.NotFoundError", (error) =>
+              Effect.succeed({ _tag: "blocked" as const, error }),
+            ),
+          )
+          if (draftResult._tag === "blocked") {
+            return blockedArtifactDraft({
+              reason: "draft_not_found",
+              draftID,
+              error: draftResult.error,
+              repairHints: applyDraftRepairHints,
+            })
+          }
+          const draft = draftResult.draft
           if (
             draft.projectID !== session.projectID ||
             draft.sessionID !== session.sessionID ||
@@ -83,12 +105,14 @@ export const GraphArtifactApplyTool = Tool.define(
           if (draft.status !== "sealed" || draft.artifact === undefined)
             return blockedDraft("draft_not_sealed", draftID)
 
-          const artifact = normalizeArtifact(draft.artifact, instance)
+          const artifact = normalizeArtifactSafe(draft.artifact, instance)
+          if (isArtifactPathError(artifact)) return blockedArtifactPath(artifact)
           return yield* applyArtifact({ artifact, draftID, inputBytes: artifactInputBytes(artifact) })
 
           function applyArtifact(source: ApplySource) {
             return Effect.gen(function* () {
-              const paths = resolveArtifactPaths(source.artifact, instance)
+              const paths = resolveArtifactPathsSafe(source.artifact, instance)
+              if (isArtifactPathError(paths)) return blockedArtifactPath(paths)
               const files = paths.map((item) => item.relative)
               const progress = (
                 stage: ArtifactApplyStage,
@@ -144,14 +168,6 @@ export const GraphArtifactApplyTool = Tool.define(
                 }
               }
 
-              yield* progress("permission")
-              yield* ctx.ask({
-                permission: "graph.artifact_write",
-                patterns: files,
-                always: ["*"],
-                metadata: { paths: files },
-              })
-
               yield* progress("reading")
               const existing = yield* Effect.forEach(paths, (item) =>
                 Effect.gen(function* () {
@@ -192,6 +208,25 @@ export const GraphArtifactApplyTool = Tool.define(
               }
 
               const bytesPlanned = artifactPlannedBytes(plan.files, files)
+              const plannedWrites = existing.map((item) => ({
+                path: item.relative,
+                existed: item.existed,
+                bytes: byteLength(plan.files[item.relative] ?? ""),
+              }))
+              yield* progress("permission", { bytesPlanned })
+              yield* ctx.ask({
+                permission: "graph.artifact_write",
+                patterns: files,
+                always: ["*"],
+                metadata: {
+                  paths: files,
+                  fileCount: files.length,
+                  bytesPlanned,
+                  plannedWrites,
+                  ...draftMetadata(source.draftID),
+                },
+              })
+
               yield* Effect.forEach(existing, (item, index) =>
                 Effect.gen(function* () {
                   const content = plan.files[item.relative]
@@ -321,10 +356,7 @@ function blockedDirectArtifactTooLarge(paths: ReadonlyArray<{ readonly relative:
 }
 
 function blockedDraft(reason: string, draftID: GraphArtifactDraft.DraftID) {
-  const repairHints = [
-    "Use a sealed draft from the current graph session and target node.",
-    "Call graph_artifact_seal before applying a staged artifact.",
-  ]
+  const repairHints = applyDraftRepairHints
   const metadata: Record<string, unknown> = {
     applied: false,
     files: [] as string[],
@@ -344,10 +376,23 @@ function draftMetadata(draftID: GraphArtifactDraft.DraftID | undefined) {
   return draftID === undefined ? {} : { draftID }
 }
 
+const applyDraftRepairHints = [
+  "Use a sealed draft from the current graph session and target node.",
+  "Call graph_artifact_seal before applying a staged artifact.",
+]
+
 function artifactInputBytes(artifact: CoreArtifact) {
   if (artifact.mode === "full") return byteLength(artifact.code)
   if (artifact.mode === "files") return artifact.files.reduce((sum, file) => sum + byteLength(file.code), 0)
-  return artifact.operations.reduce((sum, operation) => sum + byteLength(operation.replacement), 0)
+  return artifact.operations.reduce(
+    (sum, operation) =>
+      sum +
+      byteLength(operation.path) +
+      byteLength(operation.preimageHash) +
+      byteLength(operation.old) +
+      byteLength(operation.replacement),
+    0,
+  )
 }
 
 function artifactPlannedBytes(files: Readonly<Record<string, string>>, paths: ReadonlyArray<string>) {

@@ -5,6 +5,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
+import { hashContent } from "@opencode-ai/core/graph/workflow/artifact"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphArtifactDraft } from "@opencode-ai/core/graph/workflow/artifact-draft"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
@@ -177,13 +178,18 @@ describe("graph_artifact_apply", () => {
       expect(permissionRequests).toMatchObject([{ permission: "graph.artifact_write", patterns: ["src/ok.ts"] }])
       expect(metadataUpdates.map((item) => item.metadata?.stage)).toEqual([
         "preparing",
-        "permission",
         "reading",
         "planning",
+        "permission",
         "writing",
         "updating_graph",
         "completed",
       ])
+      expect(permissionRequests[0]?.metadata).toMatchObject({
+        paths: ["src/ok.ts"],
+        bytesPlanned: codeBytes,
+        plannedWrites: [{ path: "src/ok.ts", bytes: codeBytes, existed: false }],
+      })
       expect(metadataUpdates.find((item) => item.metadata?.stage === "writing")?.metadata).toMatchObject({
         bytesPlanned: codeBytes,
         bytesWritten: codeBytes,
@@ -287,6 +293,124 @@ describe("graph_artifact_apply", () => {
       expect(result.metadata).toMatchObject({ applied: false, reason: "artifact_too_large" })
       expect(permissionRequests).toEqual([])
       expect(yield* fs.existsSafe(path.join(test.directory, "src/too-big.ts"))).toBe(false)
+    }),
+  )
+
+  it.instance("blocks oversized direct patch artifacts by counting old text before permission", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "TooBigPatch",
+        level: "L2",
+      })
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const fs = yield* FSUtil.Service
+      const old = "x".repeat(64_001)
+      yield* fs.writeWithDirs(path.join(test.directory, "src/too-big-patch.ts"), old)
+
+      const result = yield* tool.execute(
+        {
+          targetNodeID,
+          artifact: {
+            mode: "patch",
+            operations: [
+              {
+                path: "src/too-big-patch.ts",
+                preimageHash: hashContent(old),
+                old,
+                replacement: "export const patched = true\n",
+              },
+            ],
+          },
+        },
+        context(permissionRequests),
+      )
+
+      expect(JSON.parse(result.output)).toMatchObject({ applied: false, reason: "artifact_too_large" })
+      expect(result.metadata).toMatchObject({ applied: false, reason: "artifact_too_large" })
+      expect(permissionRequests).toEqual([])
+      expect(yield* fs.readFileString(path.join(test.directory, "src/too-big-patch.ts"))).toBe(old)
+    }),
+  )
+
+  it.instance("blocks invalid patches before requesting artifact write permission", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "InvalidPatch",
+        level: "L2",
+      })
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const fs = yield* FSUtil.Service
+      const file = path.join(test.directory, "src/invalid-patch.ts")
+      const original = "export const value = 1\n"
+      yield* fs.writeWithDirs(file, original)
+
+      const result = yield* tool.execute(
+        {
+          targetNodeID,
+          artifact: {
+            mode: "patch",
+            operations: [
+              {
+                path: "src/invalid-patch.ts",
+                preimageHash: hashContent("different content"),
+                old: "value = 1",
+                replacement: "value = 2",
+              },
+            ],
+          },
+        },
+        context(permissionRequests),
+      )
+
+      expect(JSON.parse(result.output)).toMatchObject({
+        applied: false,
+        artifact: { valid: false, issues: [{ code: "preimage_hash_mismatch", path: "src/invalid-patch.ts" }] },
+      })
+      expect(permissionRequests).toEqual([])
+      expect(yield* fs.readFileString(file)).toBe(original)
+    }),
+  )
+
+  it.instance("returns blocked output for direct artifact paths escaping the worktree", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "PathEscape",
+        level: "L2",
+      })
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+
+      const result = yield* tool.execute(
+        {
+          targetNodeID,
+          artifact: { mode: "full", path: "../escape.ts", code: "export const escape = true\n", test: "bun test\n" },
+        },
+        context(permissionRequests),
+      )
+
+      expect(JSON.parse(result.output)).toMatchObject({ applied: false, reason: "path_escape", path: "../escape.ts" })
+      expect(result.metadata).toMatchObject({ applied: false, reason: "path_escape", path: "../escape.ts" })
+      expect(permissionRequests).toEqual([])
     }),
   )
 

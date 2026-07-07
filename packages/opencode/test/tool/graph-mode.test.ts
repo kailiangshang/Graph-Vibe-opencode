@@ -4,10 +4,11 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { Effect, Result, Schema } from "effect"
+import { Effect, Layer, Result, Schema } from "effect"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Plugin } from "@/plugin"
 import { ToolRegistry } from "@/tool/registry"
 import { TestConfig } from "../fixture/config"
 import { disposeAllInstances } from "../fixture/fixture"
@@ -24,6 +25,34 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
 
 const defaultMode = testEffect(layer())
 const graphMode = testEffect(layer({ experimentalGraphMode: true }))
+const customPluginLayer = Layer.succeed(
+  Plugin.Service,
+  Plugin.Service.of({
+    init: () => Effect.void,
+    trigger: ((_name: unknown, _input: unknown, output: unknown) =>
+      Effect.succeed(output)) as Plugin.Interface["trigger"],
+    list: () =>
+      Effect.succeed([
+        {
+          tool: {
+            custom_graph_tool: {
+              description: "custom plugin tool that graph mode must not expose",
+              args: {},
+              execute: async () => "custom",
+            },
+          },
+        },
+      ]),
+  }),
+)
+const graphModeWithCustomTool = testEffect(
+  LayerNode.compile(root, [
+    [Config.node, TestConfig.layer()],
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalGraphMode: true })],
+    [Database.node, Database.layerFromPath(":memory:")],
+    [Plugin.node, customPluginLayer],
+  ]),
+)
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -88,6 +117,23 @@ describe("graph mode tool registry", () => {
           }),
         ),
       ).toBe(true)
+    }),
+  )
+
+  graphModeWithCustomTool.instance("excludes custom plugin tools from graph mode", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const ids = yield* registry.ids()
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.opencode,
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })
+
+      expect(ids).not.toContain("custom_graph_tool")
+      expect(tools.map((tool) => tool.id)).not.toContain("custom_graph_tool")
+      expect(ids).toContain("graph_artifact_apply")
     }),
   )
 })
