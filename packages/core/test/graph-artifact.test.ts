@@ -20,6 +20,46 @@ describe("Graph Artifact", () => {
     expect(result.files["src/a.ts"]).toBe("export const n = 1\n")
   })
 
+  test("files artifact requires at least one file and test", () => {
+    expect(validateArtifact({ mode: "files", files: [], test: "" }).map((issue) => issue.code)).toEqual([
+      "empty_test",
+      "empty_files",
+    ])
+  })
+
+  test("files artifact validates each file path and code", () => {
+    expect(
+      validateArtifact({
+        mode: "files",
+        test: "bun test\n",
+        files: [
+          { path: "", code: "" },
+          { path: "src/ok.ts", code: "export const ok = true\n" },
+        ],
+      }).map((issue) => issue.code),
+    ).toEqual(["empty_path", "empty_code"])
+  })
+
+  test("valid files artifact plans multiple complete file replacements", () => {
+    const result = planArtifactApplication(
+      {
+        mode: "files",
+        test: "bun test\n",
+        files: [
+          { path: "src/a.ts", code: "export const a = 1\n" },
+          { path: "src/b.ts", code: "export const b = 2\n" },
+        ],
+      },
+      { "src/a.ts": "old a\n" },
+    )
+
+    expect(result.valid).toBe(true)
+    expect(result.files).toMatchObject({
+      "src/a.ts": "export const a = 1\n",
+      "src/b.ts": "export const b = 2\n",
+    })
+  })
+
   test("patch artifact validates preimage hash before replacing old text", () => {
     const current = "export const n = 1\n"
     const result = planArtifactApplication(
