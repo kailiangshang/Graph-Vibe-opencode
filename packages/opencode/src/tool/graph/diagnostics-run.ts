@@ -29,6 +29,8 @@ interface CommandResult {
   exitCode: number | null
   output: string
   timedOut: boolean
+  passed: boolean
+  failureReason?: string
 }
 
 type ExitKind = { kind: "exit"; code: number } | { kind: "timeout"; code: null } | { kind: "abort"; code: null }
@@ -89,12 +91,17 @@ export const GraphDiagnosticsRunTool = Tool.define(
 
         yield* Effect.sleep("500 millis")
 
+        const truncatedOutput = output.slice(0, MAX_OUTPUT_CHARS)
+        const failureReason = diagnosticFailureReason(cmd.command, exit, truncatedOutput)
+
         return {
           name: cmd.name,
           command: cmd.command,
           exitCode: exit.code,
-          output: output.slice(0, MAX_OUTPUT_CHARS),
+          output: truncatedOutput,
           timedOut: exit.kind === "timeout",
+          passed: failureReason === undefined,
+          ...(failureReason ? { failureReason } : {}),
         } satisfies CommandResult
       }).pipe(Effect.scoped)
 
@@ -195,7 +202,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
             results.push(result)
           }
 
-          const allPassed = results.every((r) => r.exitCode === 0)
+          const allPassed = results.every((r) => r.passed)
 
           yield* storage.node.update(params.targetNodeID, {
             testStatus: allPassed ? "passed" : "failed",
@@ -221,7 +228,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
             toolType: "diagnostics",
             status: allPassed ? "succeeded" : "failed",
             inputSummary: cmds.map((c) => c.name).join("; "),
-            outputSummary: results.map((r) => `${r.name}:${r.exitCode}`).join(", "),
+            outputSummary: results.map((r) => `${r.name}:${r.failureReason ?? r.exitCode}`).join(", "),
           })
 
           return {
@@ -230,7 +237,13 @@ export const GraphDiagnosticsRunTool = Tool.define(
               gate: summarizeGate(gate),
               ran: true,
               passed: allPassed,
-              results: results.map((r) => ({ name: r.name, exitCode: r.exitCode, timedOut: r.timedOut })),
+              results: results.map((r) => ({
+                name: r.name,
+                exitCode: r.exitCode,
+                timedOut: r.timedOut,
+                passed: r.passed,
+                ...(r.failureReason ? { failureReason: r.failureReason } : {}),
+              })),
             },
             output: formatJson({ ran: true, passed: allPassed, results }),
           }
@@ -238,6 +251,21 @@ export const GraphDiagnosticsRunTool = Tool.define(
     }
   }),
 )
+
+function diagnosticFailureReason(command: string, exit: ExitKind, output: string) {
+  if (exit.kind === "timeout") return "timeout"
+  if (exit.kind === "abort") return "aborted"
+  if (exit.code !== 0) return `exit_code:${exit.code}`
+  if (isBunRunUsageOutput(command, output)) return "bun_run_usage"
+}
+
+function isBunRunUsageOutput(command: string, output: string) {
+  return (
+    /\bbun\b/.test(command) &&
+    /\brun\b/.test(command) &&
+    output.includes("Usage: bun run [flags] <file or script>")
+  )
+}
 
 async function detectDiagnosticsCommands(directory: string): Promise<NamedCommand[]> {
   const pkg = await Bun.file(path.join(directory, "package.json"))

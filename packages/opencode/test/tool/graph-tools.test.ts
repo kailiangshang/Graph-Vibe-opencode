@@ -124,6 +124,76 @@ describe("graph tools", () => {
     }),
   )
 
+  it.instance("graph_plan_admit returns repairable output for invalid edge relations", () =>
+    Effect.gen(function* () {
+      yield* seed()
+      const info = yield* GraphPlanAdmitTool
+      const tool = yield* Tool.init(info)
+      const sourceID = GraphStorage.NodeID.create()
+      const targetID = GraphStorage.NodeID.create()
+
+      const result = yield* tool.execute(
+        {
+          nodes: [
+            { id: sourceID, type: "prd", name: "Goal", level: "L1" },
+            { id: targetID, type: "atomic", name: "Worker", level: "L2" },
+          ],
+          edges: [{ sourceID, targetID, relation: "uses" }],
+        },
+        context(),
+      )
+
+      const parsed = JSON.parse(result.output)
+      const storage = yield* GraphStorage.Service
+      const currentPlan = yield* storage.currentPlan({ sessionID })
+      expect(result.title).toBe("CurrentPlan rejected")
+      expect(parsed).toMatchObject({
+        admitted: false,
+        error: { rule: "edge.type_matrix" },
+      })
+      expect(parsed.error.message).toContain('relation "uses" invalid')
+      expect(parsed.repairHints.join("\n")).toContain("Use a relation allowed by the graph edge matrix")
+      expect(parsed.allowedEdgeMatrix.join("\n")).toContain("blocks")
+      expect(currentPlan.nodes).toHaveLength(0)
+      expect(currentPlan.edges).toHaveLength(0)
+    }),
+  )
+
+  it.instance("graph_plan_admit returns repairable output for unknown node index references", () =>
+    Effect.gen(function* () {
+      yield* seed()
+      const info = yield* GraphPlanAdmitTool
+      const tool = yield* Tool.init(info)
+
+      const result = yield* tool.execute(
+        {
+          nodes: [{ type: "atomic", name: "Only", level: "L2" }],
+          edges: [
+            {
+              sourceID: "@0" as GraphStorage.NodeID,
+              targetID: "@2" as GraphStorage.NodeID,
+              relation: "blocks",
+            },
+          ],
+        },
+        context(),
+      )
+
+      const parsed = JSON.parse(result.output)
+      const storage = yield* GraphStorage.Service
+      const currentPlan = yield* storage.currentPlan({ sessionID })
+      expect(result.title).toBe("CurrentPlan rejected")
+      expect(parsed).toMatchObject({
+        admitted: false,
+        error: { rule: "edge.dangling_endpoint" },
+      })
+      expect(parsed.error.message).toContain("@2")
+      expect(parsed.repairHints.join("\n")).toContain("@0, @1")
+      expect(currentPlan.nodes).toHaveLength(0)
+      expect(currentPlan.edges).toHaveLength(0)
+    }),
+  )
+
   it.instance("graph_build_gate reports blocked gate results for targets outside CurrentPlan", () =>
     Effect.gen(function* () {
       yield* seed()

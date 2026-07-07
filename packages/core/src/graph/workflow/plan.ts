@@ -57,22 +57,32 @@ export const layer = Layer.effect(
               nodeIDs.push(id)
             }),
           )
-          const resolveRef = (ref: string): GraphStorage.NodeID => {
+          const resolveRef = Effect.fn("GraphPlan.resolveRef")(function* (ref: string) {
             if (ref.startsWith("@")) {
               const idx = Number.parseInt(ref.slice(1), 10)
               const resolved = nodeIDs[idx]
-              if (!resolved) throw new Error(`Edge references unknown node index: ${ref}`)
+              if (!resolved) {
+                return yield* new GraphDomain.ValidationError({
+                  rule: "edge.dangling_endpoint",
+                  message: `edge references unknown node index: ${ref}`,
+                  context: { ref, nodeCount: nodeIDs.length },
+                })
+              }
               return resolved
             }
             return ref as GraphStorage.NodeID
-          }
+          })
           yield* Effect.forEach(input.edges, (edge) =>
-            domain.edge.create({
-              ...edge,
-              sourceID: resolveRef(edge.sourceID),
-              targetID: resolveRef(edge.targetID),
-              projectID: input.projectID,
-              sessionID: input.sessionID,
+            Effect.gen(function* () {
+              const sourceID = yield* resolveRef(edge.sourceID)
+              const targetID = yield* resolveRef(edge.targetID)
+              return yield* domain.edge.create({
+                ...edge,
+                sourceID,
+                targetID,
+                projectID: input.projectID,
+                sessionID: input.sessionID,
+              })
             }),
           )
           return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: false }

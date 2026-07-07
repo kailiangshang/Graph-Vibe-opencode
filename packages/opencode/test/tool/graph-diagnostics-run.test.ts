@@ -193,6 +193,47 @@ describe("graph_diagnostics_run", () => {
     }),
   )
 
+  it.instance("does not treat Bun run usage output as a passed diagnostic", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "BunUsage",
+        level: "L2",
+        status: "implemented",
+      })
+
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(test.directory, "package.json"),
+          JSON.stringify({ scripts: { typecheck: "false" } }),
+        ),
+      )
+
+      const tool = yield* init()
+
+      const result = yield* tool.execute(
+        { targetNodeID, commands: [`bun --cwd ${JSON.stringify(test.directory)} run typecheck`] },
+        context([]),
+      )
+
+      const node = yield* storage.node.get(targetNodeID)
+      const parsed = JSON.parse(result.output)
+      const audit = yield* GraphAudit.Service
+      const records = yield* audit.tool.list({ projectID, nodeID: targetNodeID })
+      expect(parsed.ran).toBe(true)
+      expect(parsed.passed).toBe(false)
+      expect(parsed.results[0].output).toContain("Usage: bun run")
+      expect(records[records.length - 1]?.outputSummary).toContain("bun_run_usage")
+      expect(node.testStatus).toBe("failed")
+      expect(node.status).toBe("implemented")
+    }),
+  )
+
   it.instance("timeout parameter causes command to be marked as timed out", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance

@@ -33,3 +33,4 @@ logs/
 *.bun-build
 tsconfig.tsbuildinfo
 GRAPH_VIBE_COMPETITION.local.md
+examples/grid-arena/
