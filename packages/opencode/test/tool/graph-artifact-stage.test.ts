@@ -1,4 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
+import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -235,6 +237,80 @@ describe("graph artifact staging tools", () => {
 
       expect(JSON.parse(result.output)).toMatchObject({ applied: false, reason: "path_escape", path: "../escape.ts" })
       expect(result.metadata).toMatchObject({ applied: false, reason: "path_escape", path: "../escape.ts" })
+      expect(permissionRequests).toEqual([])
+    }),
+  )
+
+  it.instance("begin rejects draft paths that escape the worktree through an internal symlink", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "SymlinkBegin",
+        level: "L2",
+      })
+      const outside = path.join(os.tmpdir(), "opencode-symlink-begin-" + Math.random().toString(36).slice(2))
+      const link = path.join(test.directory, "link")
+      yield* Effect.promise(() => fs.mkdir(outside, { recursive: true }))
+      yield* Effect.promise(() => fs.symlink(outside, link, "dir"))
+      const permissionRequests: PermissionRequest[] = []
+      const beginInfo = yield* GraphArtifactBeginTool
+      const begin = yield* Tool.init(beginInfo)
+
+      const result = yield* begin
+        .execute(
+          { targetNodeID, test: "bun test\n", files: [{ path: "link/escape.ts" }] },
+          context(permissionRequests),
+        )
+        .pipe(Effect.ensuring(Effect.promise(() => fs.rm(outside, { recursive: true, force: true }))))
+
+      expect(JSON.parse(result.output)).toMatchObject({ applied: false, reason: "path_escape", path: "link/escape.ts" })
+      expect(result.metadata).toMatchObject({ applied: false, reason: "path_escape", path: "link/escape.ts" })
+      expect(permissionRequests).toEqual([])
+    }),
+  )
+
+  it.instance("chunk rejects paths that escape the worktree through an internal symlink", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const drafts = yield* GraphArtifactDraft.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "SymlinkChunk",
+        level: "L2",
+      })
+      const draftID = yield* drafts.create({
+        projectID,
+        sessionID,
+        nodeID: targetNodeID,
+        test: "bun test\n",
+        files: [{ path: "src/real.ts" }],
+      })
+      const outside = path.join(os.tmpdir(), "opencode-symlink-chunk-" + Math.random().toString(36).slice(2))
+      const link = path.join(test.directory, "link")
+      yield* Effect.promise(() => fs.mkdir(outside, { recursive: true }))
+      yield* Effect.promise(() => fs.symlink(outside, link, "dir"))
+      const permissionRequests: PermissionRequest[] = []
+      const chunkInfo = yield* GraphArtifactChunkTool
+      const chunk = yield* Tool.init(chunkInfo)
+
+      const result = yield* chunk
+        .execute(
+          { draftID, path: "link/escape.ts", index: 0, content: "export const escape = true\n" },
+          context(permissionRequests),
+        )
+        .pipe(Effect.ensuring(Effect.promise(() => fs.rm(outside, { recursive: true, force: true }))))
+
+      expect(JSON.parse(result.output)).toMatchObject({ applied: false, reason: "path_escape", path: "link/escape.ts" })
+      expect(result.metadata).toMatchObject({ applied: false, reason: "path_escape", path: "link/escape.ts" })
       expect(permissionRequests).toEqual([])
     }),
   )

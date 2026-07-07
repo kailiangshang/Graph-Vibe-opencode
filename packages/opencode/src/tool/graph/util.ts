@@ -4,6 +4,7 @@ import type { Artifact, FilesArtifactFile, PatchOperation } from "@opencode-ai/c
 import { GraphArtifactDraft } from "@opencode-ai/core/graph/workflow/artifact-draft"
 import type { GateResult } from "@opencode-ai/core/graph/workflow/gate"
 import path from "path"
+import { realpathSync } from "fs"
 import { Effect } from "effect"
 import type { InstanceContext } from "@/project/instance-context"
 import { Session } from "@/session/session"
@@ -188,7 +189,45 @@ function normalizeArtifactPathSafe(
     return artifactPathError("path_escape", input.relative, `Artifact path escapes the worktree: ${input.relative}`)
   }
 
+  // Lexical containment above can be defeated by a symlink inside the worktree
+  // that points outside it: `path.resolve` does not follow links, so a write to
+  // the resolved path would land beyond the boundary. Resolve each existing
+  // component and reject if the real path ever leaves the worktree.
+  if (!resolvesWithinWorktree(base, relative.split("/"))) {
+    return artifactPathError("path_escape", input.relative, `Artifact path escapes the worktree: ${input.relative}`)
+  }
+
   return { relative, absolute }
+}
+
+function resolvesWithinWorktree(base: string, segments: ReadonlyArray<string>): boolean {
+  let realBase: string
+  try {
+    realBase = realpathSync.native(base)
+  } catch {
+    // If the worktree root itself can't be resolved we can't prove containment.
+    return false
+  }
+
+  let current = realBase
+  for (const segment of segments) {
+    if (segment === "" || segment === ".") continue
+    const candidate = path.join(current, segment)
+    try {
+      current = realpathSync.native(candidate)
+    } catch (error) {
+      // The component does not exist yet (we are about to create it). Lexical
+      // append is safe because no pre-existing symlink can live beneath a
+      // non-existent parent. Any other error means containment is unverifiable.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        current = candidate
+      } else {
+        return false
+      }
+    }
+    if (!FSUtil.contains(realBase, current)) return false
+  }
+  return true
 }
 
 function artifactPathError(reason: ArtifactPathError["reason"], inputPath: string, message: string): ArtifactPathError {

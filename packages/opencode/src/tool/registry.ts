@@ -390,7 +390,10 @@ function isPluginTool(value: unknown): value is ToolDefinition {
   return typeof value === "object" && value !== null && "args" in value && "description" in value && "execute" in value
 }
 
-const graphUnsafeBuiltinIDs = new Set<string>([ShellTool.id, EditTool.id, WriteTool.id, ApplyPatchTool.id])
+// Code mode's `execute` tool can drive MCP/custom tools directly, so it would
+// bypass the graph artifact write gate. Drop it under graph mode even when both
+// experimental flags are enabled.
+const graphUnsafeBuiltinIDs = new Set<string>([ShellTool.id, EditTool.id, WriteTool.id, ApplyPatchTool.id, "execute"])
 
 function graphSafeBuiltin(tool: Tool.Def) {
   return !graphUnsafeBuiltinIDs.has(tool.id)

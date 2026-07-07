@@ -8,11 +8,13 @@ import { Effect, Layer, Result, Schema } from "effect"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { MCP } from "@/mcp"
 import { Plugin } from "@/plugin"
 import { ToolRegistry } from "@/tool/registry"
 import { TestConfig } from "../fixture/config"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import type { Tool as MCPToolDef } from "@modelcontextprotocol/sdk/types.js"
 
 const root = LayerNode.group([ToolRegistry.node, Agent.node])
 
@@ -51,6 +53,30 @@ const graphModeWithCustomTool = testEffect(
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalGraphMode: true })],
     [Database.node, Database.layerFromPath(":memory:")],
     [Plugin.node, customPluginLayer],
+  ]),
+)
+const graphModeWithCodeMode = testEffect(
+  LayerNode.compile(root, [
+    [Config.node, TestConfig.layer()],
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalGraphMode: true, experimentalCodeMode: true })],
+    [Database.node, Database.layerFromPath(":memory:")],
+    [
+      MCP.node,
+      Layer.mock(MCP.Service, {
+        tools: () =>
+          Effect.succeed({
+            weather_current: {
+              def: {
+                name: "current",
+                description: "current weather",
+                inputSchema: { type: "object", properties: { city: { type: "string" } }, required: ["city"] },
+              } as MCPToolDef,
+              client: {} as MCP.McpTool["client"],
+            },
+          }),
+        clients: () => Effect.succeed({ weather: {} as any }),
+      }),
+    ],
   ]),
 )
 
@@ -134,6 +160,23 @@ describe("graph mode tool registry", () => {
       expect(ids).not.toContain("custom_graph_tool")
       expect(tools.map((tool) => tool.id)).not.toContain("custom_graph_tool")
       expect(ids).toContain("graph_artifact_apply")
+    }),
+  )
+
+  graphModeWithCodeMode.instance("excludes code mode execute when graph mode is also enabled", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const ids = yield* registry.ids()
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.opencode,
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })
+
+      expect(ids).toContain("graph_artifact_apply")
+      expect(ids).not.toContain("execute")
+      expect(tools.map((tool) => tool.id)).not.toContain("execute")
     }),
   )
 })

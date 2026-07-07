@@ -1,4 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
+import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -411,6 +413,50 @@ describe("graph_artifact_apply", () => {
       expect(JSON.parse(result.output)).toMatchObject({ applied: false, reason: "path_escape", path: "../escape.ts" })
       expect(result.metadata).toMatchObject({ applied: false, reason: "path_escape", path: "../escape.ts" })
       expect(permissionRequests).toEqual([])
+    }),
+  )
+
+  it.instance("blocks direct artifacts that escape the worktree through an internal symlink", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "SymlinkEscape",
+        level: "L2",
+      })
+      const outside = path.join(os.tmpdir(), "opencode-symlink-outside-" + Math.random().toString(36).slice(2))
+      const link = path.join(test.directory, "link")
+      yield* Effect.promise(() => fs.mkdir(outside, { recursive: true }))
+      yield* Effect.promise(() => fs.symlink(outside, link, "dir"))
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const fsService = yield* FSUtil.Service
+
+      const result = yield* Effect.gen(function* () {
+        return yield* tool.execute(
+          {
+            targetNodeID,
+            artifact: {
+              mode: "full",
+              path: "link/escape.ts",
+              code: "export const escape = true\n",
+              test: "bun test\n",
+            },
+          },
+          context(permissionRequests),
+        )
+      }).pipe(
+        Effect.ensuring(Effect.promise(() => fs.rm(outside, { recursive: true, force: true }))),
+      )
+
+      expect(JSON.parse(result.output)).toMatchObject({ applied: false, reason: "path_escape", path: "link/escape.ts" })
+      expect(result.metadata).toMatchObject({ applied: false, reason: "path_escape", path: "link/escape.ts" })
+      expect(permissionRequests).toEqual([])
+      expect(yield* fsService.existsSafe(path.join(outside, "escape.ts"))).toBe(false)
     }),
   )
 
