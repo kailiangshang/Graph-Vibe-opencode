@@ -183,7 +183,7 @@ function normalizeArtifactPathSafe(
     return artifactPathError("path_escape", input.relative, `Artifact path escapes the worktree: ${input.relative}`)
   }
 
-  const base = instance.worktree === "/" ? instance.directory : instance.worktree
+  const base = instance.directory
   const absolute = path.resolve(base, ...relative.split("/"))
   if (!FSUtil.contains(base, absolute)) {
     return artifactPathError("path_escape", input.relative, `Artifact path escapes the worktree: ${input.relative}`)
