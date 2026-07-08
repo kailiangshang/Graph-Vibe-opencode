@@ -1,6 +1,6 @@
 import { Graph } from "@opencode-ai/schema"
 import { Schema } from "effect"
-import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import { WorkspaceRoutingMiddleware, WorkspaceRoutingQueryFields } from "../middleware/workspace-routing"
@@ -39,6 +39,56 @@ const GraphViewResponse = Schema.Struct({
   nodes: Schema.Array(GraphNodeResponse),
   edges: Schema.Array(GraphEdgeResponse),
 }).annotate({ identifier: "GraphView" })
+
+const PlanNodePayload = Schema.Struct({
+  id: Schema.optional(Graph.NodeID),
+  type: Graph.NodeType,
+  name: Schema.String,
+  level: Graph.Level,
+  priority: Schema.optional(Graph.Priority),
+  category: Schema.optional(Schema.String),
+  status: Schema.optional(Graph.NodeStatus),
+  desc: Schema.optional(Schema.String),
+  content: Schema.optional(Graph.NodeContent),
+  codeHash: Schema.optional(Schema.String),
+  testStatus: Schema.optional(Graph.TestStatus),
+  confidence: Schema.optional(Schema.Number),
+}).annotate({ identifier: "GraphPlanNodePayload" })
+
+const PlanEdgePayload = Schema.Struct({
+  id: Schema.optional(Graph.EdgeID),
+  sourceID: Schema.String,
+  targetID: Schema.String,
+  relation: Graph.EdgeRelation,
+  confidence: Schema.optional(Schema.Number),
+}).annotate({ identifier: "GraphPlanEdgePayload" })
+
+export const PlanAdmitPayload = Schema.Struct({
+  dryRun: Schema.optional(Schema.Boolean),
+  nodes: Schema.Array(PlanNodePayload),
+  edges: Schema.Array(PlanEdgePayload),
+}).annotate({ identifier: "GraphPlanAdmitPayload" })
+
+export const PromotePayload = Schema.Struct({
+  message: Schema.optional(Schema.String),
+}).annotate({ identifier: "GraphPromotePayload" })
+
+export const NodeStatusPayload = Schema.Struct({
+  status: Graph.NodeStatus,
+}).annotate({ identifier: "GraphNodeStatusPayload" })
+
+const AdmitResultResponse = Schema.Struct({
+  nodesCreated: Schema.Number,
+  edgesCreated: Schema.Number,
+  dryRun: Schema.Boolean,
+}).annotate({ identifier: "GraphPlanAdmitResult" })
+
+const PromoteResultResponse = Schema.Struct({
+  versionID: Schema.String,
+  versionNumber: Schema.Number,
+  nodes: Schema.Number,
+  edges: Schema.Number,
+}).annotate({ identifier: "GraphPromoteResult" })
 
 const GraphVersionResponse = Schema.Struct({
   id: Schema.String,
@@ -136,6 +186,9 @@ export const GraphPaths = {
   deleteNode: "/graph/node/:nodeID",
   deleteEdge: "/graph/edge/:edgeID",
   diff: "/graph/diff",
+  planAdmit: "/graph/plan/admit",
+  nodeStatus: "/graph/node/:nodeID/status",
+  promote: "/graph/current-plan/promote",
 } as const
 
 export const GraphApi = HttpApi.make("graph")
@@ -247,6 +300,45 @@ export const GraphApi = HttpApi.make("graph")
             identifier: "graph.diff",
             summary: "Compare two graph states",
             description: "Compare graph states: left/right can be 'currentPlan', 'main', or 'version:N'.",
+          }),
+        ),
+        HttpApiEndpoint.post("planAdmit", GraphPaths.planAdmit, {
+          query: SessionRequiredQuery,
+          payload: PlanAdmitPayload,
+          success: described(AdmitResultResponse, "CurrentPlan admission result"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.planAdmit",
+            summary: "Admit nodes and edges into the CurrentPlan",
+            description:
+              "Admit nodes and edges into the session-scoped CurrentPlan graph before implementation.",
+          }),
+        ),
+        HttpApiEndpoint.patch("updateNodeStatus", GraphPaths.nodeStatus, {
+          params: { nodeID: Schema.String },
+          query: ProjectQuery,
+          payload: NodeStatusPayload,
+          success: described(GraphNodeResponse, "Refreshed graph node"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.updateNodeStatus",
+            summary: "Update a graph node status",
+            description: "Update the status of a single graph node and return the refreshed node.",
+          }),
+        ),
+        HttpApiEndpoint.post("promote", GraphPaths.promote, {
+          query: SessionRequiredQuery,
+          payload: [HttpApiSchema.NoContent, PromotePayload],
+          success: described(PromoteResultResponse, "CurrentPlan promotion result"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.promote",
+            summary: "Promote the CurrentPlan into the main graph",
+            description:
+              "Promote the session-scoped CurrentPlan into the project main graph, recording a versioned snapshot.",
           }),
         ),
       )

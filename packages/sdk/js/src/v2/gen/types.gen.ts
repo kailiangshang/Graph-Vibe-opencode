@@ -2402,6 +2402,58 @@ export type GraphDiff = {
   edgesRemoved: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
+export type GraphPlanNodePayload = {
+  id?: string
+  type: "prd" | "composite" | "atomic"
+  name: string
+  level: "L1" | "L2"
+  priority?: "P0" | "P1" | "P2" | "P3"
+  category?: string
+  status?: "pending" | "implemented" | "verified" | "deprecated"
+  desc?: string
+  content?: {
+    [key: string]: unknown
+  }
+  codeHash?: string
+  testStatus?: "none" | "pending" | "passed" | "failed"
+  confidence?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type GraphPlanEdgePayload = {
+  id?: string
+  sourceID: string
+  targetID: string
+  relation: "contains" | "blocks" | "addresses" | "uses" | "deprecated_by"
+  confidence?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type GraphPlanAdmitPayload = {
+  dryRun?: boolean
+  nodes: Array<GraphPlanNodePayload>
+  edges: Array<GraphPlanEdgePayload>
+}
+
+export type GraphPlanAdmitResult = {
+  nodesCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  edgesCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  dryRun: boolean
+}
+
+export type GraphNodeStatusPayload = {
+  status: "pending" | "implemented" | "verified" | "deprecated"
+}
+
+export type GraphPromotePayload = {
+  message?: string
+}
+
+export type GraphPromoteResult = {
+  versionID: string
+  versionNumber: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  nodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  edges: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type Path = {
   home: string
   state: string
@@ -8475,6 +8527,106 @@ export type GraphDiffResponses = {
 }
 
 export type GraphDiffResponse = GraphDiffResponses[keyof GraphDiffResponses]
+
+export type GraphPlanAdmitData = {
+  body?: GraphPlanAdmitPayload
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    session: string
+  }
+  url: "/graph/plan/admit"
+}
+
+export type GraphPlanAdmitErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type GraphPlanAdmitError = GraphPlanAdmitErrors[keyof GraphPlanAdmitErrors]
+
+export type GraphPlanAdmitResponses = {
+  /**
+   * CurrentPlan admission result
+   */
+  200: GraphPlanAdmitResult
+}
+
+export type GraphPlanAdmitResponse = GraphPlanAdmitResponses[keyof GraphPlanAdmitResponses]
+
+export type GraphUpdateNodeStatusData = {
+  body?: GraphNodeStatusPayload
+  path: {
+    nodeID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/graph/node/{nodeID}/status"
+}
+
+export type GraphUpdateNodeStatusErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type GraphUpdateNodeStatusError = GraphUpdateNodeStatusErrors[keyof GraphUpdateNodeStatusErrors]
+
+export type GraphUpdateNodeStatusResponses = {
+  /**
+   * Refreshed graph node
+   */
+  200: GraphNode
+}
+
+export type GraphUpdateNodeStatusResponse = GraphUpdateNodeStatusResponses[keyof GraphUpdateNodeStatusResponses]
+
+export type GraphPromoteData = {
+  body?: GraphPromotePayload
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    session: string
+  }
+  url: "/graph/current-plan/promote"
+}
+
+export type GraphPromoteErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type GraphPromoteError = GraphPromoteErrors[keyof GraphPromoteErrors]
+
+export type GraphPromoteResponses = {
+  /**
+   * CurrentPlan promotion result
+   */
+  200: GraphPromoteResult
+}
+
+export type GraphPromoteResponse = GraphPromoteResponses[keyof GraphPromoteResponses]
 
 export type InstanceDisposeData = {
   body?: never

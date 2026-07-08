@@ -104,6 +104,15 @@ import type {
   GraphNodeReadinessErrors,
   GraphNodeReadinessResponses,
   GraphNodeResponses,
+  GraphNodeStatusPayload,
+  GraphPlanAdmitErrors,
+  GraphPlanAdmitPayload,
+  GraphPlanAdmitResponses,
+  GraphPromoteErrors,
+  GraphPromotePayload,
+  GraphPromoteResponses,
+  GraphUpdateNodeStatusErrors,
+  GraphUpdateNodeStatusResponses,
   GraphVersionsErrors,
   GraphVersionsResponses,
   InstanceDisposeErrors,
@@ -2230,6 +2239,127 @@ export class Graph extends HeyApiClient {
       url: "/graph/diff",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Admit nodes and edges into the CurrentPlan
+   *
+   * Admit nodes and edges into the session-scoped CurrentPlan graph before implementation.
+   */
+  public planAdmit<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      session: string
+      graphPlanAdmitPayload?: GraphPlanAdmitPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "session" },
+            { key: "graphPlanAdmitPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GraphPlanAdmitResponses, GraphPlanAdmitErrors, ThrowOnError>({
+      url: "/graph/plan/admit",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Update a graph node status
+   *
+   * Update the status of a single graph node and return the refreshed node.
+   */
+  public updateNodeStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      nodeID: string
+      directory?: string
+      workspace?: string
+      graphNodeStatusPayload?: GraphNodeStatusPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "nodeID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "graphNodeStatusPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      GraphUpdateNodeStatusResponses,
+      GraphUpdateNodeStatusErrors,
+      ThrowOnError
+    >({
+      url: "/graph/node/{nodeID}/status",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Promote the CurrentPlan into the main graph
+   *
+   * Promote the session-scoped CurrentPlan into the project main graph, recording a versioned snapshot.
+   */
+  public promote<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      session: string
+      graphPromotePayload?: GraphPromotePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "session" },
+            { key: "graphPromotePayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GraphPromoteResponses, GraphPromoteErrors, ThrowOnError>({
+      url: "/graph/current-plan/promote",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }

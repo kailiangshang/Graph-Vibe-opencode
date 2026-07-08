@@ -1,13 +1,16 @@
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { Config, Effect, Layer } from "effect"
-import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
+import { HttpBody, HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Database } from "@opencode-ai/core/database/database"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
+import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
+import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
+import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap as InstanceBootstrapService } from "@/project/bootstrap-service"
@@ -31,8 +34,11 @@ const appLayer = AppNodeBuilder.build(
     Workspace.node,
     Database.node,
     Ripgrep.node,
+    GraphStorage.node,
     GraphDomain.node,
     GraphAudit.node,
+    GraphPlan.node,
+    GraphBuild.node,
   ]),
   [[InstanceStore.bootstrapNode, noopBootstrapLayer]],
 )
@@ -63,6 +69,24 @@ function requestJson<T>(path: string) {
       return yield* Effect.die(new Error(`Expected 200, got ${response.status}: ${text}`))
     }
     return yield* response.json.pipe(Effect.map((v) => v as T))
+  })
+}
+
+function send(method: "POST" | "PATCH", path: string, body?: unknown) {
+  const url = new URL(path, "http://localhost")
+  const base = HttpClientRequest.fromWeb(new Request(url, { method })).pipe(
+    HttpClientRequest.setUrl(url.pathname),
+  )
+  const withBody = body === undefined ? base : base.pipe(HttpClientRequest.setBody(HttpBody.jsonUnsafe(body)))
+  return withBody.pipe(HttpClient.execute)
+}
+
+function sendJson<T = unknown>(method: "POST" | "PATCH", path: string, body?: unknown) {
+  return Effect.gen(function* () {
+    const response = yield* send(method, path, body)
+    if (response.status !== 200) return { status: response.status, json: null as T | null }
+    const json = yield* response.json
+    return { status: response.status, json: json as T }
   })
 }
 
@@ -220,6 +244,127 @@ describe("graph HttpApi", () => {
       expect(result.blockers.length).toBe(1)
       expect(result.blockers[0].nodeID).toBe(sourceID)
       expect(result.blockers[0].nodeStatus).toBe("pending")
+    }),
+  )
+
+  it.instance("admits nodes and edges into the CurrentPlan", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+
+      const result = yield* sendJson<{ nodesCreated: number; edgesCreated: number; dryRun: boolean }>(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        {
+          nodes: [
+            { type: "atomic", name: "Plan A", level: "L2" },
+            { type: "atomic", name: "Plan B", level: "L2" },
+          ],
+          edges: [{ sourceID: "@0", targetID: "@1", relation: "blocks" }],
+        },
+      )
+
+      expect(result.status).toBe(200)
+      expect(result.json!.nodesCreated).toBe(2)
+      expect(result.json!.edgesCreated).toBe(1)
+      expect(result.json!.dryRun).toBe(false)
+    }),
+  )
+
+  it.instance("rejects an invalid plan admit payload with 400", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+
+      const result = yield* sendJson(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { nodes: [{ type: "atomic", level: "L2" }], edges: [] },
+      )
+
+      expect(result.status).toBe(400)
+    }),
+  )
+
+  it.instance("updates a node status and returns the refreshed node", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const domain = yield* GraphDomain.Service
+
+      yield* Project.use.fromDirectory(test.directory)
+      yield* Session.use.create()
+
+      const { project } = yield* (yield* Project.Service).fromDirectory(test.directory)
+
+      const nodeID = yield* domain.node.create({
+        projectID: project.id,
+        type: "atomic" as const,
+        name: "Status Node",
+        level: "L2" as const,
+      })
+
+      const result = yield* sendJson<{ id: string; status: string }>(
+        "PATCH",
+        `/graph/node/${nodeID}/status?directory=${encodeURIComponent(test.directory)}`,
+        { status: "implemented" },
+      )
+
+      expect(result.status).toBe(200)
+      expect(result.json!.id).toBe(nodeID)
+      expect(result.json!.status).toBe("implemented")
+    }),
+  )
+
+  it.instance("returns 404 when updating status of an unknown node", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+
+      yield* Project.use.fromDirectory(test.directory)
+      yield* Session.use.create()
+
+      const result = yield* sendJson(
+        "PATCH",
+        `/graph/node/node_unknown-missing/status?directory=${encodeURIComponent(test.directory)}`,
+        { status: "implemented" },
+      )
+
+      expect(result.status).toBe(404)
+    }),
+  )
+
+  it.instance("promotes the CurrentPlan into a versioned snapshot", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const domain = yield* GraphDomain.Service
+
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+
+      const { project } = yield* (yield* Project.Service).fromDirectory(test.directory)
+
+      yield* domain.node.create({
+        projectID: project.id,
+        sessionID: session.id,
+        type: "atomic" as const,
+        name: "Promote Node",
+        level: "L2" as const,
+      })
+
+      const result = yield* sendJson<{ versionID: string; versionNumber: number; nodes: number; edges: number }>(
+        "POST",
+        `/graph/current-plan/promote?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { message: "initial promote" },
+      )
+
+      expect(result.status).toBe(200)
+      expect(result.json!.versionID).toBeDefined()
+      expect(result.json!.versionNumber).toBe(1)
+      expect(result.json!.nodes).toBe(1)
+      expect(result.json!.edges).toBe(0)
     }),
   )
 })
