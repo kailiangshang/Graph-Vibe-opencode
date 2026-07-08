@@ -18,7 +18,6 @@ const MAX_OUTPUT_CHARS = 64_000
 
 export const Parameters = Schema.Struct({
   targetNodeID: GraphStorage.NodeID,
-  commands: Schema.Array(Schema.String).pipe(Schema.optional),
   timeout: Schema.Number.pipe(Schema.optional),
   filter: Schema.String.pipe(Schema.optional),
 })
@@ -133,17 +132,10 @@ export const GraphDiagnosticsRunTool = Tool.define(
             })
             return {
               title: "Diagnostics blocked",
-              metadata: { gate: summarizeGate(gate), ran: false, passed: false, results: [] },
-              output: formatJson({ ran: false, gate }),
+              metadata: { gate: summarizeGate(gate), ran: false, passed: false, complete: false, verified: false, results: [] as CommandResult[] },
+              output: formatJson({ ran: false, complete: false, verified: false, gate }),
             }
           }
-
-          yield* ctx.ask({
-            permission: "graph.diagnostics_run",
-            patterns: [],
-            always: ["*"],
-            metadata: {},
-          })
 
           const previousFailures = yield* audit.tool.list({
             projectID: session.projectID,
@@ -168,10 +160,14 @@ export const GraphDiagnosticsRunTool = Tool.define(
                 gate: summarizeGate(gate),
                 ran: false,
                 passed: false,
-                results: [],
+                complete: false,
+                verified: false,
+                results: [] as CommandResult[],
               },
               output: formatJson({
                 ran: false,
+                complete: false,
+                verified: false,
                 reason: `Node has ${failedDiagCount} previous failed diagnostics (max ${MAX_FIX_ATTEMPTS}). Review the failures and revise the plan or seek human input.`,
               }),
             }
@@ -179,22 +175,23 @@ export const GraphDiagnosticsRunTool = Tool.define(
 
           const timeoutMs = params.timeout ?? DEFAULT_TIMEOUT_MS
 
-          let cmds: NamedCommand[]
-          if (params.commands) {
-            cmds = params.commands.map((c) => ({ name: c, command: c }))
-          } else {
-            const detected = yield* Effect.promise(() => detectDiagnosticsCommands(session.directory))
-            cmds = params.filter
-              ? detected.filter((c) => c.name.includes(params.filter!))
-              : detected
-            if (cmds.length === 0 && params.filter) {
-              return {
-                title: "Diagnostics skipped",
-                metadata: { gate: summarizeGate(gate), ran: false, passed: false, results: [] },
-                output: formatJson({ ran: false, reason: `No commands matched filter: ${params.filter}` }),
-              }
+          const detected = yield* Effect.promise(() => detectDiagnosticsCommands(session.directory))
+          const cmds = params.filter ? detected.filter((c) => c.name.includes(params.filter!)) : detected
+          const completeDiagnostics = cmds.length === detected.length
+          if (cmds.length === 0 && params.filter) {
+            return {
+              title: "Diagnostics skipped",
+              metadata: { gate: summarizeGate(gate), ran: false, passed: false, complete: false, verified: false, results: [] as CommandResult[] },
+              output: formatJson({ ran: false, complete: false, verified: false, reason: `No commands matched filter: ${params.filter}` }),
             }
           }
+
+          yield* ctx.ask({
+            permission: "graph.diagnostics_run",
+            patterns: cmds.map((cmd) => cmd.command),
+            always: cmds.map((cmd) => cmd.command),
+            metadata: { commands: cmds },
+          })
 
           const results: CommandResult[] = []
           for (const cmd of cmds) {
@@ -203,14 +200,17 @@ export const GraphDiagnosticsRunTool = Tool.define(
           }
 
           const allPassed = results.every((r) => r.passed)
+          const verified = allPassed && completeDiagnostics
 
-          yield* storage.node.update(params.targetNodeID, {
-            testStatus: allPassed ? "passed" : "failed",
-            ...(allPassed ? { status: "verified" as const } : {}),
-          })
+          if (verified || !allPassed) {
+            yield* storage.node.update(params.targetNodeID, {
+              testStatus: allPassed ? "passed" : "failed",
+              ...(verified ? { status: "verified" as const } : {}),
+            })
+          }
 
           let nextHint = ""
-          if (allPassed) {
+          if (verified) {
             const cp = yield* domain.currentPlan({ sessionID: session.sessionID })
             const newlyBuildable = buildableNodes(cp.nodes, cp.edges)
               .filter((n) => n.id !== params.targetNodeID)
@@ -232,11 +232,13 @@ export const GraphDiagnosticsRunTool = Tool.define(
           })
 
           return {
-            title: allPassed ? "Diagnostics passed" : "Diagnostics failed",
+            title: verified ? "Diagnostics passed" : allPassed ? "Diagnostics passed - filtered subset" : "Diagnostics failed",
             metadata: {
               gate: summarizeGate(gate),
               ran: true,
               passed: allPassed,
+              complete: completeDiagnostics,
+              verified,
               results: results.map((r) => ({
                 name: r.name,
                 exitCode: r.exitCode,
@@ -245,7 +247,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
                 ...(r.failureReason ? { failureReason: r.failureReason } : {}),
               })),
             },
-            output: formatJson({ ran: true, passed: allPassed, results }),
+            output: formatJson({ ran: true, passed: allPassed, complete: completeDiagnostics, verified, results }),
           }
         }).pipe(Effect.orDie),
     }

@@ -20,6 +20,7 @@ import { MessageID, SessionID } from "@/session/schema"
 import { Tool } from "@/tool/tool"
 import { GraphBuildGateTool } from "@/tool/graph/build-gate"
 import { GraphPlanAdmitTool } from "@/tool/graph/plan-admit"
+import { fromTool } from "@/tool/json-schema"
 import { Truncate } from "@/tool/truncate"
 import { TestConfig } from "../fixture/config"
 import { disposeAllInstances } from "../fixture/fixture"
@@ -99,6 +100,15 @@ function context(): Tool.Context {
 }
 
 describe("graph tools", () => {
+  it.instance("graph_plan_admit does not expose status fields", () =>
+    Effect.gen(function* () {
+      const info = yield* GraphPlanAdmitTool
+      const tool = yield* Tool.init(info)
+      expect(fromTool(tool)).not.toHaveProperty("properties.nodes.items.properties.status")
+      expect(fromTool(tool)).not.toHaveProperty("properties.nodes.items.properties.testStatus")
+    }),
+  )
+
   it.instance("graph_plan_admit writes CurrentPlan using the opencode session project", () =>
     Effect.gen(function* () {
       yield* seed()
@@ -123,6 +133,34 @@ describe("graph tools", () => {
       expect(currentPlan.nodes.map((node) => node.projectID)).toEqual([projectID, projectID])
       expect(currentPlan.nodes.map((node) => node.sessionID)).toEqual([sessionID, sessionID])
       expect(currentPlan.edges.map((edge) => edge.sessionID)).toEqual([sessionID])
+    }),
+  )
+
+  it.instance("graph_plan_admit ignores model-supplied status fields", () =>
+    Effect.gen(function* () {
+      yield* seed()
+      const info = yield* GraphPlanAdmitTool
+      const tool = yield* Tool.init(info)
+      const input = {
+        nodes: [
+          {
+            id: firstNodeID,
+            type: "atomic" as const,
+            name: "Status bypass",
+            level: "L2" as const,
+            status: "verified",
+            testStatus: "passed",
+          },
+        ],
+        edges: [],
+      }
+
+      yield* tool.execute(input, context())
+
+      const storage = yield* GraphStorage.Service
+      const currentPlan = yield* storage.currentPlan({ sessionID })
+      expect(currentPlan.nodes[0]?.status).toBe("pending")
+      expect(currentPlan.nodes[0]?.testStatus).toBe("none")
     }),
   )
 

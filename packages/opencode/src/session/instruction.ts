@@ -13,7 +13,7 @@ import { withTransientReadRetry } from "@/util/effect-http-client"
 import { Global } from "@opencode-ai/core/global"
 import type { MessageV2 } from "./message-v2"
 import type { MessageID } from "./schema"
-import GRAPH_WORKFLOW_PROMPT from "../tool/graph/prompt.txt"
+import { GRAPH_WORKFLOW_PROMPT } from "@opencode-ai/core/graph/workflow/prompt"
 
 function extract(messages: SessionV1.WithParts[]) {
   const paths = new Set<string>()

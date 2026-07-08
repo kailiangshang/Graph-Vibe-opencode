@@ -273,6 +273,33 @@ describe("graph HttpApi", () => {
     }),
   )
 
+  it.instance("ignores supplied plan status fields when admitting nodes", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+
+      const result = yield* sendJson<{ nodesCreated: number }>(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        {
+          nodes: [
+            { type: "atomic", name: "Plan Status", level: "L2", status: "verified", testStatus: "passed" },
+          ],
+          edges: [],
+        },
+      )
+      const current = yield* requestJson<{ nodes: Array<{ status: string; testStatus: string }> }>(
+        `/graph/current-plan?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+      )
+
+      expect(result.status).toBe(200)
+      expect(current.nodes[0]?.status).toBe("pending")
+      expect(current.nodes[0]?.testStatus).toBe("none")
+    }),
+  )
+
   it.instance("rejects an invalid plan admit payload with 400", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance

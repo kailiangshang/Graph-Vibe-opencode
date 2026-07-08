@@ -1,6 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
+import { eq } from "drizzle-orm"
 import { DateTime, Effect, Equal, Hash, Schema } from "effect"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { define } from "@opencode-ai/plugin/v2/effect"
@@ -12,23 +13,31 @@ import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { Location } from "@opencode-ai/core/location"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { PermissionV2 } from "@opencode-ai/core/permission"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
+import { SystemContext } from "@opencode-ai/core/system-context"
+import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
+import { Tools } from "@opencode-ai/core/tool/tools"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
-import { toolDefinitions } from "./lib/tool"
+import { executeTool, toolDefinitions, toolIdentity } from "./lib/tool"
 import { FSUtil } from "../src/fs-util"
 import { Credential } from "../src/credential"
 import { Database } from "../src/database/database"
 import { EventV2 } from "../src/event"
 import { Global } from "../src/global"
+import { GraphStorage } from "../src/graph/storage"
+import { GraphNodeTable } from "../src/graph/sql"
 import { ModelsDev } from "../src/models-dev"
 import { Npm } from "../src/npm"
 import { Project } from "../src/project"
+import { ProjectTable } from "../src/project/sql"
 import { Reference } from "../src/reference"
+import { SessionTable } from "../src/session/sql"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
 
@@ -37,6 +46,256 @@ const it = testEffect(
 )
 
 describe("LocationServiceMap", () => {
+  it.live("materializes graph tools instead of raw write tools when graph mode is enabled", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            yield* (yield* ApplicationTools.Service).register({
+              application_context: Tool.make({
+                description: "Application context",
+                input: Schema.Struct({}),
+                output: Schema.Struct({ ok: Schema.Boolean }),
+                execute: () => Effect.succeed({ ok: true }),
+              }),
+            })
+            const state = yield* Effect.gen(function* () {
+              yield* (yield* Tools.Service).register({
+                run_command: Tool.make({
+                  description: "Run command",
+                  input: Schema.Struct({}),
+                  output: Schema.Struct({ ok: Schema.Boolean }),
+                  execute: () => Effect.succeed({ ok: true }),
+                }),
+              })
+              const registry = yield* ToolRegistry.Service
+              const context = yield* SystemContextRegistry.Service
+              return {
+                tools: yield* toolDefinitions(registry),
+                baseline: (yield* SystemContext.initialize(yield* context.load())).baseline,
+              }
+            }).pipe(Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))))
+            expect(state.tools.map((tool) => tool.name).sort()).toEqual([
+              "glob",
+              "graph_artifact_apply",
+              "graph_artifact_begin",
+              "graph_artifact_chunk",
+              "graph_artifact_seal",
+              "graph_build_gate",
+              "graph_diagnostics_run",
+              "graph_plan_admit",
+              "grep",
+              "question",
+              "read",
+              "skill",
+              "todowrite",
+              "webfetch",
+              "websearch",
+            ])
+            const diagnostics = state.tools.find((tool) => tool.name === "graph_diagnostics_run")
+            expect(diagnostics?.inputSchema).not.toHaveProperty("properties.commands")
+            const planAdmit = state.tools.find((tool) => tool.name === "graph_plan_admit")
+            expect(planAdmit?.inputSchema).not.toHaveProperty("properties.nodes.items.properties.status")
+            expect(planAdmit?.inputSchema).not.toHaveProperty("properties.nodes.items.properties.testStatus")
+            expect(state.baseline).toContain("Graph Workflow Mode")
+          }),
+        ),
+      ),
+    ),
+  )
+
+  it.live("does not admit verified nodes from model-supplied plan status", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            const state = yield* setupGraphSession(dir.path).pipe(
+              Effect.flatMap((state) => {
+                const input = {
+                  dryRun: false,
+                  nodes: [
+                    {
+                      type: "atomic",
+                      name: "Plan status bypass",
+                      level: "L2",
+                      status: "verified",
+                      testStatus: "passed",
+                    },
+                  ],
+                  edges: [],
+                }
+                return executeTool(state.registry, {
+                  sessionID: state.sessionID,
+                  ...toolIdentity,
+                  call: { type: "tool-call", id: "call-plan-status", name: "graph_plan_admit", input },
+                }).pipe(Effect.as(state))
+              }),
+              Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+            )
+            const node = (yield* state.db
+              .select()
+              .from(GraphNodeTable)
+              .where(eq(GraphNodeTable.session_id, state.sessionID))
+              .all()
+              .pipe(Effect.orDie))[0]
+            expect(node?.status).toBe("pending")
+            expect(node?.test_status).toBe("none")
+          }),
+        ),
+      ),
+    ),
+  )
+
+  it.live("does not let supplied diagnostics commands verify a node", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(() =>
+            fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { test: "bun -e 'process.exit(1)'" } })),
+          ).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ]).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-supplied-command",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID, commands: ["bun -e 'process.exit(0)'"] },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(
+                    LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) })),
+                  ),
+                )
+                const node = yield* state.db
+                  .select()
+                  .from(GraphNodeTable)
+                  .where(eq(GraphNodeTable.id, state.targetNodeID))
+                  .get()
+                  .pipe(Effect.orDie)
+                expect(node?.status).not.toBe("verified")
+                expect(node?.test_status).not.toBe("passed")
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("applies diagnostics permission rules to detected commands", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(() =>
+            fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { test: "bun -e 'process.exit(0)'" } })),
+          ).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "deny" },
+                ]).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-denied",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(
+                    LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) })),
+                  ),
+                )
+                const node = yield* state.db
+                  .select()
+                  .from(GraphNodeTable)
+                  .where(eq(GraphNodeTable.id, state.targetNodeID))
+                  .get()
+                  .pipe(Effect.orDie)
+                expect(node?.status).not.toBe("verified")
+                expect(node?.test_status).not.toBe("passed")
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("does not verify a node from a filtered diagnostics subset", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(() =>
+            fs.writeFile(
+              path.join(dir.path, "package.json"),
+              JSON.stringify({ scripts: { test: "bun -e 'process.exit(0)'", typecheck: "bun -e 'process.exit(1)'" } }),
+            ),
+          ).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ]).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-filtered",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID, filter: "test" },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(
+                    LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) })),
+                  ),
+                )
+                const node = yield* state.db
+                  .select()
+                  .from(GraphNodeTable)
+                  .where(eq(GraphNodeTable.id, state.targetNodeID))
+                  .get()
+                  .pipe(Effect.orDie)
+                expect(node?.status).not.toBe("verified")
+                expect(node?.test_status).not.toBe("passed")
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
   it.live("reuses cached services for constructed and decoded location refs", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -224,3 +483,73 @@ describe("LocationServiceMap", () => {
     ),
   )
 })
+
+function withGraphMode<A, E, R>(effect: Effect.Effect<A, E, R>) {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => process.env.OPENCODE_EXPERIMENTAL_GRAPH_MODE),
+    () =>
+      Effect.sync(() => {
+        process.env.OPENCODE_EXPERIMENTAL_GRAPH_MODE = "1"
+      }).pipe(Effect.andThen(effect)),
+    (previous) =>
+      Effect.sync(() => {
+        if (previous === undefined) delete process.env.OPENCODE_EXPERIMENTAL_GRAPH_MODE
+        else process.env.OPENCODE_EXPERIMENTAL_GRAPH_MODE = previous
+      }),
+  )
+}
+
+function setupGraphDiagnostics(directory: string, permissions: PermissionV2.Ruleset) {
+  return Effect.gen(function* () {
+    const state = yield* setupGraphSession(directory)
+    yield* (yield* AgentV2.Service).transform((editor) =>
+      editor.update(AgentV2.ID.make("build"), (agent) => {
+        agent.permissions = [...permissions]
+      }),
+    )
+    const targetNodeID = GraphStorage.NodeID.create()
+    yield* state.db
+      .insert(GraphNodeTable)
+      .values({
+        id: targetNodeID,
+        project_id: ProjectV2.ID.global,
+        session_id: state.sessionID,
+        type: "atomic",
+        name: "Diagnostics target",
+        level: "L2",
+        status: "implemented",
+        test_status: "pending",
+        confidence: 1,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    return { ...state, targetNodeID }
+  })
+}
+
+function setupGraphSession(directory: string) {
+  return Effect.gen(function* () {
+    const sessionID = SessionV2.ID.create()
+    const { db } = yield* Database.Service
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make(directory), sandboxes: [] })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionTable)
+      .values({
+        id: sessionID,
+        project_id: Project.ID.global,
+        slug: "graph-test",
+        directory,
+        title: "graph test",
+        version: "test",
+        agent: "build",
+      })
+      .run()
+      .pipe(Effect.orDie)
+    return { registry: yield* ToolRegistry.Service, db, sessionID }
+  })
+}

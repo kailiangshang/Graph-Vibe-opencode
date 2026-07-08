@@ -8,6 +8,8 @@ import { InstructionContext } from "../instruction-context"
 import { SystemContextRegistry } from "./registry"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
+import { Flag } from "../flag/flag"
+import { GRAPH_WORKFLOW_PROMPT } from "../graph/workflow/prompt"
 
 const builtIns = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -37,6 +39,17 @@ const builtIns = Layer.effectDiscard(
         baseline: (date) => `Today's date: ${date}`,
         update: (_previous, date) => `Today's date is now: ${date}`,
       }),
+      ...(Flag.OPENCODE_EXPERIMENTAL_GRAPH_MODE
+        ? [
+            SystemContext.make({
+              key: SystemContext.Key.make("core/graph-workflow"),
+              codec: Schema.toCodecJson(Schema.String),
+              load: Effect.succeed(GRAPH_WORKFLOW_PROMPT),
+              baseline: (prompt) => prompt,
+              update: (_previous, prompt) => prompt,
+            }),
+          ]
+        : []),
     ])
 
     yield* registry.register({ key: SystemContext.Key.make("core/builtins"), load: Effect.succeed(context) })

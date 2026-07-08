@@ -7,6 +7,7 @@ import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { ToolOutputStore } from "../tool-output-store"
+import { Flag } from "../flag/flag"
 import { Wildcard } from "../util/wildcard"
 import { ApplicationTools } from "./application-tools"
 import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
@@ -104,11 +105,13 @@ const registryLayer = Layer.effect(
         )
       }),
       materialize: Effect.fn("ToolRegistry.materialize")(function* (permissions = []) {
-        const registrations = new Map(applications.entries())
+        const registrations = Flag.OPENCODE_EXPERIMENTAL_GRAPH_MODE ? new Map() : new Map(applications.entries())
         for (const [name, entries] of local) {
           const registration = entries.at(-1)?.registration
           if (registration) registrations.set(name, registration)
         }
+        for (const name of registrations.keys())
+          if (Flag.OPENCODE_EXPERIMENTAL_GRAPH_MODE && !graphAllowedTools.has(name)) registrations.delete(name)
         for (const [name, registration] of registrations)
           if (whollyDisabled(permission(registration.tool, name), permissions)) registrations.delete(name)
         return {
@@ -133,6 +136,24 @@ function whollyDisabled(action: string, rules: PermissionV2.Ruleset) {
   const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
   return rule?.resource === "*" && rule.effect === "deny"
 }
+
+const graphAllowedTools = new Set([
+  "glob",
+  "graph_artifact_apply",
+  "graph_artifact_begin",
+  "graph_artifact_chunk",
+  "graph_artifact_seal",
+  "graph_build_gate",
+  "graph_diagnostics_run",
+  "graph_plan_admit",
+  "grep",
+  "question",
+  "read",
+  "skill",
+  "todowrite",
+  "webfetch",
+  "websearch",
+])
 
 export const node = makeLocationNode({
   service: Service,

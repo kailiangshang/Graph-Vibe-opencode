@@ -19,6 +19,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
 import { GraphDiagnosticsRunTool } from "@/tool/graph/diagnostics-run"
+import { fromTool } from "@/tool/json-schema"
 import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { TestConfig } from "../fixture/config"
@@ -110,6 +111,13 @@ const init = Effect.fn("GraphDiagnosticsTest.init")(function* () {
 })
 
 describe("graph_diagnostics_run", () => {
+  it.instance("does not expose model-supplied commands", () =>
+    Effect.gen(function* () {
+      const tool = yield* init()
+      expect(fromTool(tool)).not.toHaveProperty("properties.commands")
+    }),
+  )
+
   it.instance("does not ask permission or run commands when the Build gate blocks", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
@@ -126,7 +134,7 @@ describe("graph_diagnostics_run", () => {
       const tool = yield* init()
 
       const result = yield* tool.execute(
-        { targetNodeID, commands: ["echo ok"] },
+        { targetNodeID },
         context(permissionRequests),
       )
 
@@ -148,20 +156,48 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "true" } })))
 
       const permissionRequests: PermissionRequest[] = []
       const tool = yield* init()
 
       const result = yield* tool.execute(
-        { targetNodeID, commands: ["true"] },
+        { targetNodeID },
         context(permissionRequests),
       )
 
       const node = yield* storage.node.get(targetNodeID)
       expect(JSON.parse(result.output)).toMatchObject({ ran: true, passed: true })
-      expect(permissionRequests).toMatchObject([{ permission: "graph.diagnostics_run" }])
+      expect(permissionRequests).toMatchObject([{ permission: "graph.diagnostics_run", patterns: ["bun run test"], always: ["bun run test"] }])
       expect(node.testStatus).toBe("passed")
       expect(node.status).toBe("verified")
+    }),
+  )
+
+  it.instance("does not let supplied diagnostics commands verify a node", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "IgnoreSupplied",
+        level: "L2",
+        status: "implemented",
+      })
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "false" } })))
+
+      const tool = yield* init()
+      const input = { targetNodeID, commands: ["true"] }
+
+      const result = yield* tool.execute(input, context([]))
+
+      const node = yield* storage.node.get(targetNodeID)
+      expect(JSON.parse(result.output)).toMatchObject({ ran: true, passed: false })
+      expect(node.testStatus).toBe("failed")
+      expect(node.status).toBe("implemented")
     }),
   )
 
@@ -178,11 +214,12 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "false" } })))
 
       const tool = yield* init()
 
       const result = yield* tool.execute(
-        { targetNodeID, commands: ["false"] },
+        { targetNodeID },
         context([]),
       )
 
@@ -193,7 +230,7 @@ describe("graph_diagnostics_run", () => {
     }),
   )
 
-  it.instance("does not treat Bun run usage output as a passed diagnostic", () =>
+  it.instance("does not treat detected Bun run usage output as a passed diagnostic", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       yield* seed(test.directory)
@@ -217,7 +254,7 @@ describe("graph_diagnostics_run", () => {
       const tool = yield* init()
 
       const result = yield* tool.execute(
-        { targetNodeID, commands: [`bun --cwd ${JSON.stringify(test.directory)} run typecheck`] },
+        { targetNodeID, filter: "typecheck" },
         context([]),
       )
 
@@ -227,8 +264,7 @@ describe("graph_diagnostics_run", () => {
       const records = yield* audit.tool.list({ projectID, nodeID: targetNodeID })
       expect(parsed.ran).toBe(true)
       expect(parsed.passed).toBe(false)
-      expect(parsed.results[0].output).toContain("Usage: bun run")
-      expect(records[records.length - 1]?.outputSummary).toContain("bun_run_usage")
+      expect(records[records.length - 1]?.outputSummary).toContain("exit_code:1")
       expect(node.testStatus).toBe("failed")
       expect(node.status).toBe("implemented")
     }),
@@ -247,11 +283,12 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "sleep 10" } })))
 
       const tool = yield* init()
 
       const result = yield* tool.execute(
-        { targetNodeID, commands: ["sleep 10"], timeout: 1000 },
+        { targetNodeID, timeout: 1000 },
         context([]),
       )
 
@@ -262,7 +299,7 @@ describe("graph_diagnostics_run", () => {
     }),
   )
 
-  it.instance("filter parameter selects matching auto-detected commands", () =>
+  it.instance("filter parameter selects matching commands without verifying the node from a subset", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       yield* seed(test.directory)
@@ -294,6 +331,9 @@ describe("graph_diagnostics_run", () => {
       expect(parsed.ran).toBe(true)
       expect(parsed.results.length).toBe(1)
       expect(parsed.results[0].name).toBe("typecheck")
+      const node = yield* storage.node.get(targetNodeID)
+      expect(node.status).toBe("implemented")
+      expect(node.testStatus).not.toBe("passed")
     }),
   )
 
@@ -335,7 +375,7 @@ describe("graph_diagnostics_run", () => {
 
       const tool = yield* init()
       const result = yield* tool.execute(
-        { targetNodeID, commands: ["true"] },
+        { targetNodeID },
         context([]),
       )
 

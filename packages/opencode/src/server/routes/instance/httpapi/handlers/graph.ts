@@ -223,7 +223,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
         projectID: session.projectID,
         sessionID: session.id,
         dryRun: ctx.payload.dryRun,
-        nodes: ctx.payload.nodes,
+        nodes: ctx.payload.nodes.map(planNodePayload),
         edges: ctx.payload.edges,
       }).pipe(
         Effect.catchTag("GraphV2.ValidationError", () => Effect.fail(new HttpApiError.BadRequest({}))),
@@ -280,3 +280,18 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       .handle("promote", promote)
   }),
 )
+
+function planNodePayload(node: (typeof PlanAdmitPayload.Type)["nodes"][number]): GraphPlan.PlanNodeCreate {
+  return {
+    ...(node.id === undefined ? {} : { id: node.id }),
+    type: node.type,
+    name: node.name,
+    level: node.level,
+    ...(node.priority === undefined ? {} : { priority: node.priority }),
+    ...(node.category === undefined ? {} : { category: node.category }),
+    ...(node.desc === undefined ? {} : { desc: node.desc }),
+    ...(node.content === undefined ? {} : { content: node.content }),
+    ...(node.codeHash === undefined ? {} : { codeHash: node.codeHash }),
+    ...(node.confidence === undefined ? {} : { confidence: node.confidence }),
+  }
+}

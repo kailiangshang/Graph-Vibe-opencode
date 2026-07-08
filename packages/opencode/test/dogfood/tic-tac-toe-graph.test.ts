@@ -232,7 +232,7 @@ describe("graph mode 开发流程演示", () => {
 
       // 运行测试（实际执行 tic-tac-toe 的 bun test）
       const result = yield* tool.execute(
-        { targetNodeID: nodeID, commands: [`cd ${projectDir} && bun test`], timeout: 30000 },
+        { targetNodeID: nodeID, timeout: 30000, filter: "test" },
         toolContext(),
       )
 
@@ -241,8 +241,8 @@ describe("graph mode 开发流程演示", () => {
       expect(parsed.passed).toBe(true)
 
       const node = yield* storage.node.get(nodeID)
-      expect(node.status).toBe("verified")
-      expect(node.testStatus).toBe("passed")
+      expect(node.status).toBe("implemented")
+      expect(node.testStatus).not.toBe("passed")
     }),
   )
 
@@ -275,7 +275,7 @@ describe("graph mode 开发流程演示", () => {
       const tool = yield* Tool.init(toolInfo)
 
       const result = yield* tool.execute(
-        { targetNodeID: nodeID, commands: ["true"] },
+        { targetNodeID: nodeID },
         toolContext(),
       )
 

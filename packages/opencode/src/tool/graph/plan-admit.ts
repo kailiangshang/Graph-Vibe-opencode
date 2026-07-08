@@ -17,11 +17,9 @@ export const PlanNode = Schema.Struct({
   level: Graph.Level,
   priority: Graph.Priority.pipe(Schema.optional),
   category: Schema.String.pipe(Schema.optional),
-  status: Graph.NodeStatus.pipe(Schema.optional),
   desc: Schema.String.pipe(Schema.optional),
   content: Graph.NodeContent.pipe(Schema.optional),
   codeHash: Schema.String.pipe(Schema.optional),
-  testStatus: Graph.TestStatus.pipe(Schema.optional),
   confidence: Schema.Number.pipe(Schema.optional),
 })
 
@@ -69,7 +67,7 @@ export const GraphPlanAdmitTool = Tool.define(
             projectID: session.projectID,
             sessionID: session.sessionID,
             dryRun: params.dryRun,
-            nodes: params.nodes,
+            nodes: params.nodes.map(planNodeInput),
             edges: params.edges,
           }).pipe(
             Effect.map((result) => ({ _tag: "admitted" as const, result })),
@@ -144,6 +142,21 @@ function planAdmissionSuccess(
       nodes: params.nodes.length,
       edges: params.edges.length,
     },
+  }
+}
+
+function planNodeInput(node: typeof PlanNode.Type): GraphPlan.PlanNodeCreate {
+  return {
+    ...(node.id === undefined ? {} : { id: node.id }),
+    type: node.type,
+    name: node.name,
+    level: node.level,
+    ...(node.priority === undefined ? {} : { priority: node.priority }),
+    ...(node.category === undefined ? {} : { category: node.category }),
+    ...(node.desc === undefined ? {} : { desc: node.desc }),
+    ...(node.content === undefined ? {} : { content: node.content }),
+    ...(node.codeHash === undefined ? {} : { codeHash: node.codeHash }),
+    ...(node.confidence === undefined ? {} : { confidence: node.confidence }),
   }
 }
 
