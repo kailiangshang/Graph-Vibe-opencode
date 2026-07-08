@@ -5,6 +5,7 @@ import { topologicalOrder } from "@opencode-ai/core/graph/build-order"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { Graph } from "@opencode-ai/schema/graph"
 import { Effect, Schema } from "effect"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { Session } from "@/session/session"
 import { Tool } from "../tool"
 import { formatJson, resolveGraphSession } from "./util"
@@ -56,6 +57,7 @@ export const GraphPlanAdmitTool = Tool.define(
     const plan = yield* GraphPlan.Service
     const audit = yield* GraphAudit.Service
     const domain = yield* GraphDomain.Service
+    const events = yield* EventV2Bridge.Service
 
     return {
       description: "Admit nodes and edges into the session CurrentPlan graph before implementation.",
@@ -105,6 +107,8 @@ export const GraphPlanAdmitTool = Tool.define(
             inputSummary: `nodes=${params.nodes.length} edges=${params.edges.length}`,
             outputSummary: `nodes=${result.nodesCreated} edges=${result.edgesCreated}`,
           })
+
+          if (!params.dryRun) yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
 
           let suggestedOrder: string[] = []
           if (!params.dryRun) {

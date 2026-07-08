@@ -5,6 +5,7 @@ import { Durable } from "./durable-event-manifest"
 import { Event } from "./event"
 import { FileSystem } from "./filesystem"
 import { FileSystemWatcher } from "./filesystem-watcher"
+import { Graph } from "./graph"
 import { InstallationEvent } from "./installation-event"
 import { Integration } from "./integration"
 import { LegacyEvent } from "./legacy-event"
@@ -58,6 +59,7 @@ export const ServerDefinitions = Event.inventory(
   ...foundationDefinitions,
   ...featureDefinitions,
   ...SessionTodo.Event.Definitions,
+  ...Graph.Event.Definitions,
 )
 
 export const Definitions = Event.inventory(
@@ -72,6 +74,7 @@ export const Definitions = Event.inventory(
   ...McpEvent.Definitions,
   ...LegacyEvent.Definitions,
   ...Project.Event.Definitions,
+  ...Graph.Event.Definitions,
   ...SessionStatusEvent.Definitions,
   ...QuestionV1.Event.Definitions,
   ...SessionCompactionEvent.Definitions,

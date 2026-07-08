@@ -93,5 +93,6 @@ function buildStatus(result: GateResult, dryRun: boolean): GenerationRunStatus {
 function summarizeArtifact(artifact: Artifact | undefined) {
   if (!artifact) return undefined
   if (artifact.mode === "full") return `full ${artifact.path}`
+  if (artifact.mode === "files") return `files ${artifact.files.length} files`
   return `patch ${artifact.operations.length} operations`
 }

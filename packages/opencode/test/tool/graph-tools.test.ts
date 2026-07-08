@@ -13,6 +13,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { Effect } from "effect"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
@@ -38,6 +39,7 @@ const it = testEffect(
     GraphAudit.node,
     GraphPlan.node,
     GraphBuild.node,
+    EventV2Bridge.node,
     Truncate.node,
     Agent.node,
   ]), [

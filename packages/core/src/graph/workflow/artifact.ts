@@ -7,6 +7,17 @@ export interface FullArtifact {
   readonly test: string
 }
 
+export interface FilesArtifactFile {
+  readonly path: string
+  readonly code: string
+}
+
+export interface FilesArtifact {
+  readonly mode: "files"
+  readonly files: ReadonlyArray<FilesArtifactFile>
+  readonly test: string
+}
+
 export interface PatchOperation {
   readonly path: string
   readonly preimageHash: string
@@ -19,13 +30,14 @@ export interface PatchArtifact {
   readonly operations: ReadonlyArray<PatchOperation>
 }
 
-export type Artifact = FullArtifact | PatchArtifact
+export type Artifact = FullArtifact | FilesArtifact | PatchArtifact
 
 export interface ArtifactIssue {
   readonly code:
     | "empty_path"
     | "empty_code"
     | "empty_test"
+    | "empty_files"
     | "empty_patch"
     | "empty_old"
     | "preimage_hash_mismatch"
@@ -48,6 +60,7 @@ export function hashContent(content: string) {
 
 export function validateArtifact(artifact: Artifact): ArtifactIssue[] {
   if (artifact.mode === "full") return validateFullArtifact(artifact)
+  if (artifact.mode === "files") return validateFilesArtifact(artifact)
   return validatePatchArtifact(artifact)
 }
 
@@ -59,6 +72,15 @@ export function planArtifactApplication(
   if (artifact.mode === "full") {
     if (formatIssues.length > 0) return { valid: false, issues: formatIssues, files: { ...files } }
     return { valid: true, issues: [], files: { ...files, [artifact.path]: artifact.code } }
+  }
+
+  if (artifact.mode === "files") {
+    if (formatIssues.length > 0) return { valid: false, issues: formatIssues, files: { ...files } }
+    return {
+      valid: true,
+      issues: [],
+      files: { ...files, ...Object.fromEntries(artifact.files.map((file) => [file.path, file.code])) },
+    }
   }
 
   const result = { ...files }
@@ -94,6 +116,21 @@ function validateFullArtifact(artifact: FullArtifact): ArtifactIssue[] {
     issues.push({ code: "empty_test", path: artifact.path || undefined, message: "full artifact test is required" })
   }
   return issues
+}
+
+function validateFilesArtifact(artifact: FilesArtifact): ArtifactIssue[] {
+  return [
+    ...(artifact.test.length === 0 ? [{ code: "empty_test" as const, message: "files artifact test is required" }] : []),
+    ...(artifact.files.length === 0 ? [{ code: "empty_files" as const, message: "files artifact needs at least one file" }] : []),
+    ...artifact.files.flatMap((file) => {
+      const issues: ArtifactIssue[] = []
+      if (file.path.length === 0) issues.push({ code: "empty_path", message: "files artifact file path is required" })
+      if (file.code.length === 0) {
+        issues.push({ code: "empty_code", path: file.path || undefined, message: "files artifact file code is required" })
+      }
+      return issues
+    }),
+  ]
 }
 
 function validatePatchArtifact(artifact: PatchArtifact): ArtifactIssue[] {

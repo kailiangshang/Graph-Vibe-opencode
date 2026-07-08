@@ -4,6 +4,7 @@ import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
+import { GraphArtifactDraft } from "@opencode-ai/core/graph/workflow/artifact-draft"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
 import { PlanExitTool } from "./plan"
@@ -35,6 +36,9 @@ import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
 import { GraphArtifactApplyTool } from "./graph/artifact-apply"
+import { GraphArtifactBeginTool } from "./graph/artifact-begin"
+import { GraphArtifactChunkTool } from "./graph/artifact-chunk"
+import { GraphArtifactSealTool } from "./graph/artifact-seal"
 import { GraphBuildGateTool } from "./graph/build-gate"
 import { GraphDiagnosticsRunTool } from "./graph/diagnostics-run"
 import { GraphPlanAdmitTool } from "./graph/plan-admit"
@@ -121,6 +125,9 @@ const layer = Layer.effect(
     const agent = yield* Agent.Service
     const graphPlanTool = flags.experimentalGraphMode ? yield* GraphPlanAdmitTool : undefined
     const graphBuildTool = flags.experimentalGraphMode ? yield* GraphBuildGateTool : undefined
+    const graphArtifactBeginTool = flags.experimentalGraphMode ? yield* GraphArtifactBeginTool : undefined
+    const graphArtifactChunkTool = flags.experimentalGraphMode ? yield* GraphArtifactChunkTool : undefined
+    const graphArtifactSealTool = flags.experimentalGraphMode ? yield* GraphArtifactSealTool : undefined
     const graphArtifactTool = flags.experimentalGraphMode ? yield* GraphArtifactApplyTool : undefined
     const graphDiagnosticsTool = flags.experimentalGraphMode ? yield* GraphDiagnosticsRunTool : undefined
     const codeMode = flags.experimentalCodeMode ? yield* Effect.promise(() => import("./code-mode")) : undefined
@@ -234,10 +241,19 @@ const layer = Layer.effect(
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
         const graphTools =
-          graphPlanTool && graphBuildTool && graphArtifactTool && graphDiagnosticsTool
+          graphPlanTool &&
+          graphBuildTool &&
+          graphArtifactBeginTool &&
+          graphArtifactChunkTool &&
+          graphArtifactSealTool &&
+          graphArtifactTool &&
+          graphDiagnosticsTool
             ? [
                 yield* Tool.init(graphPlanTool),
                 yield* Tool.init(graphBuildTool),
+                yield* Tool.init(graphArtifactBeginTool),
+                yield* Tool.init(graphArtifactChunkTool),
+                yield* Tool.init(graphArtifactSealTool),
                 yield* Tool.init(graphArtifactTool),
                 yield* Tool.init(graphDiagnosticsTool),
               ]
@@ -263,7 +279,7 @@ const layer = Layer.effect(
         ]
 
         return {
-          custom,
+          custom: flags.experimentalGraphMode ? [] : custom,
           builtin: flags.experimentalGraphMode ? [...builtin.filter(graphSafeBuiltin), ...graphTools] : builtin,
           task: tool.task,
           read: tool.read,
@@ -374,7 +390,10 @@ function isPluginTool(value: unknown): value is ToolDefinition {
   return typeof value === "object" && value !== null && "args" in value && "description" in value && "execute" in value
 }
 
-const graphUnsafeBuiltinIDs = new Set<string>([ShellTool.id, EditTool.id, WriteTool.id, ApplyPatchTool.id])
+// Code mode's `execute` tool can drive MCP/custom tools directly, so it would
+// bypass the graph artifact write gate. Drop it under graph mode even when both
+// experimental flags are enabled.
+const graphUnsafeBuiltinIDs = new Set<string>([ShellTool.id, EditTool.id, WriteTool.id, ApplyPatchTool.id, "execute"])
 
 function graphSafeBuiltin(tool: Tool.Def) {
   return !graphUnsafeBuiltinIDs.has(tool.id)
@@ -475,6 +494,7 @@ export const node = LayerNode.make({
     GraphStorage.node,
     GraphDomain.node,
     GraphAudit.node,
+    GraphArtifactDraft.node,
     GraphPlan.node,
     GraphBuild.node,
     Ripgrep.node,

@@ -46,8 +46,13 @@ describe("graph workflow instructions", () => {
 
       expect(system).toContain("graph_plan_admit")
       expect(system).toContain("graph_build_gate")
+      expect(system).toContain("graph_artifact_begin")
+      expect(system).toContain("graph_artifact_chunk")
+      expect(system).toContain("graph_artifact_seal")
       expect(system).toContain("graph_artifact_apply")
       expect(system).toContain("graph_diagnostics_run")
+      expect(system).toContain("large or multi-file artifacts")
+      expect(system).toContain("draftID")
       expect(system).toContain("Autopilot")
       expect(system).toContain("Plan Phase")
       expect(system).toContain("Fix Phase")

@@ -1,6 +1,7 @@
 export * as Graph from "./graph"
 
 import { Schema } from "effect"
+import { define, inventory } from "./event"
 import { ascending } from "./identifier"
 import { ProjectID } from "./project-id"
 import { statics } from "./schema"
@@ -45,3 +46,7 @@ export const NodeContent = Schema.Record(Schema.String, Schema.Unknown)
 export type NodeContent = typeof NodeContent.Type
 
 export { ProjectID }
+
+const PlanUpdated = define({ type: "graph.plan.updated", schema: { projectID: ProjectID } })
+const MainUpdated = define({ type: "graph.main.updated", schema: { projectID: ProjectID } })
+export const Event = { PlanUpdated, MainUpdated, Definitions: inventory(PlanUpdated, MainUpdated) }
