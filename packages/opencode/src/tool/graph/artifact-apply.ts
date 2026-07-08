@@ -9,6 +9,7 @@ import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { GraphArtifactDraft } from "@opencode-ai/core/graph/workflow/artifact-draft"
 import { buildableNodes } from "@opencode-ai/core/graph/build-order"
+import { Graph } from "@opencode-ai/schema/graph"
 import { Effect, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -250,6 +251,7 @@ export const GraphArtifactApplyTool = Tool.define(
               )
               yield* progress("updating_graph", { bytesPlanned, bytesWritten: bytesPlanned })
               yield* storage.node.update(params.targetNodeID, { status: "implemented", testStatus: "pending" })
+              yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
               const completedProgress = {
                 bytesPlanned,
                 bytesWritten: bytesPlanned,

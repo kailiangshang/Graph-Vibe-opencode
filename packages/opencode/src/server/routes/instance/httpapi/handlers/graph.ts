@@ -6,6 +6,7 @@ import { Graph } from "@opencode-ai/schema"
 import type { ProjectV2 } from "@opencode-ai/core/project"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { Project } from "@/project/project"
 import { Session } from "@/session/session"
 import type { SessionID } from "@/session/schema"
@@ -22,6 +23,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
     const audit = yield* GraphAudit.Service
     const sessionSvc = yield* Session.Service
     const projectSvc = yield* Project.Service
+    const events = yield* EventV2Bridge.Service
 
     const resolveProjectFromDirectory = Effect.fn("GraphHttpApi.resolveProjectFromDirectory")(function* () {
       const routeCtx = yield* WorkspaceRouteContext
@@ -153,14 +155,18 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
     const deleteNode = Effect.fn("GraphHttpApi.deleteNode")(function* (ctx: {
       params: { nodeID: string }
     }) {
+      const projectID = yield* resolveProjectFromDirectory()
       yield* domain.node.delete(ctx.params.nodeID as Graph.NodeID)
+      yield* events.publish(Graph.Event.PlanUpdated, { projectID })
       return true
     })
 
     const deleteEdge = Effect.fn("GraphHttpApi.deleteEdge")(function* (ctx: {
       params: { edgeID: string }
     }) {
+      const projectID = yield* resolveProjectFromDirectory()
       yield* domain.edge.delete(ctx.params.edgeID as Graph.EdgeID)
+      yield* events.publish(Graph.Event.PlanUpdated, { projectID })
       return true
     })
 
@@ -213,7 +219,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       payload: typeof PlanAdmitPayload.Type
     }) {
       const session = yield* resolveSession(ctx.query.session)
-      return yield* plan.admit({
+      const result = yield* plan.admit({
         projectID: session.projectID,
         sessionID: session.id,
         dryRun: ctx.payload.dryRun,
@@ -223,6 +229,8 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
         Effect.catchTag("GraphV2.ValidationError", () => Effect.fail(new HttpApiError.BadRequest({}))),
         Effect.catchTag("GraphV2.NotFoundError", (error) => Effect.fail(notFound(error.id))),
       )
+      if (!ctx.payload.dryRun) yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
+      return result
     })
 
     const updateNodeStatus = Effect.fn("GraphHttpApi.updateNodeStatus")(function* (ctx: {
@@ -230,12 +238,14 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       payload: typeof NodeStatusPayload.Type
     }) {
       const nodeID = ctx.params.nodeID as Graph.NodeID
+      const projectID = yield* resolveProjectFromDirectory()
       yield* domain.node
         .update(nodeID, { status: ctx.payload.status })
         .pipe(
           Effect.catchTag("GraphV2.ValidationError", () => Effect.fail(new HttpApiError.BadRequest({}))),
           Effect.catchTag("GraphV2.NotFoundError", () => Effect.fail(notFound(`Node not found: ${nodeID}`))),
         )
+      yield* events.publish(Graph.Event.PlanUpdated, { projectID })
       return yield* domain.node.get(nodeID).pipe(
         Effect.catchTag("GraphV2.NotFoundError", () => Effect.fail(notFound(`Node not found: ${nodeID}`))),
       )
@@ -246,11 +256,13 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       payload: void | typeof PromotePayload.Type
     }) {
       const session = yield* resolveSession(ctx.query.session)
-      return yield* domain.promote({
+      const result = yield* domain.promote({
         projectID: session.projectID,
         sessionID: session.id,
         message: ctx.payload?.message,
       })
+      yield* events.publish(Graph.Event.MainUpdated, { projectID: session.projectID })
+      return result
     })
 
     return handlers

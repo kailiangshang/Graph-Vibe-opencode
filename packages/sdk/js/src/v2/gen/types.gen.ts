@@ -79,6 +79,8 @@ export type Event =
   | EventMcpBrowserOpenFailed
   | EventCommandExecuted
   | EventProjectUpdated
+  | EventGraphPlanUpdated
+  | EventGraphMainUpdated
   | EventSessionStatus
   | EventSessionIdle
   | EventQuestionAsked
@@ -1488,6 +1490,20 @@ export type GlobalEvent = {
           commands?: ProjectCommands
           time: ProjectTime
           sandboxes: Array<string>
+        }
+      }
+    | {
+        id: string
+        type: "graph.plan.updated"
+        properties: {
+          projectID: string
+        }
+      }
+    | {
+        id: string
+        type: "graph.main.updated"
+        properties: {
+          projectID: string
         }
       }
     | {
@@ -3074,6 +3090,8 @@ export type V2Event =
   | McpBrowserOpenFailed
   | CommandExecuted
   | ProjectUpdated
+  | GraphPlanUpdated
+  | GraphMainUpdated
   | SessionStatus2
   | SessionIdle
   | QuestionAsked
@@ -6057,6 +6075,40 @@ export type ProjectUpdated = {
   }
 }
 
+export type GraphPlanUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "graph.plan.updated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    projectID: string
+  }
+}
+
+export type GraphMainUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "graph.main.updated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    projectID: string
+  }
+}
+
 export type SessionIdle = {
   id: string
   metadata?: {
@@ -7072,6 +7124,22 @@ export type EventProjectUpdated = {
     commands?: ProjectCommands
     time: ProjectTime
     sandboxes: Array<string>
+  }
+}
+
+export type EventGraphPlanUpdated = {
+  id: string
+  type: "graph.plan.updated"
+  properties: {
+    projectID: string
+  }
+}
+
+export type EventGraphMainUpdated = {
+  id: string
+  type: "graph.main.updated"
+  properties: {
+    projectID: string
   }
 }
 

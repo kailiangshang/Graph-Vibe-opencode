@@ -76,7 +76,7 @@ export default function GraphPage() {
   onMount(() => {
     const stop = sdk().event.listen((evt: { details: { type: string } }) => {
       const type = evt.details.type
-      if (type === "message.updated" || type === "file.watcher.updated" || type === "session.updated") {
+      if (type === "message.updated" || type === "file.watcher.updated" || type === "session.updated" || type === "graph.plan.updated" || type === "graph.main.updated") {
         queryClient.invalidateQueries({ queryKey: [params.dir, params.id, "graph"] })
       }
     })
