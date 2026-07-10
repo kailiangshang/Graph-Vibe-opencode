@@ -285,6 +285,7 @@ function GraphCanvas(props: {
   let dragNode: SimNode | null = null
   let panning = false
   let lastMouse = { x: 0, y: 0 }
+  let lastPinchDist = 0
   let rafId = 0
 
   const initSim = () => {
@@ -441,8 +442,8 @@ function GraphCanvas(props: {
       }
 
       if (showLabels) {
-        ctx.fillStyle = "#e0e0e0"
-        ctx.font = "12px system-ui, sans-serif"
+        ctx.fillStyle = isSelected ? "#fff" : "rgba(128,128,128,0.85)"
+        ctx.font = `${isSelected ? "600 " : ""}12px system-ui, sans-serif`
         ctx.textAlign = "center"
         ctx.fillText(n.data.name, n.x, n.y + NODE_RADIUS + 16)
       }
@@ -532,6 +533,47 @@ function GraphCanvas(props: {
     cam.y += e.clientY - newScreen.y
   }
 
+  const zoomBy = (factor: number) => {
+    cam.zoom = Math.max(0.1, Math.min(5, cam.zoom * factor))
+  }
+
+  const resetView = () => {
+    cam = { x: 0, y: 0, zoom: 1 }
+  }
+
+  const onTouchStart = (e: TouchEvent) => {
+    if (e.touches.length === 1) {
+      panning = true
+      lastMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+    } else if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX
+      const dy = e.touches[0].clientY - e.touches[1].clientY
+      lastPinchDist = Math.sqrt(dx * dx + dy * dy)
+    }
+  }
+
+  const onTouchMove = (e: TouchEvent) => {
+    if (e.touches.length === 1 && panning) {
+      e.preventDefault()
+      cam.x += e.touches[0].clientX - lastMouse.x
+      cam.y += e.touches[0].clientY - lastMouse.y
+      lastMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+    } else if (e.touches.length === 2 && lastPinchDist > 0) {
+      e.preventDefault()
+      const dx = e.touches[0].clientX - e.touches[1].clientX
+      const dy = e.touches[0].clientY - e.touches[1].clientY
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      const factor = dist / lastPinchDist
+      cam.zoom = Math.max(0.1, Math.min(5, cam.zoom * factor))
+      lastPinchDist = dist
+    }
+  }
+
+  const onTouchEnd = () => {
+    panning = false
+    lastPinchDist = 0
+  }
+
   onMount(() => {
     initSim()
     const canvas = canvasRef!
@@ -539,6 +581,9 @@ function GraphCanvas(props: {
     window.addEventListener("mousemove", onMouseMove)
     window.addEventListener("mouseup", onMouseUp)
     canvas.addEventListener("wheel", onWheel, { passive: false })
+    canvas.addEventListener("touchstart", onTouchStart, { passive: false })
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false })
+    canvas.addEventListener("touchend", onTouchEnd)
     loop()
   })
 
@@ -548,6 +593,9 @@ function GraphCanvas(props: {
     if (canvas) {
       canvas.removeEventListener("mousedown", onMouseDown)
       canvas.removeEventListener("wheel", onWheel)
+      canvas.removeEventListener("touchstart", onTouchStart)
+      canvas.removeEventListener("touchmove", onTouchMove)
+      canvas.removeEventListener("touchend", onTouchEnd)
     }
     window.removeEventListener("mousemove", onMouseMove)
     window.removeEventListener("mouseup", onMouseUp)
@@ -555,7 +603,30 @@ function GraphCanvas(props: {
 
   return (
     <div ref={containerRef} class="relative h-full w-full cursor-grab active:cursor-grabbing">
-      <canvas ref={canvasRef} class="h-full w-full" />
+      <canvas ref={canvasRef} class="h-full w-full touch-none" />
+      <div class="absolute right-3 top-3 flex flex-col gap-1">
+        <button
+          class="flex size-8 items-center justify-center rounded-md border border-border-weak-base bg-background-base text-text-strong shadow-sm hover:bg-surface-raised-base-hover"
+          onClick={() => zoomBy(1.25)}
+          aria-label="Zoom in"
+        >
+          +
+        </button>
+        <button
+          class="flex size-8 items-center justify-center rounded-md border border-border-weak-base bg-background-base text-text-strong shadow-sm hover:bg-surface-raised-base-hover"
+          onClick={() => zoomBy(0.8)}
+          aria-label="Zoom out"
+        >
+          −
+        </button>
+        <button
+          class="flex size-8 items-center justify-center rounded-md border border-border-weak-base bg-background-base text-text-strong shadow-sm hover:bg-surface-raised-base-hover"
+          onClick={resetView}
+          aria-label="Reset view"
+        >
+          ⤢
+        </button>
+      </div>
     </div>
   )
 }
