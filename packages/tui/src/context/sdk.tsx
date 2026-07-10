@@ -13,7 +13,6 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   init: (props: {
     url: string
     webUrl?: string
-    webServerUrl?: string
     directory?: string
     fetch?: typeof fetch
     headers?: RequestInit["headers"]
@@ -149,7 +148,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       fetch: props.fetch ?? fetch,
       url: props.url,
       webUrl: props.webUrl,
-      webServerUrl: props.webServerUrl,
+      headers: props.headers,
     }
   },
 })

@@ -28,27 +28,30 @@ export function summarizeCurrentPlan(nodes: readonly GraphNode[]) {
   }
 }
 
-export function graphWebUrl(input: { webUrl?: string; serverUrl: string; directory: string; sessionID: string }) {
+export function graphWebUrl(input: {
+  webUrl?: string
+  serverUrl: string
+  directory: string
+  sessionID: string
+  preferDirectoryRoute?: boolean
+}) {
   if (!input.webUrl) return
   const web = new URL(input.webUrl)
   const server = new URL(input.serverUrl)
   const route =
-    web.origin === server.origin
+    input.preferDirectoryRoute || web.origin === server.origin
       ? `/${base64Encode(input.directory)}/session/${input.sessionID}/graph`
       : `/server/${base64Encode(input.serverUrl.replace(/\/$/, ""))}/session/${input.sessionID}/graph`
   return web.origin + route
 }
 
-export function graphServerUrl(webServerUrl: string | undefined, sdkUrl: string) {
-  return webServerUrl ?? sdkUrl
-}
-
 export async function graphWebAvailable(
   webUrl: string | undefined,
   request: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> = fetch,
+  headers?: RequestInit["headers"],
 ) {
   if (!webUrl) return false
-  return request(webUrl, { method: "HEAD" })
+  return request(webUrl, { method: "HEAD", headers })
     .then((response) => response.ok)
     .catch(() => false)
 }

@@ -89,13 +89,7 @@ import { cliErrorMessage, errorFormat } from "./util/error"
 import { Product } from "@opencode-ai/core/product"
 import { DialogGraphGuide } from "./component/dialog-graph-guide"
 import { DialogGraphStatus } from "./component/dialog-graph-status"
-import {
-  graphServerUrl,
-  graphWebAvailable,
-  graphWebUrl,
-  startGraphPrompt,
-  summarizeCurrentPlan,
-} from "./graph/workflow"
+import { graphWebAvailable, graphWebUrl, startGraphPrompt, summarizeCurrentPlan } from "./graph/workflow"
 
 registerOpencodeSpinner()
 
@@ -152,7 +146,6 @@ const appBindingCommands = [
 export type TuiInput = {
   url: string
   webUrl?: string
-  webServerUrl?: string
   args: Args
   config: TuiConfig.Resolved
   onSnapshot?: () => Promise<string[]>
@@ -310,7 +303,6 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                         <SDKProvider
                                           url={input.url}
                                           webUrl={input.webUrl}
-                                          webServerUrl={input.webServerUrl}
                                           directory={input.directory}
                                           fetch={input.fetch}
                                           headers={input.headers}
@@ -670,9 +662,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
                 }
                 const url = graphWebUrl({
                   webUrl: sdk.webUrl,
-                  serverUrl: graphServerUrl(sdk.webServerUrl, sdk.url),
+                  serverUrl: sdk.url,
                   directory: sdk.directory ?? process.cwd(),
                   sessionID: route.data.sessionID,
+                  preferDirectoryRoute: sdk.url === "http://opencode.internal",
                 })
                 if (!url) {
                   toast.show({
@@ -681,7 +674,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
                   })
                   return
                 }
-                if (!(await graphWebAvailable(sdk.webUrl))) {
+                if (!(await graphWebAvailable(sdk.webUrl, fetch, sdk.headers))) {
                   toast.show({
                     variant: "info",
                     message: "Graph Vibe Web is unavailable. Run `graph-vibe web`, then retry /graph-open.",

@@ -214,7 +214,7 @@ function buildIssueURL(message: string, stack: string) {
   url.searchParams.set("terminal", describeTerminal())
   url.searchParams.set(
     "reproduce",
-    "Reported automatically from the opencode crash screen. If you can, describe what you were doing when it crashed.",
+    `Reported automatically from the ${Product.current().name} crash screen. If you can, describe what you were doing when it crashed.`,
   )
 
   // Budget the stack against the fully URL-encoded length (not the raw length) so
@@ -223,7 +223,7 @@ function buildIssueURL(message: string, stack: string) {
   // so measuring url.toString() is both correct and safe on any input.
   const MAX_URL_LENGTH = 6000
   const marker = "\n... (truncated)"
-  const head = `The opencode TUI crashed with an unexpected error.\n\n**Error:** ${message}\n\n**Stack trace:**\n`
+  const head = `The ${Product.current().name} TUI crashed with an unexpected error.\n\n**Error:** ${message}\n\n**Stack trace:**\n`
   const setBody = (body: string) => url.searchParams.set("description", head + "```\n" + body + "\n```")
 
   setBody(stack)

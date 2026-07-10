@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
   TASK_DRAFT,
-  graphServerUrl,
   graphWebAvailable,
   graphWebUrl,
   startGraphPrompt,
@@ -78,9 +77,16 @@ describe("Graph Workflow", () => {
     ).toBe("http://localhost:4444/server/aHR0cDovLzEyNy4wLjAuMTo0MDk2/session/ses_123/graph")
   })
 
-  test("prefers the browser-reachable backend URL", () => {
-    expect(graphServerUrl("http://127.0.0.1:4096", "http://opencode.internal")).toBe("http://127.0.0.1:4096")
-    expect(graphServerUrl(undefined, "http://localhost:4096")).toBe("http://localhost:4096")
+  test("uses the Vite-configured backend for an internal source TUI", () => {
+    expect(
+      graphWebUrl({
+        webUrl: "http://localhost:4444",
+        serverUrl: "http://opencode.internal",
+        directory: "/work/project",
+        sessionID: "ses_123",
+        preferDirectoryRoute: true,
+      }),
+    ).toBe("http://localhost:4444/L3dvcmsvcHJvamVjdA/session/ses_123/graph")
   })
 
   test("checks Web availability before opening", async () => {
@@ -92,6 +98,17 @@ describe("Graph Workflow", () => {
     expect(await graphWebAvailable("http://localhost:4444", async () => Promise.reject(new Error("offline")))).toBe(
       false,
     )
+
+    const authorization: string[] = []
+    await graphWebAvailable(
+      "http://localhost:4444",
+      async (_input, init) => {
+        authorization.push(new Headers(init?.headers).get("authorization") ?? "")
+        return new Response()
+      },
+      { authorization: "Basic token" },
+    )
+    expect(authorization).toEqual(["Basic token"])
   })
 
   test("reports a missing Web endpoint", () => {
