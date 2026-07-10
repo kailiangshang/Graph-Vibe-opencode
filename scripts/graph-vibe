@@ -9,6 +9,7 @@ set -euo pipefail
 #   ./scripts/graph-vibe debug skill    # list discovered skills
 
 export OPENCODE_ENABLE_GRAPH_MODE=1
+export OPENCODE_CLIENT=graph-vibe
 export OPENCODE_DISABLE_CHANNEL_DB="${OPENCODE_DISABLE_CHANNEL_DB:-1}"
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
@@ -21,6 +22,8 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 REPO_ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
 PROJECT_DIR="$PWD"
+export OPENCODE_GRAPH_VIBE_SOURCE_ROOT="$REPO_ROOT"
+export OPENCODE_INITIAL_DIRECTORY="$PROJECT_DIR"
 
 cd "$REPO_ROOT/packages/opencode"
 
