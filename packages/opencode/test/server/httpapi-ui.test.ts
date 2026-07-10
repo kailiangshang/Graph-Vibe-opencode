@@ -91,6 +91,7 @@ function uiApp(input?: {
   username?: string
   client?: Layer.Layer<HttpClient.HttpClient>
   disableEmbeddedWebUi?: boolean
+  allowUpstreamFallback?: boolean
 }) {
   const handler = HttpRouter.toWebHandler(
     HttpRouter.use((router) =>
@@ -99,7 +100,12 @@ function uiApp(input?: {
         const client = yield* HttpClient.HttpClient
         const flags = yield* RuntimeFlags.Service
         yield* router.add("*", "/*", (request) =>
-          serveUIEffect(request, { fs, client, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
+          serveUIEffect(request, {
+            fs,
+            client,
+            disableEmbeddedWebUi: flags.disableEmbeddedWebUi,
+            allowUpstreamFallback: input?.allowUpstreamFallback ?? true,
+          }),
         )
       }),
     ).pipe(
@@ -139,7 +145,12 @@ function routeOrderingApp() {
           Effect.succeed(HttpServerResponse.jsonUnsafe({ error: "Not Found" }, { status: 404 })),
         )
         yield* router.add("*", "/*", (request) =>
-          serveUIEffect(request, { fs, client, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
+          serveUIEffect(request, {
+            fs,
+            client,
+            disableEmbeddedWebUi: flags.disableEmbeddedWebUi,
+            allowUpstreamFallback: true,
+          }),
         )
       }),
     ).pipe(
@@ -184,6 +195,23 @@ function responseText(response: Response) {
 }
 
 describe("HttpApi UI fallback", () => {
+  it.live("refuses upstream UI fallback for Graph Vibe", () =>
+    Effect.gen(function* () {
+      let requested = false
+      const response = yield* uiApp({
+        disableEmbeddedWebUi: true,
+        allowUpstreamFallback: false,
+        client: httpClient(new Response("upstream"), () => {
+          requested = true
+        }),
+      }).request("/")
+
+      expect(response.status).toBe(503)
+      expect(yield* responseText(response)).toContain("Graph Vibe Web assets are unavailable")
+      expect(requested).toBe(false)
+    }),
+  )
+
   it.live("serves the web UI through the HTTP API app", () =>
     Effect.gen(function* () {
       let proxiedUrl: string | undefined
@@ -217,6 +245,7 @@ describe("HttpApi UI fallback", () => {
           fs,
           client,
           disableEmbeddedWebUi: flags.disableEmbeddedWebUi,
+          allowUpstreamFallback: true,
         })
       }).pipe(
         Effect.provide(
@@ -267,6 +296,7 @@ describe("HttpApi UI fallback", () => {
           fs,
           client,
           disableEmbeddedWebUi: flags.disableEmbeddedWebUi,
+          allowUpstreamFallback: true,
         })
       }).pipe(
         Effect.provide(

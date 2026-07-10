@@ -119,6 +119,7 @@ import { corsVaryFix } from "./middleware/cors-vary"
 import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
+import { Product } from "@opencode-ai/core/product"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -202,7 +203,12 @@ const uiRoute = HttpRouter.use((router) =>
     const client = yield* HttpClient.HttpClient
     const flags = yield* RuntimeFlags.Service
     yield* router.add("*", "/*", (request) =>
-      serveUIEffect(request, { fs, client, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
+      serveUIEffect(request, {
+        fs,
+        client,
+        disableEmbeddedWebUi: flags.disableEmbeddedWebUi,
+        allowUpstreamFallback: Product.current() !== Product.GraphVibe,
+      }),
     )
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
