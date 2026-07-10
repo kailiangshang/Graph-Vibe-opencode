@@ -292,6 +292,20 @@ describe("RuntimeFlags", () => {
     }),
   )
 
+  it.effect("experimentalGraphMode is enabled by OPENCODE_ENABLE_GRAPH_MODE without experimental", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(
+          fromConfig({
+            OPENCODE_ENABLE_GRAPH_MODE: "true",
+          }),
+        ),
+      )
+
+      expect(flags.experimentalGraphMode).toBe(true)
+    }),
+  )
+
   for (const input of [
     { name: "absent", config: {}, expected: undefined },
     {

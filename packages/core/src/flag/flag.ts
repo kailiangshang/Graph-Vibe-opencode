@@ -58,7 +58,7 @@ export const Flag = {
     return enabledByExperimental("OPENCODE_EXPERIMENTAL_REFERENCES")
   },
   get OPENCODE_EXPERIMENTAL_GRAPH_MODE() {
-    return enabledByExperimental("OPENCODE_EXPERIMENTAL_GRAPH_MODE")
+    return truthy("OPENCODE_ENABLE_GRAPH_MODE") || enabledByExperimental("OPENCODE_EXPERIMENTAL_GRAPH_MODE")
   },
   get OPENCODE_TUI_CONFIG() {
     return process.env["OPENCODE_TUI_CONFIG"]

@@ -45,7 +45,10 @@ export class Service extends ConfigService.Service<Service>()("@opencode/Runtime
   experimentalLspTool: enabledByExperimental("OPENCODE_EXPERIMENTAL_LSP_TOOL"),
   experimentalOxfmt: enabledByExperimental("OPENCODE_EXPERIMENTAL_OXFMT"),
   experimentalPlanMode: enabledByExperimental("OPENCODE_EXPERIMENTAL_PLAN_MODE"),
-  experimentalGraphMode: enabledByExperimental("OPENCODE_EXPERIMENTAL_GRAPH_MODE"),
+  experimentalGraphMode: Config.all({
+    enabled: bool("OPENCODE_ENABLE_GRAPH_MODE"),
+    legacy: enabledByExperimental("OPENCODE_EXPERIMENTAL_GRAPH_MODE"),
+  }).pipe(Config.map((flags) => flags.enabled || flags.legacy)),
   experimentalCodeMode: enabledByExperimental("OPENCODE_EXPERIMENTAL_CODE_MODE"),
   experimentalEventSystem: enabledByExperimental("OPENCODE_EXPERIMENTAL_EVENT_SYSTEM"),
   experimentalWorkspaces: enabledByExperimental("OPENCODE_EXPERIMENTAL_WORKSPACES"),
