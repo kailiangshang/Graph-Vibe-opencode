@@ -32,7 +32,7 @@ import { CommandProvider, useCommand, type CommandOption } from "@/context/comma
 import { CommentsProvider } from "@/context/comments"
 import { FileProvider } from "@/context/file"
 import { ServerSDKProvider } from "@/context/server-sdk"
-import { ServerSyncProvider } from "@/context/server-sync"
+import { ServerSyncProvider, useServerSync } from "@/context/server-sync"
 import { GlobalProvider, useGlobal } from "@/context/global"
 import { HighlightsProvider } from "@/context/highlights"
 import { LanguageProvider, type Locale, useLanguage } from "@/context/language"
@@ -55,6 +55,7 @@ import { useCheckServerHealth } from "./utils/server-health"
 import { legacySessionServer, requireServerKey, sessionHref } from "./utils/session-route"
 
 import { SessionPage, TargetSessionRouteContent } from "@/pages/session"
+import { createSessionLineage } from "@/pages/session/session-lineage"
 import { NewHome, LegacyHome } from "@/pages/home"
 
 const NewSession = lazy(() => import("@/pages/new-session"))
@@ -556,6 +557,7 @@ function Routes(props: { serverScoped?: JSX.Element }) {
       </Show>
       <Route path="/new-session" component={DraftRoute} />
       <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
+      <Route path="/server/:serverKey/session/:id/graph" component={TargetGraphRoute} />
     </>
   )
 }
@@ -577,6 +579,47 @@ function LegacyTargetSessionRoute() {
           params.id,
         )}
       />
+    </Show>
+  )
+}
+
+function TargetGraphRoute() {
+  const params = useParams<{ serverKey: string; id: string }>()
+  const global = useGlobal()
+  const conn = createMemo(() => {
+    const key = requireServerKey(params.serverKey)
+    return global.servers.list().find((item) => ServerConnection.key(item) === key)
+  })
+
+  return (
+    <Show when={requireServerKey(params.serverKey)} keyed>
+      <ServerSDKProvider server={conn}>
+        <ServerSyncProvider server={conn}>
+          <TargetGraphRouteContent />
+        </ServerSyncProvider>
+      </ServerSDKProvider>
+    </Show>
+  )
+}
+
+function TargetGraphRouteContent() {
+  const params = useParams<{ serverKey: string; id: string }>()
+  const sync = useServerSync()
+  const current = createSessionLineage(
+    () => params.id,
+    () => sync().session.lineage,
+  )
+  const directory = createMemo(() => current()?.session.directory)
+
+  return (
+    <Show when={directory()} keyed>
+      {(dir) => (
+        <SDKProvider directory={dir}>
+          <DirectoryDataProvider directory={dir}>
+            <GraphPage />
+          </DirectoryDataProvider>
+        </SDKProvider>
+      )}
     </Show>
   )
 }

@@ -22,9 +22,11 @@ import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
 import { focusTerminalById } from "@/pages/session/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { useSDK } from "@/context/sdk"
 import { messageAgentColor } from "@/utils/agent"
 import { decode64 } from "@/utils/base64"
 import { Persist, persisted } from "@/utils/persist"
+import { legacySessionGraphHref } from "@/utils/session-route"
 import { StatusPopover, StatusPopoverV2 } from "../status-popover"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
@@ -32,6 +34,7 @@ import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { reviewTooltipKeybind } from "../command-tooltip-keybind"
 import { useTitlebarRightMount } from "../titlebar"
+import { A } from "@solidjs/router"
 
 const OPEN_APPS = [
   "vscode",
@@ -143,11 +146,19 @@ export function SessionHeader() {
   const platform = usePlatform()
   const language = useLanguage()
   const settings = useSettings()
+  const sdk = useSDK()
   const sync = useSync()
   const terminal = useTerminal()
   const { params, view } = useSessionLayout()
 
-  const projectDirectory = createMemo(() => decode64(params.dir) ?? "")
+  const projectDirectory = createMemo(() => decode64(params.dir) ?? sdk().directory ?? "")
+  const graphHref = createMemo(() => {
+    if (!params.id) return
+    if (params.serverKey) return `/server/${params.serverKey}/session/${params.id}/graph`
+    const directory = projectDirectory()
+    if (!directory) return
+    return legacySessionGraphHref(directory, params.id)
+  })
   const project = createMemo(() => {
     const directory = projectDirectory()
     if (!directory) return
@@ -245,6 +256,8 @@ export function SessionHeader() {
     reviewVisible: isDesktop(),
     reviewOpened: view().reviewPanel.opened(),
     onReviewToggle: () => view().reviewPanel.toggle(),
+    graphHref: graphHref(),
+    graphLabel: "Graph",
   }))
 
   const selectApp = (app: OpenApp) => {
@@ -448,6 +461,19 @@ export function SessionHeader() {
                         <StatusPopover />
                       </Tooltip>
                     </Show>
+                    <Show when={graphHref()}>
+                      {(href) => (
+                        <Tooltip placement="bottom" value="Graph">
+                          <A
+                            href={href()}
+                            class="titlebar-icon w-8 h-6 p-0 box-border shrink-0 inline-flex items-center justify-center rounded-md"
+                            aria-label="Graph"
+                          >
+                            <Icon size="small" name="branch" />
+                          </A>
+                        </Tooltip>
+                      )}
+                    </Show>
                     <TooltipKeybind
                       title={language.t("command.terminal.toggle")}
                       keybind={command.keybind("terminal.toggle")}
@@ -527,6 +553,8 @@ type SessionHeaderV2ActionsState = {
   reviewVisible: boolean
   reviewOpened: boolean
   onReviewToggle: () => void
+  graphHref?: string
+  graphLabel: string
 }
 
 function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
@@ -534,6 +562,22 @@ function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
 
   return (
     <div class="flex items-center gap-2">
+      <Show when={props.state.graphHref}>
+        {(href) => (
+          <TooltipV2 class="shrink-0" placement="bottom" value={props.state.graphLabel}>
+            <A
+              href={href()}
+              data-component="icon-button-v2"
+              data-size="large"
+              data-variant="ghost-muted"
+              class="!w-9 shrink-0"
+              aria-label={props.state.graphLabel}
+            >
+              <IconV2 name="branch" />
+            </A>
+          </TooltipV2>
+        )}
+      </Show>
       <Show when={props.state.statusVisible}>
         <Tooltip placement="bottom" value={props.state.statusLabel}>
           <StatusPopoverV2 />

@@ -6,8 +6,16 @@ export function sessionHref(server: ServerConnection.Key, sessionID: string) {
   return `/server/${base64Encode(server)}/session/${sessionID}`
 }
 
+export function sessionGraphHref(server: ServerConnection.Key, sessionID: string) {
+  return `${sessionHref(server, sessionID)}/graph`
+}
+
 export function legacySessionHref(directory: string, sessionID: string) {
   return `/${base64Encode(directory)}/session/${sessionID}`
+}
+
+export function legacySessionGraphHref(directory: string, sessionID: string) {
+  return `${legacySessionHref(directory, sessionID)}/graph`
 }
 
 export function requireServerKey(segment: string | undefined) {

@@ -72,40 +72,41 @@ export default function GraphPage() {
   const [viewMode, setViewMode] = createSignal<"list" | "graph">("graph")
   const [dataSource, setDataSource] = createSignal<"currentPlan" | "main">("currentPlan")
   const [levelFilter, setLevelFilter] = createSignal<"all" | "L1" | "L2">("all")
+  const directory = () => sdk().directory
 
   onMount(() => {
     const stop = sdk().event.listen((evt: { details: { type: string } }) => {
       const type = evt.details.type
       if (type === "message.updated" || type === "file.watcher.updated" || type === "session.updated" || type === "graph.plan.updated" || type === "graph.main.updated") {
-        queryClient.invalidateQueries({ queryKey: [params.dir, params.id, "graph"] })
+        queryClient.invalidateQueries({ queryKey: [directory(), params.id, "graph"] })
       }
     })
     onCleanup(stop)
   })
 
   const graphQuery = createQuery(() => ({
-    queryKey: [params.dir, params.id, "graph", dataSource()] as const,
+    queryKey: [directory(), params.id, "graph", dataSource()] as const,
     queryFn: async () => {
       if (dataSource() === "main") {
-        const res = await sdk().client.graph.main({ directory: params.dir })
+        const res = await sdk().client.graph.main({ directory: directory() })
         return res.data as GraphView
       }
       const res = await sdk().client.graph.currentPlan({
         session: params.id!,
-        directory: params.dir,
+        directory: directory(),
       })
       return res.data as GraphView
     },
   }))
 
   const nodeReadinessQuery = createQuery(() => ({
-    queryKey: [params.dir, params.id, "graph", "readiness", selectedNodeID()] as const,
+    queryKey: [directory(), params.id, "graph", "readiness", selectedNodeID()] as const,
     enabled: selectedNodeID() !== null,
     queryFn: async () => {
       const res = await sdk().client.graph.nodeReadiness({
         nodeID: selectedNodeID()!,
         session: params.id!,
-        directory: params.dir,
+        directory: directory(),
       })
       return res.data as {
         inCurrentPlan: boolean

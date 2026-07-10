@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { ServerConnection } from "@/context/server"
-import { legacySessionHref, legacySessionServer, requireServerKey, rootSession, sessionHref } from "./session-route"
+import {
+  legacySessionGraphHref,
+  legacySessionHref,
+  legacySessionServer,
+  requireServerKey,
+  rootSession,
+  sessionGraphHref,
+  sessionHref,
+} from "./session-route"
 
 describe("session routes", () => {
   test("uses the unique persisted server for a legacy session route", () => {
@@ -34,6 +42,13 @@ describe("session routes", () => {
     expect(requireServerKey(href.split("/")[2])).toBe(server)
   })
 
+  test("builds a server-keyed graph route", () => {
+    const server = ServerConnection.Key.make("https://example.com:4096")
+    expect(sessionGraphHref(server, "session-1")).toBe(
+      "/server/aHR0cHM6Ly9leGFtcGxlLmNvbTo0MDk2/session/session-1/graph",
+    )
+  })
+
   test("rejects malformed server keys", () => {
     expect(() => requireServerKey("not-base64")).toThrow("Invalid server route")
   })
@@ -41,6 +56,12 @@ describe("session routes", () => {
   test("builds the legacy directory-keyed route", () => {
     expect(legacySessionHref("/Users/example/project", "session-1")).toBe(
       "/L1VzZXJzL2V4YW1wbGUvcHJvamVjdA/session/session-1",
+    )
+  })
+
+  test("builds the legacy directory-keyed graph route", () => {
+    expect(legacySessionGraphHref("/Users/example/project", "session-1")).toBe(
+      "/L1VzZXJzL2V4YW1wbGUvcHJvamVjdA/session/session-1/graph",
     )
   })
 
