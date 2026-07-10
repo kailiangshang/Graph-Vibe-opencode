@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Graph Vibe OpenCode — one-command launcher
+# Starts backend (graph mode) + web UI together.
+#
+# Usage:
+#   ./scripts/start                     # start everything, default ports
+#   ./scripts/start --port 8080         # custom API port
+#   PORT_UI=4444 ./scripts/start        # custom UI port
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+API_PORT="${PORT_API:-4096}"
+UI_PORT="${PORT_UI:-4444}"
+
+export OPENCODE_ENABLE_GRAPH_MODE=1
+export OPENCODE_DISABLE_CHANNEL_DB="${OPENCODE_DISABLE_CHANNEL_DB:-1}"
+
+cleanup() {
+  [ -n "${BACKEND_PID:-}" ] && kill "$BACKEND_PID" 2>/dev/null
+  [ -n "${UI_PID:-}" ] && kill "$UI_PID" 2>/dev/null
+}
+trap cleanup EXIT INT TERM
+
+echo "=== Graph Vibe OpenCode ==="
+echo ""
+
+# 1. Backend
+echo "[1/2] Starting backend (graph mode) on :${API_PORT} ..."
+bun run --conditions=browser "${REPO_ROOT}/packages/opencode/src/index.ts" serve --port "$API_PORT" &
+BACKEND_PID=$!
+
+# Wait for backend to respond
+for i in $(seq 1 20); do
+  if curl -sf "http://127.0.0.1:${API_PORT}/config" >/dev/null 2>&1; then
+    echo "      Backend ready."
+    break
+  fi
+  sleep 0.5
+done
+
+# 2. Web UI
+echo "[2/2] Starting web UI on :${UI_PORT} ..."
+cd "${REPO_ROOT}/packages/app"
+bun dev -- --port "$UI_PORT" &
+UI_PID=$!
+
+# Wait for vite
+for i in $(seq 1 15); do
+  if curl -sf "http://localhost:${UI_PORT}/" >/dev/null 2>&1; then
+    echo "      Web UI ready."
+    break
+  fi
+  sleep 0.5
+done
+
+echo ""
+echo "================================"
+echo "  Web UI:  http://localhost:${UI_PORT}"
+echo "  API:     http://127.0.0.1:${API_PORT}"
+echo "  Graph:   ENABLED"
+echo "================================"
+echo ""
+echo "Ctrl+C to stop both."
+
+wait
