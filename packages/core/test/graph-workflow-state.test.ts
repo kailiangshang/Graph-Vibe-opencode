@@ -11,6 +11,8 @@ import type { EdgeID, EdgeRow, GraphView, NodeID, NodeRow } from "@opencode-ai/c
 import { GraphEdgeTable, GraphNodeTable } from "@opencode-ai/core/graph/sql"
 import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
+import { tmpdir } from "./fixture/tmpdir"
+import path from "node:path"
 
 describe("Graph collaboration schemas", () => {
   test("accepts execution modes and checkpoint values", () => {
@@ -247,7 +249,20 @@ describe("GraphWorkflowState", () => {
         const approved = yield* workflow.approve({ sessionID: SID, expectedRevision: paused.revision })
         const repeated = yield* workflow.approve({ sessionID: SID, expectedRevision: paused.revision })
         expect(approved.checkpointStatus).toBe("approved")
+        expect(approved.revision).toBe(paused.revision + 1)
         expect(repeated).toEqual(approved)
+        const stalePause = yield* workflow.pause({
+          sessionID: SID,
+          expectedRevision: paused.revision,
+        }).pipe(Effect.flip)
+        expect(stalePause._tag).toBe("GraphWorkflowState.RevisionConflict")
+        const staleMode = yield* workflow.setMode({
+          sessionID: SID,
+          projectID: PID,
+          mode: "autopilot",
+          expectedRevision: paused.revision,
+        }).pipe(Effect.flip)
+        expect(staleMode._tag).toBe("GraphWorkflowState.RevisionConflict")
       }),
     )
   })
@@ -289,9 +304,14 @@ describe("GraphWorkflowState", () => {
       Effect.gen(function* () {
         const workflow = yield* GraphWorkflowState.Service
         yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "atomic", expectedRevision: 0 })
-        yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
         const graph = { ...workflowGraph, nodes: workflowGraph.nodes.map((item) => item.id === atomicA.id ? { ...item, status: "verified" as const, testStatus: "passed" as const } : item) }
-        const advanced = yield* workflow.advanceVerified({ sessionID: SID, nodeID: atomicA.id, graph })
+        const advanced = yield* workflow.advanceVerified({
+          sessionID: SID,
+          nodeID: atomicA.id,
+          graph,
+          expectedRevision: planned.revision,
+        })
 
         expect(advanced.currentNodeID).toBe(atomicB.id)
         expect(advanced.checkpointKind).toBe("atomic")
@@ -326,10 +346,11 @@ describe("GraphWorkflowState", () => {
         }).run().pipe(Effect.orDie)
         const workflow = yield* GraphWorkflowState.Service
         yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "module", expectedRevision: 0 })
-        yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph })
         const afterA = yield* workflow.advanceVerified({
           sessionID: SID,
           nodeID: atomicA.id,
+          expectedRevision: planned.revision,
           graph: { ...graph, nodes: graph.nodes.map((item) => item.id === atomicA.id ? { ...item, status: "verified" as const, testStatus: "passed" as const } : item) },
         })
         expect(afterA.currentNodeID).toBe(atomicA2.id)
@@ -339,6 +360,7 @@ describe("GraphWorkflowState", () => {
         const afterModule = yield* workflow.advanceVerified({
           sessionID: SID,
           nodeID: atomicA2.id,
+          expectedRevision: afterA.revision,
           graph: { ...graph, nodes: graph.nodes.map((item) => [atomicA.id, atomicA2.id].includes(item.id) ? { ...item, status: "verified" as const, testStatus: "passed" as const } : item) },
         })
         expect(afterModule.currentNodeID).toBe(atomicB.id)
@@ -368,11 +390,12 @@ describe("GraphWorkflowState", () => {
         ]).run().pipe(Effect.orDie)
         const workflow = yield* GraphWorkflowState.Service
         yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "module", expectedRevision: 0 })
-        yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph })
 
         const advanced = yield* workflow.advanceVerified({
           sessionID: SID,
           nodeID: atomicA.id,
+          expectedRevision: planned.revision,
           graph: {
             ...graph,
             nodes: graph.nodes.map((item) => item.id === atomicA.id
@@ -408,11 +431,12 @@ describe("GraphWorkflowState", () => {
         ]).run().pipe(Effect.orDie)
         const workflow = yield* GraphWorkflowState.Service
         yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "module", expectedRevision: 0 })
-        yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph })
 
         const advanced = yield* workflow.advanceVerified({
           sessionID: SID,
           nodeID: atomicA.id,
+          expectedRevision: planned.revision,
           graph: {
             ...graph,
             nodes: graph.nodes.map((item) => item.id === atomicA.id
@@ -436,10 +460,11 @@ describe("GraphWorkflowState", () => {
       Effect.gen(function* () {
         const workflow = yield* GraphWorkflowState.Service
         yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
-        yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
         const afterA = yield* workflow.advanceVerified({
           sessionID: SID,
           nodeID: atomicA.id,
+          expectedRevision: planned.revision,
           graph: { ...workflowGraph, nodes: workflowGraph.nodes.map((item) => item.id === atomicA.id ? { ...item, status: "verified" as const, testStatus: "passed" as const } : item) },
         })
         expect(afterA.currentNodeID).toBe(atomicB.id)
@@ -448,6 +473,7 @@ describe("GraphWorkflowState", () => {
         const complete = yield* workflow.advanceVerified({
           sessionID: SID,
           nodeID: atomicB.id,
+          expectedRevision: afterA.revision,
           graph: { ...workflowGraph, nodes: workflowGraph.nodes.map((item) => item.type === "atomic" ? { ...item, status: "verified" as const, testStatus: "passed" as const } : item) },
         })
         expect(complete.currentNodeID).toBeNull()
@@ -570,6 +596,7 @@ describe("GraphWorkflowState", () => {
         const advanced = yield* workflow.advanceVerified({
           sessionID: SID,
           nodeID: atomicA.id,
+          expectedRevision: planned.revision,
           graph: {
             ...workflowGraph,
             nodes: workflowGraph.nodes.map((item) => item.id === atomicA.id
@@ -621,6 +648,208 @@ describe("GraphWorkflowState", () => {
         const records = yield* audit.tool.list({ projectID: PID, sessionID: SID })
         expect(records.map((record) => record.toolName)).toContain("graph.workflow.failed")
         expect(records.find((record) => record.toolName === "graph.workflow.failed")?.status).toBe("failed")
+      }),
+    )
+  })
+
+  test("re-admission resumes the first unfinished buildable task", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        const graph: GraphView = {
+          ...workflowGraph,
+          nodes: workflowGraph.nodes.map((item) => item.id === atomicA.id
+            ? { ...item, status: "verified" as const, testStatus: "passed" as const }
+            : item),
+        }
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph })
+        expect(planned.currentNodeID).toBe(atomicB.id)
+      }),
+    )
+  })
+
+  test("a concurrent pause wins over stale diagnostics advancement", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "atomic", expectedRevision: 0 })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        const paused = yield* workflow.pause({ sessionID: SID, expectedRevision: planned.revision, reason: "user review" })
+        const graph = {
+          ...workflowGraph,
+          nodes: workflowGraph.nodes.map((item) => item.id === atomicA.id
+            ? { ...item, status: "verified" as const, testStatus: "passed" as const }
+            : item),
+        }
+
+        const conflict = yield* workflow.advanceVerified({
+          sessionID: SID,
+          nodeID: atomicA.id,
+          graph,
+          expectedRevision: planned.revision,
+        }).pipe(Effect.flip)
+        expect(conflict._tag).toBe("GraphWorkflowState.RevisionConflict")
+        expect(yield* workflow.get(SID)).toEqual(paused)
+      }),
+    )
+  })
+
+  test("atomically verifies, records evidence, advances, and reconciles an exact retry", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        expect(workflow).toHaveProperty("completeVerification")
+        if (!("completeVerification" in workflow)) return
+        const completeVerification = workflow.completeVerification as (input: {
+          readonly projectID: ProjectV2.ID
+          readonly sessionID: string
+          readonly nodeID: NodeID
+          readonly expectedRevision: number
+          readonly evidence: typeof Graph.VerificationEvidence.Type
+          readonly inputSummary: string
+          readonly outputSummary: string
+        }) => Effect.Effect<GraphWorkflowState.State, GraphWorkflowState.RevisionConflict>
+        const input = {
+          projectID: PID,
+          sessionID: SID,
+          nodeID: atomicA.id,
+          expectedRevision: planned.revision,
+          evidence: {
+            kind: "diagnostics" as const,
+            nodeID: atomicA.id,
+            criteria: ["works"],
+            artifactPaths: ["src/a.ts"],
+            complete: true,
+            passed: true,
+            commands: [{ name: "test", command: "bun test", exitCode: 0, timedOut: false, passed: true, excerpt: "ok" }],
+          },
+          inputSummary: "test",
+          outputSummary: "test:0",
+        }
+        const completed = yield* completeVerification(input)
+        const retried = yield* completeVerification(input)
+
+        expect(completed.currentNodeID).toBe(atomicB.id)
+        expect(retried).toEqual(completed)
+        const storage = yield* GraphStorage.Service
+        expect(yield* storage.node.get(atomicA.id)).toMatchObject({ status: "verified", testStatus: "passed" })
+        const audit = yield* GraphAudit.Service
+        const diagnostics = (yield* audit.tool.list({ projectID: PID, sessionID: SID, nodeID: atomicA.id }))
+          .filter((record) => record.toolName === "graph.diagnostics.run")
+        expect(diagnostics).toHaveLength(1)
+        expect(diagnostics[0]?.evidence).toEqual(input.evidence)
+      }),
+    )
+  })
+
+  test("reconciles an exact verification retry after service restart", async () => {
+    await using dir = await tmpdir()
+    const databasePath = path.join(dir.path, "workflow.db")
+    const input = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seed
+        const workflow = yield* GraphWorkflowState.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        const input = {
+          projectID: PID,
+          sessionID: SID,
+          nodeID: atomicA.id,
+          expectedRevision: planned.revision,
+          evidence: {
+            kind: "diagnostics" as const,
+            nodeID: atomicA.id,
+            criteria: ["works"],
+            artifactPaths: [],
+            complete: true,
+            passed: true,
+            commands: [{ name: "test", command: "bun test", exitCode: 0, timedOut: false, passed: true, excerpt: "ok" }],
+          },
+        }
+        yield* workflow.completeVerification(input)
+        return input
+      }).pipe(
+        Effect.provide(GraphWorkflowState.layerFromDatabase(Database.layerFromPath(databasePath))),
+        Effect.scoped,
+      ),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        const retried = yield* workflow.completeVerification(input)
+        expect(retried.currentNodeID).toBe(atomicB.id)
+        const audit = yield* GraphAudit.Service
+        expect((yield* audit.tool.list({ projectID: PID, sessionID: SID, nodeID: atomicA.id }))
+          .filter((record) => record.toolName === "graph.diagnostics.run")).toHaveLength(1)
+      }).pipe(
+        Effect.provide(GraphWorkflowState.layerFromDatabase(Database.layerFromPath(databasePath))),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("does not verify when a pause changes the expected diagnostics revision", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        const paused = yield* workflow.pause({ sessionID: SID, expectedRevision: planned.revision })
+        expect(workflow).toHaveProperty("completeVerification")
+        if (!("completeVerification" in workflow)) return
+        const completeVerification = workflow.completeVerification as (input: {
+          readonly projectID: ProjectV2.ID
+          readonly sessionID: string
+          readonly nodeID: NodeID
+          readonly expectedRevision: number
+          readonly evidence: typeof Graph.VerificationEvidence.Type
+        }) => Effect.Effect<GraphWorkflowState.State, GraphWorkflowState.RevisionConflict>
+        const conflict = yield* completeVerification({
+          projectID: PID,
+          sessionID: SID,
+          nodeID: atomicA.id,
+          expectedRevision: planned.revision,
+          evidence: {
+            kind: "diagnostics",
+            nodeID: atomicA.id,
+            criteria: [],
+            artifactPaths: [],
+            complete: true,
+            passed: true,
+            commands: [],
+          },
+        }).pipe(Effect.flip)
+
+        expect(conflict._tag).toBe("GraphWorkflowState.RevisionConflict")
+        expect(yield* workflow.get(SID)).toEqual(paused)
+        const storage = yield* GraphStorage.Service
+        expect(yield* storage.node.get(atomicA.id)).toMatchObject({ status: "pending", testStatus: "none" })
+      }),
+    )
+  })
+
+  test("rejects promotion while workflow work or checkpoints remain", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "atomic", expectedRevision: 0 })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        yield* workflow.pause({ sessionID: SID, expectedRevision: planned.revision, reason: "review" })
+        expect(workflow).toHaveProperty("promote")
+        if (!("promote" in workflow)) return
+        const promote = workflow.promote as (input: {
+          readonly projectID: ProjectV2.ID
+          readonly sessionID: string
+        }) => Effect.Effect<GraphStorage.PromoteResult, GraphWorkflowState.PromotionBlocked>
+        const error = yield* promote({ projectID: PID, sessionID: SID }).pipe(Effect.flip)
+
+        expect(error._tag).toBe("GraphWorkflowState.PromotionBlocked")
+        expect(error.reason).toBe("checkpoint_pending")
+        const storage = yield* GraphStorage.Service
+        expect((yield* storage.main({ projectID: PID })).nodes).toHaveLength(0)
       }),
     )
   })

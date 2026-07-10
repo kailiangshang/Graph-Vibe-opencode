@@ -8,6 +8,7 @@ import * as GraphStorage from "@opencode-ai/core/graph/storage"
 import * as GraphPlan from "@opencode-ai/core/graph/workflow/plan"
 import * as GraphWorkflowState from "@opencode-ai/core/graph/workflow/state"
 import * as GraphAudit from "@opencode-ai/core/graph/workflow/audit"
+import * as GraphWorkflow from "@opencode-ai/core/graph/workflow/projection"
 
 const storageLayer = GraphStorage.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:"))) as Layer.Layer<
   Database.Service | GraphStorage.Service
@@ -21,8 +22,11 @@ const auditLayer = GraphAudit.layer.pipe(Layer.provideMerge(domainLayer)) as Lay
 const workflowLayer = GraphWorkflowState.layer.pipe(Layer.provideMerge(auditLayer)) as Layer.Layer<
   Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service | GraphWorkflowState.Service
 >
-const planLayer = GraphPlan.layer.pipe(Layer.provideMerge(workflowLayer)) as Layer.Layer<
-  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service | GraphWorkflowState.Service | GraphPlan.Service
+const projectionLayer = GraphWorkflow.layer.pipe(Layer.provideMerge(workflowLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service | GraphWorkflowState.Service | GraphWorkflow.Service
+>
+const planLayer = GraphPlan.layer.pipe(Layer.provideMerge(projectionLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service | GraphWorkflowState.Service | GraphWorkflow.Service | GraphPlan.Service
 >
 
 const PID = "proj_test" as any
@@ -39,7 +43,7 @@ const seed = Effect.gen(function* () {
 const run = <A, E>(effect: Effect.Effect<
   A,
   E,
-  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service | GraphWorkflowState.Service | GraphPlan.Service
+  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service | GraphWorkflowState.Service | GraphWorkflow.Service | GraphPlan.Service
 >) =>
   Effect.runPromise(Effect.gen(function* () { yield* seed; return yield* effect }).pipe(Effect.provide(planLayer), Effect.scoped))
 
@@ -110,6 +114,32 @@ describe("GraphPlan.admit", () => {
         checkpointStatus: "approved",
         revision: 2,
       })
+    }))
+  })
+
+  test("re-admission resumes the first unfinished buildable task", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [
+          { id: A, type: "atomic", name: "A", level: "L2" },
+          { id: B, type: "atomic", name: "B", level: "L2" },
+        ],
+        edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
+      })
+      const storage = yield* GraphStorage.Service
+      yield* storage.node.update(A, { status: "verified", testStatus: "passed" })
+      yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [{ id: "gnd_plan_c" as GraphStorage.NodeID, type: "atomic", name: "C", level: "L2" }],
+        edges: [],
+      })
+
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(SID))?.currentNodeID).toBe(B)
     }))
   })
 

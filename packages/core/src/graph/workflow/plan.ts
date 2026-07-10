@@ -9,6 +9,7 @@ import { validateSubgraph } from "../validation"
 import type { EdgeRow, NodeRow } from "../storage"
 import type { ProjectV2 } from "../../project"
 import * as GraphWorkflowState from "./state"
+import * as GraphWorkflow from "./projection"
 
 export type PlanNodeCreate = Omit<GraphStorage.NodeCreate, "projectID" | "sessionID">
 export type PlanEdgeCreate = Omit<GraphStorage.EdgeCreate, "projectID" | "sessionID" | "sourceID" | "targetID"> & {
@@ -35,6 +36,11 @@ export interface Interface {
     AdmitPlanResult,
     GraphDomain.ValidationError | GraphStorage.NotFoundError | GraphWorkflowState.ModuleScopeError
   >
+  readonly workflow: {
+    readonly get: GraphWorkflow.Interface["get"]
+    readonly setMode: GraphWorkflowState.Interface["setMode"]
+    readonly promote: GraphWorkflowState.Interface["promote"]
+  }
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/GraphPlan") {}
@@ -45,6 +51,7 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
     const domain = yield* GraphDomain.Service
     const workflow = yield* GraphWorkflowState.Service
+    const projection = yield* GraphWorkflow.Service
 
     const admit = Effect.fn("GraphPlan.admit")(function* (input: AdmitPlanInput) {
       const issues = validatePlan(input)
@@ -103,21 +110,31 @@ export const layer = Layer.effect(
       ).pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
     })
 
-    return Service.of({ admit })
+    return Service.of({
+      admit,
+      workflow: {
+        get: projection.get,
+        setMode: workflow.setMode,
+        promote: workflow.promote,
+      },
+    })
   }),
 )
 
 export const node = LayerNode.make({
   service: Service,
   layer,
-  deps: [Database.node, GraphDomain.node, GraphWorkflowState.node],
+  deps: [Database.node, GraphDomain.node, GraphWorkflowState.node, GraphWorkflow.node],
 })
 
-export const defaultLayer = layer.pipe(
-  Layer.provide(GraphDomain.defaultLayer),
-  Layer.provide(GraphWorkflowState.defaultLayer),
-  Layer.provide(Database.layerFromPath(Database.path())),
-)
+export const layerFromDatabase = (database: Layer.Layer<Database.Service>) => {
+  const workflow = GraphWorkflowState.layerFromDatabase(database)
+  const domain = GraphDomain.layer.pipe(Layer.provideMerge(workflow))
+  const projection = GraphWorkflow.layer.pipe(Layer.provideMerge(workflow))
+  return layer.pipe(Layer.provideMerge(Layer.mergeAll(domain, projection)))
+}
+
+export const defaultLayer = layerFromDatabase(Database.layerFromPath(Database.path()))
 
 function validatePlan(input: AdmitPlanInput) {
   const nodeIDs = input.nodes.map((node) => (node.id ?? GraphStorage.NodeID.create()) as GraphStorage.NodeID)

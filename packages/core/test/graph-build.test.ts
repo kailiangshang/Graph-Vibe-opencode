@@ -105,4 +105,39 @@ describe("GraphBuild.evaluate", () => {
       expect(result.requiredPermissions).toEqual([])
     }))
   })
+
+  test("shares one database across exported build dependencies", async () => {
+    expect(GraphBuild).toHaveProperty("layerFromDatabase")
+    if (!("layerFromDatabase" in GraphBuild)) return
+    const layerFromDatabase = GraphBuild.layerFromDatabase as (
+      database: Layer.Layer<Database.Service>,
+    ) => Layer.Layer<
+      Database.Service | GraphStorage.Service | GraphAudit.Service | GraphWorkflowState.Service | GraphBuild.Service
+    >
+    const layer = layerFromDatabase(Database.layerFromPath(":memory:"))
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seed
+        const storage = yield* GraphStorage.Service
+        const workflow = yield* GraphWorkflowState.Service
+        const build = yield* GraphBuild.Service
+        const targetNodeID = yield* storage.node.create({
+          id: "shared-db-task" as GraphStorage.NodeID,
+          projectID: PID,
+          sessionID: SID,
+          type: "atomic",
+          name: "shared-db-task",
+          level: "L2",
+        })
+        const planned = yield* workflow.resetPlan({
+          projectID: PID,
+          sessionID: SID,
+          graph: yield* storage.currentPlan({ sessionID: SID }),
+        })
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: planned.revision })
+
+        expect((yield* build.evaluate({ projectID: PID, sessionID: SID, targetNodeID, executor: "manual" })).allowed).toBe(true)
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    )
+  })
 })

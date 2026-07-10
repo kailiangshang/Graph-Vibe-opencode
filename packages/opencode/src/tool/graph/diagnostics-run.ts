@@ -3,6 +3,7 @@ import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { buildableNodes } from "@opencode-ai/core/graph/build-order"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
+import { Graph } from "@opencode-ai/schema/graph"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ChildProcess } from "effect/unstable/process"
 import * as Stream from "effect/Stream"
@@ -112,13 +113,14 @@ export const GraphDiagnosticsRunTool = Tool.define(
         Effect.gen(function* () {
           const session = yield* resolveGraphSession(ctx, sessions)
 
-          const gate = yield* build.evaluate({
+          const evaluation = yield* build.evaluateWithRevision({
             projectID: session.projectID,
             sessionID: session.sessionID,
             targetNodeID: params.targetNodeID,
             diagnosticsRequested: true,
             executor: "manual",
           })
+          const gate = evaluation.gate
 
           if (!gate.allowed) {
             yield* audit.tool.record({
@@ -204,17 +206,72 @@ export const GraphDiagnosticsRunTool = Tool.define(
           const allPassed = results.every((r) => r.passed)
           const verified = allPassed && completeDiagnostics
 
-          if (verified || !allPassed) {
+          if (!allPassed) {
             yield* storage.node.update(params.targetNodeID, {
-              testStatus: allPassed ? "passed" : "failed",
-              ...(verified ? { status: "verified" as const } : {}),
+              testStatus: "failed",
             })
           }
 
+          const target = yield* storage.node.get(params.targetNodeID)
+          const artifactPaths = (yield* audit.tool.list({
+            projectID: session.projectID,
+            sessionID: session.sessionID,
+            nodeID: params.targetNodeID,
+          }))
+            .filter((record) => record.toolName === "graph.artifact.apply" && record.status === "succeeded")
+            .at(-1)?.inputSummary?.replace(/^files=/, "").split(",").filter((item) => item.length > 0) ?? []
+          const evidence: Graph.VerificationEvidence = {
+            kind: "diagnostics",
+            nodeID: params.targetNodeID,
+            criteria: target.verification?.criteria ?? [],
+            artifactPaths,
+            complete: completeDiagnostics,
+            passed: verified,
+            commands: results.map((result) => ({
+              name: result.name,
+              command: result.command,
+              exitCode: result.exitCode,
+              timedOut: result.timedOut,
+              passed: result.passed,
+              excerpt: result.output.slice(0, 8_192),
+            })),
+          }
+          const inputSummary = cmds.map((command) => command.name).join("; ")
+          const outputSummary = results.map((result) => `${result.name}:${result.failureReason ?? result.exitCode}`).join(", ")
+
           let nextHint = ""
           if (verified) {
+            const completion = yield* build.completeVerification({
+              projectID: session.projectID,
+              sessionID: session.sessionID,
+              nodeID: params.targetNodeID,
+              expectedRevision: evaluation.workflowRevision,
+              evidence,
+              inputSummary,
+              outputSummary,
+            }).pipe(
+              Effect.as(true),
+              Effect.catchTag("GraphWorkflowState.RevisionConflict", () => Effect.succeed(false)),
+            )
+            if (!completion) {
+              yield* audit.tool.record({
+                projectID: session.projectID,
+                sessionID: session.sessionID,
+                nodeID: params.targetNodeID,
+                toolName: "graph.diagnostics.run",
+                toolType: "diagnostics",
+                status: "blocked",
+                inputSummary,
+                outputSummary: "workflow_revision_conflict",
+                evidence,
+              })
+              return {
+                title: "Diagnostics superseded by workflow change",
+                metadata: { gate: summarizeGate(gate), ran: true, passed: true, complete: true, verified: false, results: [] as CommandResult[] },
+                output: formatJson({ ran: true, passed: true, complete: true, verified: false, reason: "workflow_revision_conflict" }),
+              }
+            }
             const cp = yield* domain.currentPlan({ sessionID: session.sessionID })
-            yield* build.advanceVerified({ sessionID: session.sessionID, nodeID: params.targetNodeID, graph: cp })
             const newlyBuildable = buildableNodes(cp.nodes, cp.edges)
               .filter((n) => n.id !== params.targetNodeID)
               .map((n) => n.name)
@@ -223,16 +280,19 @@ export const GraphDiagnosticsRunTool = Tool.define(
             }
           }
 
-          yield* audit.tool.record({
-            projectID: session.projectID,
-            sessionID: session.sessionID,
-            nodeID: params.targetNodeID,
-            toolName: "graph.diagnostics.run",
-            toolType: "diagnostics",
-            status: allPassed ? "succeeded" : "failed",
-            inputSummary: cmds.map((c) => c.name).join("; "),
-            outputSummary: results.map((r) => `${r.name}:${r.failureReason ?? r.exitCode}`).join(", "),
-          })
+          if (!verified) {
+            yield* audit.tool.record({
+              projectID: session.projectID,
+              sessionID: session.sessionID,
+              nodeID: params.targetNodeID,
+              toolName: "graph.diagnostics.run",
+              toolType: "diagnostics",
+              status: allPassed ? "succeeded" : "failed",
+              inputSummary,
+              outputSummary,
+              evidence,
+            })
+          }
 
           return {
             title: verified ? "Diagnostics passed" : allPassed ? "Diagnostics passed - filtered subset" : "Diagnostics failed",

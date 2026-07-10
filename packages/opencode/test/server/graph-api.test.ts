@@ -353,7 +353,86 @@ describe("graph HttpApi", () => {
     }),
   )
 
-  it.instance("updates a node status and returns the refreshed node", () =>
+  it.instance("selects workflow mode with an exact revision and unblocks the first task", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      expect((yield* sendJson(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { nodes: [{ type: "atomic", name: "First Task", level: "L2" }], edges: [] },
+      )).status).toBe(200)
+
+      const before = yield* requestJson<{
+        mode: string | null
+        revision: number
+        currentTask: { id: string } | null
+      }>(`/graph/workflow?directory=${encodeURIComponent(test.directory)}&session=${session.id}`)
+      expect(before.mode).toBeNull()
+      expect(before.currentTask).not.toBeNull()
+      const build = yield* GraphBuild.Service
+      expect((yield* build.evaluate({
+        projectID: session.projectID,
+        sessionID: session.id,
+        targetNodeID: before.currentTask!.id as GraphStorage.NodeID,
+        executor: "manual",
+      })).allowed).toBe(false)
+
+      const selected = yield* sendJson<{ mode: string; revision: number; checkpoint: { status: string } }>(
+        "PATCH",
+        `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { mode: "atomic", expectedRevision: before.revision },
+      )
+      expect(selected.status).toBe(200)
+      expect(selected.json).toMatchObject({
+        mode: "atomic",
+        revision: before.revision + 1,
+        checkpoint: { status: "approved" },
+      })
+      expect((yield* build.evaluate({
+        projectID: session.projectID,
+        sessionID: session.id,
+        targetNodeID: before.currentTask!.id as GraphStorage.NodeID,
+        executor: "manual",
+      })).allowed).toBe(true)
+    }),
+  )
+
+  it.instance("returns a typed conflict for stale workflow mode revision", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      yield* sendJson(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { nodes: [{ type: "atomic", name: "First Task", level: "L2" }], edges: [] },
+      )
+      const workflow = yield* requestJson<{ revision: number }>(
+        `/graph/workflow?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+      )
+      expect((yield* sendJson(
+        "PATCH",
+        `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { mode: "atomic", expectedRevision: workflow.revision },
+      )).status).toBe(200)
+
+      const response = yield* send(
+        "PATCH",
+        `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { mode: "autopilot", expectedRevision: workflow.revision },
+      )
+      expect(response.status).toBe(409)
+      expect(yield* response.json).toMatchObject({
+        _tag: "GraphWorkflowRevisionConflict",
+        expectedRevision: workflow.revision,
+        actualRevision: workflow.revision + 1,
+      })
+    }),
+  )
+
+  it.instance("rejects direct implemented and verified status transitions", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       const domain = yield* GraphDomain.Service
@@ -370,15 +449,14 @@ describe("graph HttpApi", () => {
         level: "L2" as const,
       })
 
-      const result = yield* sendJson<{ id: string; status: string }>(
-        "PATCH",
-        `/graph/node/${nodeID}/status?directory=${encodeURIComponent(test.directory)}`,
-        { status: "implemented" },
-      )
-
-      expect(result.status).toBe(200)
-      expect(result.json!.id).toBe(nodeID)
-      expect(result.json!.status).toBe("implemented")
+      for (const status of ["implemented", "verified"]) {
+        expect((yield* sendJson(
+          "PATCH",
+          `/graph/node/${nodeID}/status?directory=${encodeURIComponent(test.directory)}`,
+          { status },
+        )).status).toBe(400)
+      }
+      expect((yield* domain.node.get(nodeID)).status).toBe("pending")
     }),
   )
 
@@ -392,14 +470,14 @@ describe("graph HttpApi", () => {
       const result = yield* sendJson(
         "PATCH",
         `/graph/node/node_unknown-missing/status?directory=${encodeURIComponent(test.directory)}`,
-        { status: "implemented" },
+        { status: "pending" },
       )
 
       expect(result.status).toBe(404)
     }),
   )
 
-  it.instance("promotes the CurrentPlan into a versioned snapshot", () =>
+  it.instance("rejects promotion of an incomplete CurrentPlan", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       const domain = yield* GraphDomain.Service
@@ -423,11 +501,81 @@ describe("graph HttpApi", () => {
         { message: "initial promote" },
       )
 
+      expect(result.status).toBe(400)
+    }),
+  )
+
+  it.instance("rejects promotion while a checkpoint is pending", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      yield* sendJson(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { nodes: [{ type: "atomic", name: "Paused Task", level: "L2" }], edges: [] },
+      )
+      const workflow = yield* GraphWorkflowState.Service
+      const planned = yield* workflow.get(session.id)
+      const selected = yield* workflow.setMode({
+        projectID: session.projectID,
+        sessionID: session.id,
+        mode: "atomic",
+        expectedRevision: planned!.revision,
+      })
+      yield* workflow.pause({ sessionID: session.id, expectedRevision: selected.revision })
+
+      expect((yield* sendJson(
+        "POST",
+        `/graph/current-plan/promote?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        {},
+      )).status).toBe(400)
+    }),
+  )
+
+  it.instance("promotes a completed workflow into a versioned snapshot", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      yield* sendJson(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { nodes: [{ type: "atomic", name: "Done Task", level: "L2" }], edges: [] },
+      )
+      const storage = yield* GraphStorage.Service
+      const task = (yield* storage.currentPlan({ sessionID: session.id })).nodes[0]
+      const workflow = yield* GraphWorkflowState.Service
+      const planned = yield* workflow.get(session.id)
+      const selected = yield* workflow.setMode({
+        projectID: session.projectID,
+        sessionID: session.id,
+        mode: "autopilot",
+        expectedRevision: planned!.revision,
+      })
+      yield* workflow.completeVerification({
+        projectID: session.projectID,
+        sessionID: session.id,
+        nodeID: task.id,
+        expectedRevision: selected.revision,
+        evidence: {
+          kind: "diagnostics",
+          nodeID: task.id,
+          criteria: [],
+          artifactPaths: [],
+          complete: true,
+          passed: true,
+          commands: [],
+        },
+      })
+
+      const result = yield* sendJson<{ versionNumber: number; nodes: number }>(
+        "POST",
+        `/graph/current-plan/promote?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { message: "completed" },
+      )
       expect(result.status).toBe(200)
-      expect(result.json!.versionID).toBeDefined()
-      expect(result.json!.versionNumber).toBe(1)
-      expect(result.json!.nodes).toBe(1)
-      expect(result.json!.edges).toBe(0)
+      expect(result.json).toMatchObject({ versionNumber: 1, nodes: 1 })
     }),
   )
 })
