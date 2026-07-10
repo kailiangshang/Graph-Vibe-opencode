@@ -1,6 +1,7 @@
 export * as GraphBuild from "./build"
 
 import { Context, Effect, Layer } from "effect"
+import { Database } from "../../database/database"
 import { LayerNode } from "../../effect/layer-node"
 import type { ProjectV2 } from "../../project"
 import type { ConsistencyIssue } from "../derivation/checker"
@@ -28,7 +29,12 @@ export interface BuildEvaluateInput {
 
 export interface Interface {
   readonly evaluate: (input: BuildEvaluateInput) => Effect.Effect<GateResult>
+  readonly evaluateWithRevision: (input: BuildEvaluateInput) => Effect.Effect<{
+    readonly gate: GateResult
+    readonly workflowRevision: number
+  }>
   readonly advanceVerified: GraphWorkflowState.Interface["advanceVerified"]
+  readonly completeVerification: GraphWorkflowState.Interface["completeVerification"]
   readonly fail: GraphWorkflowState.Interface["fail"]
 }
 
@@ -41,7 +47,7 @@ export const layer = Layer.effect(
     const audit = yield* GraphAudit.Service
     const workflowState = yield* GraphWorkflowState.Service
 
-    const evaluate = Effect.fn("GraphBuild.evaluate")(function* (input: BuildEvaluateInput) {
+    const evaluateWithRevision = Effect.fn("GraphBuild.evaluateWithRevision")(function* (input: BuildEvaluateInput) {
       const main = yield* storage.main({ projectID: input.projectID })
       const currentPlan = yield* storage.currentPlan({ sessionID: input.sessionID })
       const state = yield* workflowState.get(input.sessionID)
@@ -90,12 +96,18 @@ export const layer = Layer.effect(
         inputSummary: `target=${input.targetNodeID}`,
         outputSummary: result.allowed ? "allowed" : `blocked:${result.issues.length}`,
       })
-      return result
+      return { gate: result, workflowRevision: state?.revision ?? 0 }
     })
+
+    const evaluate = Effect.fn("GraphBuild.evaluate")((input: BuildEvaluateInput) =>
+      Effect.map(evaluateWithRevision(input), (result) => result.gate),
+    )
 
     return Service.of({
       evaluate,
+      evaluateWithRevision,
       advanceVerified: workflowState.advanceVerified,
+      completeVerification: workflowState.completeVerification,
       fail: workflowState.fail,
     })
   }),
@@ -107,11 +119,10 @@ export const node = LayerNode.make({
   deps: [GraphStorage.node, GraphAudit.node, GraphWorkflowState.node],
 })
 
-export const defaultLayer = layer.pipe(
-  Layer.provide(GraphAudit.defaultLayer),
-  Layer.provide(GraphStorage.defaultLayer),
-  Layer.provide(GraphWorkflowState.defaultLayer),
-)
+export const layerFromDatabase = (database: Layer.Layer<Database.Service>) =>
+  layer.pipe(Layer.provideMerge(GraphWorkflowState.layerFromDatabase(database)))
+
+export const defaultLayer = layerFromDatabase(Database.layerFromPath(Database.path()))
 
 function buildStatus(result: GateResult, dryRun: boolean): GenerationRunStatus {
   if (!result.allowed) return "blocked"

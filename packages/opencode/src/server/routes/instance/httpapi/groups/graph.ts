@@ -74,8 +74,23 @@ export const PromotePayload = Schema.Struct({
 }).annotate({ identifier: "GraphPromotePayload" })
 
 export const NodeStatusPayload = Schema.Struct({
-  status: Graph.NodeStatus,
+  status: Schema.Literals(["pending", "deprecated"]),
 }).annotate({ identifier: "GraphNodeStatusPayload" })
+
+export const WorkflowModePayload = Schema.Struct({
+  mode: Graph.ExecutionMode,
+  expectedRevision: Schema.Number,
+}).annotate({ identifier: "GraphWorkflowModePayload" })
+
+export class GraphWorkflowRevisionConflict extends Schema.TaggedErrorClass<GraphWorkflowRevisionConflict>()(
+  "GraphWorkflowRevisionConflict",
+  {
+    expectedRevision: Schema.Number,
+    actualRevision: Schema.Number,
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
 
 const AdmitResultResponse = Schema.Struct({
   nodesCreated: Schema.Number,
@@ -137,6 +152,60 @@ const NodeAuditResponse = Schema.Struct({
   generationRuns: Schema.Array(GenerationRunItem),
 }).annotate({ identifier: "GraphNodeAudit" })
 
+const WorkflowTaskResponse = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  order: Schema.Number,
+  moduleID: Schema.NullOr(Schema.String),
+  moduleName: Schema.NullOr(Schema.String),
+  status: Graph.NodeStatus,
+  testStatus: Graph.TestStatus,
+  buildable: Schema.Boolean,
+  current: Schema.Boolean,
+  verification: Schema.NullOr(Graph.VerificationSpec),
+  latestEvidence: Schema.NullOr(Graph.VerificationEvidence),
+}).annotate({ identifier: "GraphWorkflowTask" })
+
+const WorkflowRollupResponse = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  type: Schema.Literals(["prd", "composite"]),
+  status: Schema.Literals(["pending", "implemented", "verified", "failed"]),
+  taskIDs: Schema.Array(Schema.String),
+}).annotate({ identifier: "GraphWorkflowRollup" })
+
+const WorkflowModuleResponse = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  type: Schema.Literal("composite"),
+  status: Schema.Literals(["pending", "implemented", "verified", "failed"]),
+  taskIDs: Schema.Array(Schema.String),
+  tasks: Schema.Array(WorkflowTaskResponse),
+}).annotate({ identifier: "GraphWorkflowModule" })
+
+const WorkflowResponse = Schema.Struct({
+  mode: Schema.NullOr(Graph.ExecutionMode),
+  revision: Schema.Number,
+  phase: Schema.Literals(["planning", "building", "verifying", "checkpoint", "complete", "failed"]),
+  checkpoint: Schema.Struct({
+    status: Graph.CheckpointStatus,
+    kind: Schema.NullOr(Graph.CheckpointKind),
+    scopeNodeID: Schema.NullOr(Schema.String),
+    scopeName: Schema.NullOr(Schema.String),
+    reason: Schema.NullOr(Schema.String),
+  }),
+  currentTask: Schema.NullOr(WorkflowTaskResponse),
+  modules: Schema.Array(WorkflowModuleResponse),
+  tasks: Schema.Array(WorkflowTaskResponse),
+  rollups: Schema.Array(WorkflowRollupResponse),
+  progress: Schema.Struct({
+    total: Schema.Number,
+    verified: Schema.Number,
+    failed: Schema.Number,
+    percent: Schema.Number,
+  }),
+}).annotate({ identifier: "GraphWorkflow" })
+
 export const ProjectQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
 })
@@ -187,6 +256,8 @@ export const GraphPaths = {
   deleteEdge: "/graph/edge/:edgeID",
   diff: "/graph/diff",
   planAdmit: "/graph/plan/admit",
+  workflow: "/graph/workflow",
+  workflowMode: "/graph/workflow/mode",
   nodeStatus: "/graph/node/:nodeID/status",
   promote: "/graph/current-plan/promote",
 } as const
@@ -313,6 +384,29 @@ export const GraphApi = HttpApi.make("graph")
             summary: "Admit nodes and edges into the CurrentPlan",
             description:
               "Admit nodes and edges into the session-scoped CurrentPlan graph before implementation.",
+          }),
+        ),
+        HttpApiEndpoint.get("workflow", GraphPaths.workflow, {
+          query: SessionRequiredQuery,
+          success: described(WorkflowResponse, "Session workflow projection"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.workflow",
+            summary: "Get session workflow",
+            description: "Retrieve durable workflow mode, revision, checkpoints, tasks, modules, and progress.",
+          }),
+        ),
+        HttpApiEndpoint.patch("workflowMode", GraphPaths.workflowMode, {
+          query: SessionRequiredQuery,
+          payload: WorkflowModePayload,
+          success: described(WorkflowResponse, "Updated session workflow projection"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, GraphWorkflowRevisionConflict],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.workflowMode",
+            summary: "Select workflow execution mode",
+            description: "Select execution mode using the exact current workflow revision.",
           }),
         ),
         HttpApiEndpoint.patch("updateNodeStatus", GraphPaths.nodeStatus, {

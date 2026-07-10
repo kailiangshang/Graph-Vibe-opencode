@@ -2,7 +2,7 @@ import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, Equal, Hash, Schema } from "effect"
+import { DateTime, Effect, Equal, Fiber, Hash, Schema } from "effect"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { define } from "@opencode-ai/plugin/v2/effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
@@ -372,6 +372,90 @@ describe("LocationServiceMap", () => {
     ),
   )
 
+  it.live("preserves a pause created while diagnostics are running", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(() =>
+            fs.writeFile(
+              path.join(dir.path, "package.json"),
+              JSON.stringify({ scripts: { test: "bun -e 'await Bun.write(\"diagnostics-started\", \"1\"); await Bun.sleep(500)'" } }),
+            ),
+          ).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ]).pipe(
+                  Effect.flatMap((state) =>
+                    Effect.gen(function* () {
+                      const run = yield* executeTool(state.registry, {
+                        sessionID: state.sessionID,
+                        ...toolIdentity,
+                        call: {
+                          type: "tool-call",
+                          id: "call-diagnostics-concurrent-pause",
+                          name: "graph_diagnostics_run",
+                          input: { targetNodeID: state.targetNodeID },
+                        },
+                      }).pipe(Effect.forkChild)
+                      yield* waitForFile(path.join(dir.path, "diagnostics-started")).pipe(Effect.timeout("2 seconds"))
+                      const workflow = yield* state.db
+                        .select()
+                        .from(GraphWorkflowStateTable)
+                        .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                        .get()
+                        .pipe(Effect.orDie)
+                      yield* state.db
+                        .update(GraphWorkflowStateTable)
+                        .set({
+                          checkpoint_kind: "pause",
+                          checkpoint_status: "pending",
+                          checkpoint_reason: "user review",
+                          revision: (workflow?.revision ?? 0) + 1,
+                        })
+                        .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                        .run()
+                        .pipe(Effect.orDie)
+                      yield* Fiber.join(run)
+                      return state
+                    }),
+                  ),
+                  Effect.provide(
+                    LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) })),
+                  ),
+                )
+                const node = yield* state.db
+                  .select()
+                  .from(GraphNodeTable)
+                  .where(eq(GraphNodeTable.id, state.targetNodeID))
+                  .get()
+                  .pipe(Effect.orDie)
+                const workflow = yield* state.db
+                  .select()
+                  .from(GraphWorkflowStateTable)
+                  .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                expect(node?.status).toBe("implemented")
+                expect(node?.test_status).not.toBe("passed")
+                expect(workflow).toMatchObject({
+                  current_node_id: state.targetNodeID,
+                  checkpoint_kind: "pause",
+                  checkpoint_status: "pending",
+                  checkpoint_reason: "user review",
+                })
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
   it.live("creates a durable failure checkpoint when the diagnostics repair budget is exhausted", () =>
     withGraphMode(
       Effect.acquireRelease(
@@ -727,6 +811,12 @@ function setupGraphDiagnostics(directory: string, permissions: PermissionV2.Rule
 
 async function fileExists(file: string) {
   return fs.access(file).then(() => true, () => false)
+}
+
+function waitForFile(file: string): Effect.Effect<void> {
+  return Effect.promise(() => fileExists(file)).pipe(
+    Effect.flatMap((exists) => exists ? Effect.void : Effect.sleep("10 millis").pipe(Effect.andThen(waitForFile(file)))),
+  )
 }
 
 function setupGraphSession(directory: string) {

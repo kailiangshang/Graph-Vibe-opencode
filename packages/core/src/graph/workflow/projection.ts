@@ -11,6 +11,7 @@ import * as GraphAudit from "./audit"
 import { nearestCompositeIDs, orderedAtomicNodes } from "./order"
 import * as GraphWorkflowState from "./state"
 import type { State } from "./state"
+import { Database } from "../../database/database"
 
 export { nearestCompositeIDs, orderedAtomicNodes } from "./order"
 
@@ -102,11 +103,10 @@ export const node = LayerNode.make({
   deps: [GraphStorage.node, GraphWorkflowState.node, GraphAudit.node],
 })
 
-export const defaultLayer = layer.pipe(
-  Layer.provide(GraphStorage.defaultLayer),
-  Layer.provide(GraphWorkflowState.defaultLayer),
-  Layer.provide(GraphAudit.defaultLayer),
-)
+export const layerFromDatabase = (database: Layer.Layer<Database.Service>) =>
+  layer.pipe(Layer.provideMerge(GraphWorkflowState.layerFromDatabase(database)))
+
+export const defaultLayer = layerFromDatabase(Database.layerFromPath(Database.path()))
 
 export function projectWorkflow(
   graph: GraphView,

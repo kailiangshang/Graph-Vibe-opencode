@@ -468,13 +468,14 @@ const layer = Layer.effectDiscard(
           execute: (input, context) =>
             Effect.gen(function* () {
               const session = yield* graphSession(context)
-              const gate = yield* build.evaluate({
+              const evaluation = yield* build.evaluateWithRevision({
                 projectID: session.projectID,
                 sessionID: session.sessionID,
                 targetNodeID: input.targetNodeID,
                 diagnosticsRequested: true,
                 executor: "manual",
               })
+              const gate = evaluation.gate
               if (!gate.allowed) {
                 yield* audit.tool.record({
                   projectID: session.projectID,
@@ -534,10 +535,9 @@ const layer = Layer.effectDiscard(
               const results = yield* Effect.forEach(commands, (command) => runDiagnostic(processes, command, session.directory, input.timeout ?? DEFAULT_TIMEOUT_MS), { concurrency: 1 })
               const allPassed = results.every((result) => result.passed)
               const verified = allPassed && completeDiagnostics
-              if (verified || !allPassed) {
+              if (!allPassed) {
                 yield* storage.node.update(input.targetNodeID, {
-                  testStatus: allPassed ? "passed" : "failed",
-                  ...(verified ? { status: "verified" as const } : {}),
+                  testStatus: "failed",
                 })
               }
               const target = yield* storage.node.get(input.targetNodeID)
@@ -564,24 +564,55 @@ const layer = Layer.effectDiscard(
                   excerpt: result.output.slice(0, 8_192),
                 })),
               }
-              yield* audit.tool.record({
-                projectID: session.projectID,
-                sessionID: session.sessionID,
-                nodeID: input.targetNodeID,
-                toolName: "graph.diagnostics.run",
-                toolType: "diagnostics",
-                status: allPassed ? "succeeded" : "failed",
-                inputSummary: commands.map((command) => command.name).join("; "),
-                outputSummary: results.map((result) => `${result.name}:${result.failureReason ?? result.exitCode}`).join(", "),
-                evidence,
-              })
+              const inputSummary = commands.map((command) => command.name).join("; ")
+              const outputSummary = results.map((result) => `${result.name}:${result.failureReason ?? result.exitCode}`).join(", ")
               if (verified) {
-                yield* workflow.advanceVerified({
+                const completion = yield* workflow.completeVerification({
+                  projectID: session.projectID,
                   sessionID: session.sessionID,
                   nodeID: input.targetNodeID,
-                  graph: yield* storage.currentPlan({ sessionID: session.sessionID }),
-                })
+                  expectedRevision: evaluation.workflowRevision,
+                  evidence,
+                  inputSummary,
+                  outputSummary,
+                }).pipe(
+                  Effect.as(true),
+                  Effect.catchTag("GraphWorkflowState.RevisionConflict", () => Effect.succeed(false)),
+                )
+                if (!completion) {
+                  yield* audit.tool.record({
+                    projectID: session.projectID,
+                    sessionID: session.sessionID,
+                    nodeID: input.targetNodeID,
+                    toolName: "graph.diagnostics.run",
+                    toolType: "diagnostics",
+                    status: "blocked",
+                    inputSummary,
+                    outputSummary: "workflow_revision_conflict",
+                    evidence,
+                  })
+                  return toolOutput("Diagnostics superseded by workflow change", {
+                    gate: summarizeGate(gate),
+                    ran: true,
+                    passed: true,
+                    complete: true,
+                    verified: false,
+                    results: [],
+                  }, { ran: true, passed: true, complete: true, verified: false, reason: "workflow_revision_conflict" })
+                }
                 yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
+              } else {
+                yield* audit.tool.record({
+                  projectID: session.projectID,
+                  sessionID: session.sessionID,
+                  nodeID: input.targetNodeID,
+                  toolName: "graph.diagnostics.run",
+                  toolType: "diagnostics",
+                  status: allPassed ? "succeeded" : "failed",
+                  inputSummary,
+                  outputSummary,
+                  evidence,
+                })
               }
               return toolOutput(verified ? "Diagnostics passed" : allPassed ? "Diagnostics passed - filtered subset" : "Diagnostics failed", {
                 gate: summarizeGate(gate),

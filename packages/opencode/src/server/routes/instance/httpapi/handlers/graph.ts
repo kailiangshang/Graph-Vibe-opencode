@@ -12,7 +12,7 @@ import { Session } from "@/session/session"
 import type { SessionID } from "@/session/schema"
 import { InstanceHttpApi } from "../api"
 import { notFound } from "../errors"
-import { ProjectQuery, SessionRequiredQuery, SessionOptionalQuery, DiffQuery, PlanAdmitPayload, NodeStatusPayload, PromotePayload } from "../groups/graph"
+import { DiffQuery, GraphWorkflowRevisionConflict, NodeStatusPayload, PlanAdmitPayload, ProjectQuery, PromotePayload, SessionOptionalQuery, SessionRequiredQuery, WorkflowModePayload } from "../groups/graph"
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { mapStorageNotFound } from "./session-errors"
 
@@ -234,6 +234,37 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       return result
     })
 
+    const workflow = Effect.fn("GraphHttpApi.workflow")(function* (ctx: {
+      query: typeof SessionRequiredQuery.Type
+    }) {
+      const session = yield* resolveSession(ctx.query.session)
+      return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
+    })
+
+    const workflowMode = Effect.fn("GraphHttpApi.workflowMode")(function* (ctx: {
+      query: typeof SessionRequiredQuery.Type
+      payload: typeof WorkflowModePayload.Type
+    }) {
+      const session = yield* resolveSession(ctx.query.session)
+      yield* plan.workflow.setMode({
+        projectID: session.projectID,
+        sessionID: session.id,
+        mode: ctx.payload.mode,
+        expectedRevision: ctx.payload.expectedRevision,
+      }).pipe(
+        Effect.catchTag("GraphWorkflowState.RevisionConflict", (error) =>
+          Effect.fail(new GraphWorkflowRevisionConflict({
+            expectedRevision: error.expectedRevision,
+            actualRevision: error.actualRevision,
+            message: `Workflow revision conflict: expected ${error.expectedRevision}, actual ${error.actualRevision}`,
+          })),
+        ),
+        Effect.catchTag("GraphWorkflowState.ActiveWorkflowError", () => Effect.fail(new HttpApiError.BadRequest({}))),
+        Effect.catchTag("GraphWorkflowState.ModuleScopeError", () => Effect.fail(new HttpApiError.BadRequest({}))),
+      )
+      return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
+    })
+
     const updateNodeStatus = Effect.fn("GraphHttpApi.updateNodeStatus")(function* (ctx: {
       params: { nodeID: string }
       payload: typeof NodeStatusPayload.Type
@@ -257,11 +288,13 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       payload: void | typeof PromotePayload.Type
     }) {
       const session = yield* resolveSession(ctx.query.session)
-      const result = yield* domain.promote({
+      const result = yield* plan.workflow.promote({
         projectID: session.projectID,
         sessionID: session.id,
         message: ctx.payload?.message,
-      })
+      }).pipe(
+        Effect.catchTag("GraphWorkflowState.PromotionBlocked", () => Effect.fail(new HttpApiError.BadRequest({}))),
+      )
       yield* events.publish(Graph.Event.MainUpdated, { projectID: session.projectID })
       return result
     })
@@ -277,6 +310,8 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       .handle("deleteEdge", deleteEdge)
       .handle("diff", diff)
       .handle("planAdmit", planAdmit)
+      .handle("workflow", workflow)
+      .handle("workflowMode", workflowMode)
       .handle("updateNodeStatus", updateNodeStatus)
       .handle("promote", promote)
   }),
