@@ -32,13 +32,17 @@ export interface AdmitPlanResult {
 }
 
 export interface Interface {
-  readonly admit: (input: AdmitPlanInput) => Effect.Effect<
+  readonly admit: (
+    input: AdmitPlanInput,
+  ) => Effect.Effect<
     AdmitPlanResult,
     GraphDomain.ValidationError | GraphStorage.NotFoundError | GraphWorkflowState.ModuleScopeError
   >
   readonly workflow: {
     readonly get: GraphWorkflow.Interface["get"]
     readonly setMode: GraphWorkflowState.Interface["setMode"]
+    readonly approve: GraphWorkflowState.Interface["approve"]
+    readonly pause: GraphWorkflowState.Interface["pause"]
     readonly promote: GraphWorkflowState.Interface["promote"]
   }
 }
@@ -55,59 +59,62 @@ export const layer = Layer.effect(
 
     const admit = Effect.fn("GraphPlan.admit")(function* (input: AdmitPlanInput) {
       const issues = validatePlan(input)
-      if (issues.length > 0) return yield* new GraphDomain.ValidationError({ rule: issues[0].rule, message: issues[0].message })
+      if (issues.length > 0)
+        return yield* new GraphDomain.ValidationError({ rule: issues[0].rule, message: issues[0].message })
       if (input.dryRun) return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: true }
 
-      return yield* db.transaction(() =>
-        Effect.gen(function* () {
-          const nodeIDs: GraphStorage.NodeID[] = []
-          yield* Effect.forEach(input.nodes, (node) =>
-            Effect.gen(function* () {
-              const id = yield* domain.node.create({
-                ...node,
-                verification: node.type === "atomic" ? node.verification : undefined,
-                projectID: input.projectID,
-                sessionID: input.sessionID,
-              })
-              nodeIDs.push(id)
-            }),
-          )
-          const resolveRef = Effect.fn("GraphPlan.resolveRef")(function* (ref: string) {
-            if (ref.startsWith("@")) {
-              const idx = Number.parseInt(ref.slice(1), 10)
-              const resolved = nodeIDs[idx]
-              if (!resolved) {
-                return yield* new GraphDomain.ValidationError({
-                  rule: "edge.dangling_endpoint",
-                  message: `edge references unknown node index: ${ref}`,
-                  context: { ref, nodeCount: nodeIDs.length },
+      return yield* db
+        .transaction(() =>
+          Effect.gen(function* () {
+            const nodeIDs: GraphStorage.NodeID[] = []
+            yield* Effect.forEach(input.nodes, (node) =>
+              Effect.gen(function* () {
+                const id = yield* domain.node.create({
+                  ...node,
+                  verification: node.type === "atomic" ? node.verification : undefined,
+                  projectID: input.projectID,
+                  sessionID: input.sessionID,
                 })
+                nodeIDs.push(id)
+              }),
+            )
+            const resolveRef = Effect.fn("GraphPlan.resolveRef")(function* (ref: string) {
+              if (ref.startsWith("@")) {
+                const idx = Number.parseInt(ref.slice(1), 10)
+                const resolved = nodeIDs[idx]
+                if (!resolved) {
+                  return yield* new GraphDomain.ValidationError({
+                    rule: "edge.dangling_endpoint",
+                    message: `edge references unknown node index: ${ref}`,
+                    context: { ref, nodeCount: nodeIDs.length },
+                  })
+                }
+                return resolved
               }
-              return resolved
-            }
-            return ref as GraphStorage.NodeID
-          })
-          yield* Effect.forEach(input.edges, (edge) =>
-            Effect.gen(function* () {
-              const sourceID = yield* resolveRef(edge.sourceID)
-              const targetID = yield* resolveRef(edge.targetID)
-              return yield* domain.edge.create({
-                ...edge,
-                sourceID,
-                targetID,
-                projectID: input.projectID,
-                sessionID: input.sessionID,
-              })
-            }),
-          )
-          yield* workflow.resetPlan({
-            projectID: input.projectID,
-            sessionID: input.sessionID,
-            graph: yield* domain.currentPlan({ sessionID: input.sessionID }),
-          })
-          return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: false }
-        }),
-      ).pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
+              return ref as GraphStorage.NodeID
+            })
+            yield* Effect.forEach(input.edges, (edge) =>
+              Effect.gen(function* () {
+                const sourceID = yield* resolveRef(edge.sourceID)
+                const targetID = yield* resolveRef(edge.targetID)
+                return yield* domain.edge.create({
+                  ...edge,
+                  sourceID,
+                  targetID,
+                  projectID: input.projectID,
+                  sessionID: input.sessionID,
+                })
+              }),
+            )
+            yield* workflow.resetPlan({
+              projectID: input.projectID,
+              sessionID: input.sessionID,
+              graph: yield* domain.currentPlan({ sessionID: input.sessionID }),
+            })
+            return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: false }
+          }),
+        )
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
     })
 
     return Service.of({
@@ -115,6 +122,8 @@ export const layer = Layer.effect(
       workflow: {
         get: projection.get,
         setMode: workflow.setMode,
+        approve: workflow.approve,
+        pause: workflow.pause,
         promote: workflow.promote,
       },
     })
@@ -142,11 +151,13 @@ function validatePlan(input: AdmitPlanInput) {
     .flatMap((edge) => [edge.sourceID, edge.targetID])
     .find((ref) => ref.startsWith("@") && nodeIDs[Number.parseInt(ref.slice(1), 10)] === undefined)
   if (unknownRef) {
-    return [{
-      rule: "edge.dangling_endpoint",
-      message: `edge references unknown node index: ${unknownRef}`,
-      context: { ref: unknownRef, nodeCount: nodeIDs.length },
-    }]
+    return [
+      {
+        rule: "edge.dangling_endpoint",
+        message: `edge references unknown node index: ${unknownRef}`,
+        context: { ref: unknownRef, nodeCount: nodeIDs.length },
+      },
+    ]
   }
   const resolveRef = (ref: string): GraphStorage.NodeID => {
     if (ref.startsWith("@")) {
@@ -155,34 +166,38 @@ function validatePlan(input: AdmitPlanInput) {
     }
     return ref as GraphStorage.NodeID
   }
-  const nodes = input.nodes.map((node, i): NodeRow => ({
-    id: nodeIDs[i],
-    projectID: input.projectID,
-    sessionID: input.sessionID,
-    type: node.type,
-    name: node.name,
-    level: node.level,
-    priority: node.priority ?? null,
-    category: node.category ?? null,
-    status: node.status ?? "pending",
-    desc: node.desc ?? null,
-    content: node.content ?? null,
-    verification: node.verification ?? null,
-    codeHash: node.codeHash ?? null,
-    testStatus: node.testStatus ?? "none",
-    confidence: node.confidence ?? 1,
-    timeCreated: 0,
-    timeUpdated: 0,
-  }))
-  const edges = input.edges.map((edge): EdgeRow => ({
-    id: (edge.id ?? GraphStorage.EdgeID.create()) as GraphStorage.EdgeID,
-    projectID: input.projectID,
-    sessionID: input.sessionID,
-    sourceID: resolveRef(edge.sourceID),
-    targetID: resolveRef(edge.targetID),
-    relation: edge.relation,
-    confidence: edge.confidence ?? 1,
-    timeCreated: 0,
-  }))
+  const nodes = input.nodes.map(
+    (node, i): NodeRow => ({
+      id: nodeIDs[i],
+      projectID: input.projectID,
+      sessionID: input.sessionID,
+      type: node.type,
+      name: node.name,
+      level: node.level,
+      priority: node.priority ?? null,
+      category: node.category ?? null,
+      status: node.status ?? "pending",
+      desc: node.desc ?? null,
+      content: node.content ?? null,
+      verification: node.verification ?? null,
+      codeHash: node.codeHash ?? null,
+      testStatus: node.testStatus ?? "none",
+      confidence: node.confidence ?? 1,
+      timeCreated: 0,
+      timeUpdated: 0,
+    }),
+  )
+  const edges = input.edges.map(
+    (edge): EdgeRow => ({
+      id: (edge.id ?? GraphStorage.EdgeID.create()) as GraphStorage.EdgeID,
+      projectID: input.projectID,
+      sessionID: input.sessionID,
+      sourceID: resolveRef(edge.sourceID),
+      targetID: resolveRef(edge.targetID),
+      relation: edge.relation,
+      confidence: edge.confidence ?? 1,
+      timeCreated: 0,
+    }),
+  )
   return validateSubgraph(nodes, edges)
 }

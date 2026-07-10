@@ -2455,8 +2455,100 @@ export type GraphPlanAdmitResult = {
   dryRun: boolean
 }
 
-export type GraphNodeStatusPayload = {
+export type GraphWorkflowTask = {
+  id: string
+  name: string
+  order: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  moduleID: string
+  moduleName: string
   status: "pending" | "implemented" | "verified" | "deprecated"
+  testStatus: "none" | "pending" | "passed" | "failed"
+  buildable: boolean
+  current: boolean
+  verification: {
+    criteria: Array<string>
+    diagnostics: Array<{
+      name: "test" | "typecheck" | "lint"
+      paths?: Array<string>
+    }>
+  }
+  latestEvidence: {
+    kind: "diagnostics"
+    nodeID: string
+    criteria: Array<string>
+    artifactPaths: Array<string>
+    complete: boolean
+    passed: boolean
+    commands: Array<{
+      name: string
+      command: string
+      exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      timedOut: boolean
+      passed: boolean
+      excerpt?: string
+    }>
+  }
+}
+
+export type GraphWorkflowModule = {
+  id: string
+  name: string
+  type: "composite"
+  status: "pending" | "implemented" | "verified" | "failed"
+  taskIDs: Array<string>
+  tasks: Array<GraphWorkflowTask>
+}
+
+export type GraphWorkflowRollup = {
+  id: string
+  name: string
+  type: "prd" | "composite"
+  status: "pending" | "implemented" | "verified" | "failed"
+  taskIDs: Array<string>
+}
+
+export type GraphWorkflow = {
+  mode: "atomic" | "module" | "autopilot"
+  revision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  phase: "planning" | "building" | "verifying" | "checkpoint" | "complete" | "failed"
+  checkpoint: {
+    status: "none" | "pending" | "approved"
+    kind: "atomic" | "module" | "decision" | "failure" | "pause"
+    scopeNodeID: string
+    scopeName: string
+    reason: string
+  }
+  currentTask: GraphWorkflowTask
+  modules: Array<GraphWorkflowModule>
+  tasks: Array<GraphWorkflowTask>
+  rollups: Array<GraphWorkflowRollup>
+  progress: {
+    total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    verified: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    failed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    percent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type GraphWorkflowModePayload = {
+  mode: "atomic" | "module" | "autopilot"
+  expectedRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type GraphWorkflowRevisionConflict = {
+  _tag: "GraphWorkflowRevisionConflict"
+  expectedRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  actualRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  message: string
+}
+
+export type GraphWorkflowApprovePayload = {
+  expectedRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type GraphWorkflowPausePayload = {
+  expectedRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  reason?: string
 }
 
 export type GraphPromotePayload = {
@@ -8629,19 +8721,18 @@ export type GraphPlanAdmitResponses = {
 
 export type GraphPlanAdmitResponse = GraphPlanAdmitResponses[keyof GraphPlanAdmitResponses]
 
-export type GraphUpdateNodeStatusData = {
-  body?: GraphNodeStatusPayload
-  path: {
-    nodeID: string
-  }
-  query?: {
+export type GraphWorkflowData = {
+  body?: never
+  path?: never
+  query: {
     directory?: string
     workspace?: string
+    session: string
   }
-  url: "/graph/node/{nodeID}/status"
+  url: "/graph/workflow"
 }
 
-export type GraphUpdateNodeStatusErrors = {
+export type GraphWorkflowErrors = {
   /**
    * BadRequest | InvalidRequestError
    */
@@ -8652,16 +8743,127 @@ export type GraphUpdateNodeStatusErrors = {
   404: NotFoundError
 }
 
-export type GraphUpdateNodeStatusError = GraphUpdateNodeStatusErrors[keyof GraphUpdateNodeStatusErrors]
+export type GraphWorkflowError = GraphWorkflowErrors[keyof GraphWorkflowErrors]
 
-export type GraphUpdateNodeStatusResponses = {
+export type GraphWorkflowResponses = {
   /**
-   * Refreshed graph node
+   * Session workflow projection
    */
-  200: GraphNode
+  200: GraphWorkflow
 }
 
-export type GraphUpdateNodeStatusResponse = GraphUpdateNodeStatusResponses[keyof GraphUpdateNodeStatusResponses]
+export type GraphWorkflowResponse = GraphWorkflowResponses[keyof GraphWorkflowResponses]
+
+export type GraphWorkflowModeData = {
+  body?: GraphWorkflowModePayload
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    session: string
+  }
+  url: "/graph/workflow/mode"
+}
+
+export type GraphWorkflowModeErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * GraphWorkflowRevisionConflict
+   */
+  409: GraphWorkflowRevisionConflict
+}
+
+export type GraphWorkflowModeError = GraphWorkflowModeErrors[keyof GraphWorkflowModeErrors]
+
+export type GraphWorkflowModeResponses = {
+  /**
+   * Updated session workflow projection
+   */
+  200: GraphWorkflow
+}
+
+export type GraphWorkflowModeResponse = GraphWorkflowModeResponses[keyof GraphWorkflowModeResponses]
+
+export type GraphWorkflowApproveData = {
+  body?: GraphWorkflowApprovePayload
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    session: string
+  }
+  url: "/graph/workflow/approve"
+}
+
+export type GraphWorkflowApproveErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * GraphWorkflowRevisionConflict
+   */
+  409: GraphWorkflowRevisionConflict
+}
+
+export type GraphWorkflowApproveError = GraphWorkflowApproveErrors[keyof GraphWorkflowApproveErrors]
+
+export type GraphWorkflowApproveResponses = {
+  /**
+   * Updated session workflow projection
+   */
+  200: GraphWorkflow
+}
+
+export type GraphWorkflowApproveResponse = GraphWorkflowApproveResponses[keyof GraphWorkflowApproveResponses]
+
+export type GraphWorkflowPauseData = {
+  body?: GraphWorkflowPausePayload
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    session: string
+  }
+  url: "/graph/workflow/pause"
+}
+
+export type GraphWorkflowPauseErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * GraphWorkflowRevisionConflict
+   */
+  409: GraphWorkflowRevisionConflict
+}
+
+export type GraphWorkflowPauseError = GraphWorkflowPauseErrors[keyof GraphWorkflowPauseErrors]
+
+export type GraphWorkflowPauseResponses = {
+  /**
+   * Updated session workflow projection
+   */
+  200: GraphWorkflow
+}
+
+export type GraphWorkflowPauseResponse = GraphWorkflowPauseResponses[keyof GraphWorkflowPauseResponses]
 
 export type GraphPromoteData = {
   body?: GraphPromotePayload
