@@ -73,14 +73,19 @@ export const PromotePayload = Schema.Struct({
   message: Schema.optional(Schema.String),
 }).annotate({ identifier: "GraphPromotePayload" })
 
-export const NodeStatusPayload = Schema.Struct({
-  status: Schema.Literals(["pending", "deprecated"]),
-}).annotate({ identifier: "GraphNodeStatusPayload" })
-
 export const WorkflowModePayload = Schema.Struct({
   mode: Graph.ExecutionMode,
   expectedRevision: Schema.Number,
 }).annotate({ identifier: "GraphWorkflowModePayload" })
+
+export const WorkflowApprovePayload = Schema.Struct({
+  expectedRevision: Schema.Number,
+}).annotate({ identifier: "GraphWorkflowApprovePayload" })
+
+export const WorkflowPausePayload = Schema.Struct({
+  expectedRevision: Schema.Number,
+  reason: Schema.optional(Schema.String),
+}).annotate({ identifier: "GraphWorkflowPausePayload" })
 
 export class GraphWorkflowRevisionConflict extends Schema.TaggedErrorClass<GraphWorkflowRevisionConflict>()(
   "GraphWorkflowRevisionConflict",
@@ -230,10 +235,12 @@ const DiffResponse = Schema.Struct({
   }),
   nodesAdded: Schema.Array(Schema.String),
   nodesRemoved: Schema.Array(Schema.String),
-  nodesModified: Schema.Array(Schema.Struct({
-    id: Schema.String,
-    fields: Schema.Array(Schema.String),
-  })),
+  nodesModified: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      fields: Schema.Array(Schema.String),
+    }),
+  ),
   edgesAdded: Schema.Number,
   edgesRemoved: Schema.Number,
 }).annotate({ identifier: "GraphDiff" })
@@ -258,7 +265,8 @@ export const GraphPaths = {
   planAdmit: "/graph/plan/admit",
   workflow: "/graph/workflow",
   workflowMode: "/graph/workflow/mode",
-  nodeStatus: "/graph/node/:nodeID/status",
+  workflowApprove: "/graph/workflow/approve",
+  workflowPause: "/graph/workflow/pause",
   promote: "/graph/current-plan/promote",
 } as const
 
@@ -274,8 +282,7 @@ export const GraphApi = HttpApi.make("graph")
           OpenApi.annotations({
             identifier: "graph.main",
             summary: "Get project main graph",
-            description:
-              "Retrieve the project main graph (committed nodes and edges with session_id IS NULL).",
+            description: "Retrieve the project main graph (committed nodes and edges with session_id IS NULL).",
           }),
         ),
         HttpApiEndpoint.get("currentPlan", GraphPaths.currentPlan, {
@@ -286,8 +293,7 @@ export const GraphApi = HttpApi.make("graph")
           OpenApi.annotations({
             identifier: "graph.currentPlan",
             summary: "Get session CurrentPlan",
-            description:
-              "Retrieve the session-scoped CurrentPlan graph (nodes and edges with session_id = session).",
+            description: "Retrieve the session-scoped CurrentPlan graph (nodes and edges with session_id = session).",
           }),
         ),
         HttpApiEndpoint.get("node", GraphPaths.node, {
@@ -311,8 +317,7 @@ export const GraphApi = HttpApi.make("graph")
           OpenApi.annotations({
             identifier: "graph.nodeReadiness",
             summary: "Get node build readiness",
-            description:
-              "Check whether a node is ready to build: blockers, dependency status, validation issues.",
+            description: "Check whether a node is ready to build: blockers, dependency status, validation issues.",
           }),
         ),
         HttpApiEndpoint.get("nodeAudit", GraphPaths.nodeAudit, {
@@ -382,8 +387,7 @@ export const GraphApi = HttpApi.make("graph")
           OpenApi.annotations({
             identifier: "graph.planAdmit",
             summary: "Admit nodes and edges into the CurrentPlan",
-            description:
-              "Admit nodes and edges into the session-scoped CurrentPlan graph before implementation.",
+            description: "Admit nodes and edges into the session-scoped CurrentPlan graph before implementation.",
           }),
         ),
         HttpApiEndpoint.get("workflow", GraphPaths.workflow, {
@@ -409,17 +413,28 @@ export const GraphApi = HttpApi.make("graph")
             description: "Select execution mode using the exact current workflow revision.",
           }),
         ),
-        HttpApiEndpoint.patch("updateNodeStatus", GraphPaths.nodeStatus, {
-          params: { nodeID: Schema.String },
-          query: ProjectQuery,
-          payload: NodeStatusPayload,
-          success: described(GraphNodeResponse, "Refreshed graph node"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        HttpApiEndpoint.patch("workflowApprove", GraphPaths.workflowApprove, {
+          query: SessionRequiredQuery,
+          payload: WorkflowApprovePayload,
+          success: described(WorkflowResponse, "Updated session workflow projection"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, GraphWorkflowRevisionConflict],
         }).annotateMerge(
           OpenApi.annotations({
-            identifier: "graph.updateNodeStatus",
-            summary: "Update a graph node status",
-            description: "Update the status of a single graph node and return the refreshed node.",
+            identifier: "graph.workflowApprove",
+            summary: "Approve the pending workflow checkpoint",
+            description: "Approve a pending checkpoint using its exact workflow revision.",
+          }),
+        ),
+        HttpApiEndpoint.patch("workflowPause", GraphPaths.workflowPause, {
+          query: SessionRequiredQuery,
+          payload: WorkflowPausePayload,
+          success: described(WorkflowResponse, "Updated session workflow projection"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, GraphWorkflowRevisionConflict],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.workflowPause",
+            summary: "Pause the workflow",
+            description: "Create a pause checkpoint using the exact current workflow revision.",
           }),
         ),
         HttpApiEndpoint.post("promote", GraphPaths.promote, {

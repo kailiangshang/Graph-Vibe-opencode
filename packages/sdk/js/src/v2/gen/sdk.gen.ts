@@ -104,17 +104,25 @@ import type {
   GraphNodeReadinessErrors,
   GraphNodeReadinessResponses,
   GraphNodeResponses,
-  GraphNodeStatusPayload,
   GraphPlanAdmitErrors,
   GraphPlanAdmitPayload,
   GraphPlanAdmitResponses,
   GraphPromoteErrors,
   GraphPromotePayload,
   GraphPromoteResponses,
-  GraphUpdateNodeStatusErrors,
-  GraphUpdateNodeStatusResponses,
   GraphVersionsErrors,
   GraphVersionsResponses,
+  GraphWorkflowApproveErrors,
+  GraphWorkflowApprovePayload,
+  GraphWorkflowApproveResponses,
+  GraphWorkflowErrors,
+  GraphWorkflowModeErrors,
+  GraphWorkflowModePayload,
+  GraphWorkflowModeResponses,
+  GraphWorkflowPauseErrors,
+  GraphWorkflowPausePayload,
+  GraphWorkflowPauseResponses,
+  GraphWorkflowResponses,
   InstanceDisposeErrors,
   InstanceDisposeResponses,
   LocationRef,
@@ -2282,16 +2290,15 @@ export class Graph extends HeyApiClient {
   }
 
   /**
-   * Update a graph node status
+   * Get session workflow
    *
-   * Update the status of a single graph node and return the refreshed node.
+   * Retrieve durable workflow mode, revision, checkpoints, tasks, modules, and progress.
    */
-  public updateNodeStatus<ThrowOnError extends boolean = false>(
+  public workflow<ThrowOnError extends boolean = false>(
     parameters: {
-      nodeID: string
       directory?: string
       workspace?: string
-      graphNodeStatusPayload?: GraphNodeStatusPayload
+      session: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2300,20 +2307,131 @@ export class Graph extends HeyApiClient {
       [
         {
           args: [
-            { in: "path", key: "nodeID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
-            { key: "graphNodeStatusPayload", map: "body" },
+            { in: "query", key: "session" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<GraphWorkflowResponses, GraphWorkflowErrors, ThrowOnError>({
+      url: "/graph/workflow",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Select workflow execution mode
+   *
+   * Select execution mode using the exact current workflow revision.
+   */
+  public workflowMode<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      session: string
+      graphWorkflowModePayload?: GraphWorkflowModePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "session" },
+            { key: "graphWorkflowModePayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<GraphWorkflowModeResponses, GraphWorkflowModeErrors, ThrowOnError>({
+      url: "/graph/workflow/mode",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Approve the pending workflow checkpoint
+   *
+   * Approve a pending checkpoint using its exact workflow revision.
+   */
+  public workflowApprove<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      session: string
+      graphWorkflowApprovePayload?: GraphWorkflowApprovePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "session" },
+            { key: "graphWorkflowApprovePayload", map: "body" },
           ],
         },
       ],
     )
     return (options?.client ?? this.client).patch<
-      GraphUpdateNodeStatusResponses,
-      GraphUpdateNodeStatusErrors,
+      GraphWorkflowApproveResponses,
+      GraphWorkflowApproveErrors,
       ThrowOnError
     >({
-      url: "/graph/node/{nodeID}/status",
+      url: "/graph/workflow/approve",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Pause the workflow
+   *
+   * Create a pause checkpoint using the exact current workflow revision.
+   */
+  public workflowPause<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      session: string
+      graphWorkflowPausePayload?: GraphWorkflowPausePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "session" },
+            { key: "graphWorkflowPausePayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<GraphWorkflowPauseResponses, GraphWorkflowPauseErrors, ThrowOnError>({
+      url: "/graph/workflow/pause",
       ...options,
       ...params,
       headers: {
