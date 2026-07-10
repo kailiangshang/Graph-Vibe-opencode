@@ -9,6 +9,7 @@ function makeNode(id: string, overrides: Partial<NodeRow> = {}): NodeRow {
     level: "L2", priority: null, category: null, status: "pending",
     desc: null, content: null, codeHash: null, testStatus: "none",
     confidence: 1, timeCreated: 0, timeUpdated: 0, ...overrides,
+    verification: overrides.verification ?? null,
   }
 }
 
@@ -91,6 +92,16 @@ describe("BuildOrder", () => {
     const edges = [makeEdge("e1", "A", "B")]  // A blocks B, A is pending → B NOT buildable
     const buildable = BuildOrder.buildableNodes(nodes, edges).map((n) => n.id as string)
     expect(buildable).toContain("A")
+    expect(buildable).not.toContain("B")
+  })
+
+  test("buildableNodes excludes pending nodes blocked by an implemented source", () => {
+    const nodes = [
+      makeNode("A", { status: "implemented" }),
+      makeNode("B", { status: "pending" }),
+    ]
+    const buildable = BuildOrder.buildableNodes(nodes, [makeEdge("e1", "A", "B")]).map((node) => node.id as string)
+
     expect(buildable).not.toContain("B")
   })
 

@@ -10,6 +10,7 @@ import type { GenerationExecutor, GenerationRunStatus } from "./audit.sql"
 import { evaluateBuildGate } from "./gate"
 import type { GateResult } from "./gate"
 import type { Artifact } from "./artifact"
+import * as GraphWorkflowState from "./state"
 
 export interface BuildEvaluateInput {
   readonly projectID: ProjectV2.ID
@@ -36,16 +37,30 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const storage = yield* GraphStorage.Service
     const audit = yield* GraphAudit.Service
+    const workflowState = yield* GraphWorkflowState.Service
 
     const evaluate = Effect.fn("GraphBuild.evaluate")(function* (input: BuildEvaluateInput) {
       const main = yield* storage.main({ projectID: input.projectID })
       const currentPlan = yield* storage.currentPlan({ sessionID: input.sessionID })
+      const state = yield* workflowState.get(input.sessionID)
+      const evidence = yield* audit.tool.list({ projectID: input.projectID, sessionID: input.sessionID, nodeID: input.targetNodeID })
+      const latestEvidence = evidence.filter((record) => record.evidence !== null).at(-1)?.evidence
       const result = evaluateBuildGate({
         projectID: input.projectID,
         sessionID: input.sessionID,
         targetNodeID: input.targetNodeID,
         main,
         currentPlan,
+        workflow: {
+          mode: state?.mode ?? null,
+          currentNodeID: state?.currentNodeID ?? null,
+          checkpointKind: state?.checkpointKind ?? null,
+          checkpointScopeNodeID: state?.checkpointScopeNodeID ?? null,
+          checkpointStatus: state?.checkpointStatus ?? "none",
+          ...(latestEvidence == null || input.diagnosticsRequested
+            ? {}
+            : { latestEvidenceComplete: latestEvidence.complete }),
+        },
         consistencyIssues: input.consistencyIssues,
         artifact: input.artifact,
         diagnosticsRequested: input.diagnosticsRequested,
@@ -80,9 +95,17 @@ export const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer, deps: [GraphStorage.node, GraphAudit.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer,
+  deps: [GraphStorage.node, GraphAudit.node, GraphWorkflowState.node],
+})
 
-export const defaultLayer = layer.pipe(Layer.provide(GraphAudit.defaultLayer), Layer.provide(GraphStorage.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(GraphAudit.defaultLayer),
+  Layer.provide(GraphStorage.defaultLayer),
+  Layer.provide(GraphWorkflowState.defaultLayer),
+)
 
 function buildStatus(result: GateResult, dryRun: boolean): GenerationRunStatus {
   if (!result.allowed) return "blocked"

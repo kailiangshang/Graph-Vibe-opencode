@@ -14,6 +14,7 @@ import type {
   TestStatus,
   EdgeRelation,
   NodeContent,
+  VerificationSpec,
 } from "@opencode-ai/schema/graph"
 
 export const GraphNodeTable = sqliteTable(
@@ -35,6 +36,7 @@ export const GraphNodeTable = sqliteTable(
     status: text().$type<NodeStatus>().notNull().default("pending"),
     desc: text(),
     content: text({ mode: "json" }).$type<NodeContent>(),
+    verification: text({ mode: "json" }).$type<VerificationSpec>(),
     code_hash: text(),
     test_status: text().$type<TestStatus>().notNull().default("none"),
     confidence: real().notNull().default(1),

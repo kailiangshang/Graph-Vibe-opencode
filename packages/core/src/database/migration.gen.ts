@@ -43,5 +43,6 @@ export const migrations = (
     import("./migration/20260630062453_graph"),
     import("./migration/20260702022948_graph_workflow"),
     import("./migration/20260707090730_graph_artifact_draft"),
+    import("./migration/20260710153207_graph_collaboration"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

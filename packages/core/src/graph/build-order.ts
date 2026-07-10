@@ -60,7 +60,7 @@ export function buildableNodes(nodes: ReadonlyArray<NodeRow>, edges: ReadonlyArr
     const sources = blocksSources.get(node.id) ?? []
     return sources.every((srcID) => {
       const src = nodeMap.get(srcID)
-      return src?.status === "verified" || src?.status === "implemented"
+      return src?.status === "verified"
     })
   })
 }

@@ -6,6 +6,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import * as GraphDomain from "@opencode-ai/core/graph/domain"
 import * as GraphStorage from "@opencode-ai/core/graph/storage"
 import * as GraphPlan from "@opencode-ai/core/graph/workflow/plan"
+import * as GraphWorkflowState from "@opencode-ai/core/graph/workflow/state"
 
 const storageLayer = GraphStorage.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:"))) as Layer.Layer<
   Database.Service | GraphStorage.Service
@@ -13,8 +14,11 @@ const storageLayer = GraphStorage.layer.pipe(Layer.provideMerge(Database.layerFr
 const domainLayer = GraphDomain.layer.pipe(Layer.provideMerge(storageLayer)) as Layer.Layer<
   Database.Service | GraphStorage.Service | GraphDomain.Service
 >
-const planLayer = GraphPlan.layer.pipe(Layer.provideMerge(domainLayer)) as Layer.Layer<
-  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphPlan.Service
+const workflowLayer = GraphWorkflowState.layer.pipe(Layer.provideMerge(domainLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphWorkflowState.Service
+>
+const planLayer = GraphPlan.layer.pipe(Layer.provideMerge(workflowLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphWorkflowState.Service | GraphPlan.Service
 >
 
 const PID = "proj_test" as any
@@ -28,7 +32,7 @@ const seed = Effect.gen(function* () {
   yield* db.insert(SessionTable).values({ id: SID, project_id: PID, slug: "test", directory: "/tmp/test" as any, title: "test", version: "0", time_created: 0, time_updated: 0 } as any).run().pipe(Effect.orDie)
 })
 
-const run = <A, E>(effect: Effect.Effect<A, E, Database.Service | GraphStorage.Service | GraphDomain.Service | GraphPlan.Service>) =>
+const run = <A, E>(effect: Effect.Effect<A, E, Database.Service | GraphStorage.Service | GraphDomain.Service | GraphWorkflowState.Service | GraphPlan.Service>) =>
   Effect.runPromise(Effect.gen(function* () { yield* seed; return yield* effect }).pipe(Effect.provide(planLayer), Effect.scoped))
 
 describe("GraphPlan.admit", () => {
@@ -72,6 +76,55 @@ describe("GraphPlan.admit", () => {
       const currentPlan = yield* storage.currentPlan({ sessionID: SID })
       expect(currentPlan.nodes.map((node) => node.sessionID)).toEqual([SID, SID])
       expect(currentPlan.edges.map((edge) => edge.sessionID)).toEqual([SID])
+    }))
+  })
+
+  test("resets workflow authority after admission while preserving mode", async () => {
+    await run(Effect.gen(function* () {
+      const workflow = yield* GraphWorkflowState.Service
+      yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "atomic", expectedRevision: 0 })
+      const plan = yield* GraphPlan.Service
+      yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [
+          { id: A, type: "atomic", name: "A", level: "L2" },
+          { id: B, type: "atomic", name: "B", level: "L2" },
+        ],
+        edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
+      })
+
+      expect(yield* workflow.get(SID)).toMatchObject({
+        mode: "atomic",
+        currentNodeID: A,
+        checkpointKind: "atomic",
+        checkpointScopeNodeID: A,
+        checkpointStatus: "approved",
+        revision: 2,
+      })
+    }))
+  })
+
+  test("persists verification specs only on atomic nodes", async () => {
+    await run(Effect.gen(function* () {
+      const verification = {
+        criteria: ["observable result"],
+        diagnostics: [{ name: "test", paths: ["test/result.test.ts"] }],
+      } as const
+      const plan = yield* GraphPlan.Service
+      yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [
+          { id: A, type: "composite", name: "Module", level: "L1", verification },
+          { id: B, type: "atomic", name: "Task", level: "L2", verification },
+        ],
+        edges: [{ sourceID: A, targetID: B, relation: "contains" }],
+      })
+
+      const storage = yield* GraphStorage.Service
+      expect((yield* storage.node.get(A)).verification).toBeNull()
+      expect((yield* storage.node.get(B)).verification).toEqual(verification)
     }))
   })
 

@@ -76,6 +76,15 @@ describe("DatabaseMigration", () => {
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_context_epoch'`),
         ).toEqual({ name: "session_context_epoch" })
         expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'graph_workflow_state'`),
+        ).toEqual({ name: "graph_workflow_state" })
+        expect(
+          yield* db.all(sql`SELECT name FROM pragma_table_info('graph_node') WHERE name = 'verification'`),
+        ).toEqual([{ name: "verification" }])
+        expect(
+          yield* db.all(sql`SELECT name FROM pragma_table_info('graph_tool_run') WHERE name = 'evidence'`),
+        ).toEqual([{ name: "evidence" }])
+        expect(
           yield* db.get(
             sql`SELECT name FROM pragma_table_info('session_context_epoch') WHERE name IN ('agent', 'replacement_seq', 'revision')`,
           ),

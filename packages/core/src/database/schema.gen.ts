@@ -71,10 +71,30 @@ export default {
           \`output_summary\` text,
           \`status\` text NOT NULL,
           \`error\` text,
+          \`evidence\` text,
           \`time_created\` integer NOT NULL,
           CONSTRAINT \`fk_graph_tool_run_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE,
           CONSTRAINT \`fk_graph_tool_run_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE,
           CONSTRAINT \`fk_graph_tool_run_node_id_graph_node_id_fk\` FOREIGN KEY (\`node_id\`) REFERENCES \`graph_node\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`graph_workflow_state\` (
+          \`session_id\` text PRIMARY KEY,
+          \`project_id\` text NOT NULL,
+          \`mode\` text,
+          \`current_node_id\` text,
+          \`checkpoint_kind\` text,
+          \`checkpoint_scope_node_id\` text,
+          \`checkpoint_status\` text DEFAULT 'none' NOT NULL,
+          \`checkpoint_reason\` text,
+          \`revision\` integer DEFAULT 0 NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_graph_workflow_state_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_graph_workflow_state_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_graph_workflow_state_current_node_id_graph_node_id_fk\` FOREIGN KEY (\`current_node_id\`) REFERENCES \`graph_node\`(\`id\`) ON DELETE SET NULL,
+          CONSTRAINT \`fk_graph_workflow_state_checkpoint_scope_node_id_graph_node_id_fk\` FOREIGN KEY (\`checkpoint_scope_node_id\`) REFERENCES \`graph_node\`(\`id\`) ON DELETE SET NULL
         );
       `)
       yield* tx.run(`
@@ -169,6 +189,7 @@ export default {
           \`status\` text DEFAULT 'pending' NOT NULL,
           \`desc\` text,
           \`content\` text,
+          \`verification\` text,
           \`code_hash\` text,
           \`test_status\` text DEFAULT 'none' NOT NULL,
           \`confidence\` real DEFAULT 1 NOT NULL,

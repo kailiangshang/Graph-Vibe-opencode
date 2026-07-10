@@ -8,6 +8,7 @@ import * as GraphStorage from "../storage"
 import { validateSubgraph } from "../validation"
 import type { EdgeRow, NodeRow } from "../storage"
 import type { ProjectV2 } from "../../project"
+import * as GraphWorkflowState from "./state"
 
 export type PlanNodeCreate = Omit<GraphStorage.NodeCreate, "projectID" | "sessionID">
 export type PlanEdgeCreate = Omit<GraphStorage.EdgeCreate, "projectID" | "sessionID" | "sourceID" | "targetID"> & {
@@ -30,7 +31,10 @@ export interface AdmitPlanResult {
 }
 
 export interface Interface {
-  readonly admit: (input: AdmitPlanInput) => Effect.Effect<AdmitPlanResult, GraphDomain.ValidationError | GraphStorage.NotFoundError>
+  readonly admit: (input: AdmitPlanInput) => Effect.Effect<
+    AdmitPlanResult,
+    GraphDomain.ValidationError | GraphStorage.NotFoundError | GraphWorkflowState.ModuleScopeError
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/GraphPlan") {}
@@ -40,6 +44,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const domain = yield* GraphDomain.Service
+    const workflow = yield* GraphWorkflowState.Service
 
     const admit = Effect.fn("GraphPlan.admit")(function* (input: AdmitPlanInput) {
       if (input.dryRun) {
@@ -53,7 +58,12 @@ export const layer = Layer.effect(
           const nodeIDs: GraphStorage.NodeID[] = []
           yield* Effect.forEach(input.nodes, (node) =>
             Effect.gen(function* () {
-              const id = yield* domain.node.create({ ...node, projectID: input.projectID, sessionID: input.sessionID })
+              const id = yield* domain.node.create({
+                ...node,
+                verification: node.type === "atomic" ? node.verification : undefined,
+                projectID: input.projectID,
+                sessionID: input.sessionID,
+              })
               nodeIDs.push(id)
             }),
           )
@@ -85,6 +95,11 @@ export const layer = Layer.effect(
               })
             }),
           )
+          yield* workflow.resetPlan({
+            projectID: input.projectID,
+            sessionID: input.sessionID,
+            graph: yield* domain.currentPlan({ sessionID: input.sessionID }),
+          })
           return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: false }
         }),
       ).pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
@@ -94,10 +109,15 @@ export const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer, deps: [Database.node, GraphDomain.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer,
+  deps: [Database.node, GraphDomain.node, GraphWorkflowState.node],
+})
 
 export const defaultLayer = layer.pipe(
   Layer.provide(GraphDomain.defaultLayer),
+  Layer.provide(GraphWorkflowState.defaultLayer),
   Layer.provide(Database.layerFromPath(Database.path())),
 )
 
@@ -122,6 +142,7 @@ function validateDryRun(input: AdmitPlanInput) {
     status: node.status ?? "pending",
     desc: node.desc ?? null,
     content: node.content ?? null,
+    verification: node.verification ?? null,
     codeHash: node.codeHash ?? null,
     testStatus: node.testStatus ?? "none",
     confidence: node.confidence ?? 1,

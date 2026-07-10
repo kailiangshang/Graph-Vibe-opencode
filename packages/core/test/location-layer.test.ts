@@ -32,6 +32,8 @@ import { EventV2 } from "../src/event"
 import { Global } from "../src/global"
 import { GraphStorage } from "../src/graph/storage"
 import { GraphNodeTable } from "../src/graph/sql"
+import { GraphToolRunTable } from "../src/graph/workflow/audit.sql"
+import { GraphWorkflowStateTable } from "../src/graph/workflow/state.sql"
 import { ModelsDev } from "../src/models-dev"
 import { Npm } from "../src/npm"
 import { Project } from "../src/project"
@@ -288,9 +290,128 @@ describe("LocationServiceMap", () => {
                   .pipe(Effect.orDie)
                 expect(node?.status).not.toBe("verified")
                 expect(node?.test_status).not.toBe("passed")
+                const workflow = yield* state.db
+                  .select()
+                  .from(GraphWorkflowStateTable)
+                  .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                const evidence = yield* state.db
+                  .select()
+                  .from(GraphToolRunTable)
+                  .where(eq(GraphToolRunTable.node_id, state.targetNodeID))
+                  .all()
+                  .pipe(Effect.orDie)
+                expect(workflow?.current_node_id).toBe(state.targetNodeID)
+                expect(evidence.find((record) => record.evidence)?.evidence?.complete).toBe(false)
               }),
             ),
           ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("advances atomic workflow only after complete successful diagnostics and records evidence", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(() =>
+            fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { test: "bun -e 'process.exit(0)'" } })),
+          ).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ]).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-complete",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(
+                    LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) })),
+                  ),
+                )
+                const workflow = yield* state.db
+                  .select()
+                  .from(GraphWorkflowStateTable)
+                  .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                const audit = yield* state.db
+                  .select()
+                  .from(GraphToolRunTable)
+                  .where(eq(GraphToolRunTable.node_id, state.targetNodeID))
+                  .all()
+                  .pipe(Effect.orDie)
+
+                expect(workflow?.current_node_id).toBeNull()
+                expect(workflow?.checkpoint_status).toBe("none")
+                expect(audit.find((record) => record.tool_name === "graph.diagnostics.run")?.evidence).toMatchObject({
+                  kind: "diagnostics",
+                  nodeID: state.targetNodeID,
+                  complete: true,
+                  passed: true,
+                })
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("blocks artifact apply before write permission or filesystem mutation at a checkpoint", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            const outputPath = path.join(dir.path, "src", "blocked.ts")
+            yield* setupGraphDiagnostics(dir.path, [
+              { action: "graph.artifact_write", resource: "*", effect: "deny" },
+            ]).pipe(
+              Effect.flatMap((state) =>
+                Effect.gen(function* () {
+                  yield* state.db
+                    .update(GraphWorkflowStateTable)
+                    .set({ checkpoint_kind: "pause", checkpoint_status: "pending", revision: 3 })
+                    .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                    .run()
+                    .pipe(Effect.orDie)
+                  yield* executeTool(state.registry, {
+                    sessionID: state.sessionID,
+                    ...toolIdentity,
+                    call: {
+                      type: "tool-call",
+                      id: "call-artifact-blocked-checkpoint",
+                      name: "graph_artifact_apply",
+                      input: {
+                        targetNodeID: state.targetNodeID,
+                        artifact: { mode: "full", path: "src/blocked.ts", code: "export const blocked = true\n", test: "test\n" },
+                      },
+                    },
+                  })
+                }),
+              ),
+              Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+            )
+
+            expect(yield* Effect.promise(() => fileExists(outputPath))).toBe(false)
+          }),
         ),
       ),
     ),
@@ -523,8 +644,26 @@ function setupGraphDiagnostics(directory: string, permissions: PermissionV2.Rule
       })
       .run()
       .pipe(Effect.orDie)
+    yield* state.db
+      .insert(GraphWorkflowStateTable)
+      .values({
+        session_id: state.sessionID,
+        project_id: ProjectV2.ID.global,
+        mode: "atomic",
+        current_node_id: targetNodeID,
+        checkpoint_kind: "atomic",
+        checkpoint_scope_node_id: targetNodeID,
+        checkpoint_status: "approved",
+        revision: 2,
+      })
+      .run()
+      .pipe(Effect.orDie)
     return { ...state, targetNodeID }
   })
+}
+
+async function fileExists(file: string) {
+  return fs.access(file).then(() => true, () => false)
 }
 
 function setupGraphSession(directory: string) {

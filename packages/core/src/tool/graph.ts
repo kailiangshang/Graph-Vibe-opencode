@@ -20,6 +20,7 @@ import { GraphAudit } from "../graph/workflow/audit"
 import { GraphBuild } from "../graph/workflow/build"
 import type { GateResult } from "../graph/workflow/gate"
 import { GraphPlan } from "../graph/workflow/plan"
+import { GraphWorkflowState } from "../graph/workflow/state"
 import { Location } from "../location"
 import { PermissionV2 } from "../permission"
 import { AppProcess } from "../process"
@@ -39,6 +40,7 @@ const PlanNode = Schema.Struct({
   category: Schema.String.pipe(Schema.optional),
   desc: Schema.String.pipe(Schema.optional),
   content: Graph.NodeContent.pipe(Schema.optional),
+  verification: Graph.VerificationSpec.pipe(Schema.optional),
   codeHash: Schema.String.pipe(Schema.optional),
   confidence: Schema.Number.pipe(Schema.optional),
 })
@@ -191,6 +193,7 @@ const layer = Layer.effectDiscard(
     const build = yield* GraphBuild.Service
     const storage = yield* GraphStorage.Service
     const audit = yield* GraphAudit.Service
+    const workflow = yield* GraphWorkflowState.Service
     const domain = yield* GraphDomain.Service
     const drafts = yield* GraphArtifactDraft.Service
     const fs = yield* FSUtil.Service
@@ -535,6 +538,30 @@ const layer = Layer.effectDiscard(
                   ...(verified ? { status: "verified" as const } : {}),
                 })
               }
+              const target = yield* storage.node.get(input.targetNodeID)
+              const artifactPaths = (yield* audit.tool.list({
+                projectID: session.projectID,
+                sessionID: session.sessionID,
+                nodeID: input.targetNodeID,
+              }))
+                .filter((record) => record.toolName === "graph.artifact.apply" && record.status === "succeeded")
+                .at(-1)?.inputSummary?.replace(/^files=/, "").split(",").filter((item) => item.length > 0) ?? []
+              const evidence: Graph.VerificationEvidence = {
+                kind: "diagnostics",
+                nodeID: input.targetNodeID,
+                criteria: target.verification?.criteria ?? [],
+                artifactPaths,
+                complete: completeDiagnostics,
+                passed: verified,
+                commands: results.map((result) => ({
+                  name: result.name,
+                  command: result.command,
+                  exitCode: result.exitCode,
+                  timedOut: result.timedOut,
+                  passed: result.passed,
+                  excerpt: result.output.slice(0, 8_192),
+                })),
+              }
               yield* audit.tool.record({
                 projectID: session.projectID,
                 sessionID: session.sessionID,
@@ -544,7 +571,16 @@ const layer = Layer.effectDiscard(
                 status: allPassed ? "succeeded" : "failed",
                 inputSummary: commands.map((command) => command.name).join("; "),
                 outputSummary: results.map((result) => `${result.name}:${result.failureReason ?? result.exitCode}`).join(", "),
+                evidence,
               })
+              if (verified) {
+                yield* workflow.advanceVerified({
+                  sessionID: session.sessionID,
+                  nodeID: input.targetNodeID,
+                  graph: yield* storage.currentPlan({ sessionID: session.sessionID }),
+                })
+                yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
+              }
               return toolOutput(verified ? "Diagnostics passed" : allPassed ? "Diagnostics passed - filtered subset" : "Diagnostics failed", {
                 gate: summarizeGate(gate),
                 ran: true,
@@ -1030,6 +1066,7 @@ function planNodeInput(node: typeof PlanNode.Type): GraphPlan.PlanNodeCreate {
     ...(node.category === undefined ? {} : { category: node.category }),
     ...(node.desc === undefined ? {} : { desc: node.desc }),
     ...(node.content === undefined ? {} : { content: node.content }),
+    ...(node.verification === undefined ? {} : { verification: node.verification }),
     ...(node.codeHash === undefined ? {} : { codeHash: node.codeHash }),
     ...(node.confidence === undefined ? {} : { confidence: node.confidence }),
   }
@@ -1163,6 +1200,7 @@ export const node = makeLocationNode({
     GraphBuild.node,
     GraphStorage.node,
     GraphAudit.node,
+    GraphWorkflowState.node,
     GraphDomain.node,
     GraphArtifactDraft.node,
     FSUtil.node,
