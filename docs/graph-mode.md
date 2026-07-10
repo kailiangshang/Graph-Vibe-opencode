@@ -4,6 +4,38 @@ Graph mode is a structured development workflow where the AI agent operates from
 plan graph instead of free-form tool access. The graph tracks requirements (PRD),
 composite features, and atomic tasks through implementation and verification stages.
 
+## Quick Start
+
+Run Graph Vibe from the project you want to develop:
+
+```bash
+graph-vibe
+```
+
+Describe the desired outcome normally, or use the TUI commands:
+
+| Command         | Purpose                                                   |
+| --------------- | --------------------------------------------------------- |
+| `/graph`        | Open the Graph Workflow guide                             |
+| `/graph-start`  | Insert a Goal / Success criteria / Constraints task draft |
+| `/graph-status` | Inspect Current Plan and diagnostic counts                |
+| `/graph-open`   | Open the active session graph in Graph Vibe Web           |
+
+Start the local Web UI and graph-enabled backend together:
+
+```bash
+graph-vibe web
+```
+
+In a source checkout this command supervises the local backend and Vite app and
+stops both on exit. Packaged native builds serve the embedded app. Graph Vibe
+never silently substitutes `app.opencode.ai` when its own Web assets are missing;
+it returns an explicit service error instead.
+
+Graph Vibe uses OpenCode-compatible packages, protocols, SDKs, configuration,
+and data paths internally. Product identity changes apply only to user-facing
+CLI, TUI, and Web delivery surfaces.
+
 ## Enabling Graph Mode
 
 ### Environment Variable
@@ -18,11 +50,11 @@ OPENCODE_EXPERIMENTAL=1 OPENCODE_EXPERIMENTAL_GRAPH_MODE=1 opencode serve --port
 
 ### Flag Precedence
 
-| Flag | Requires `OPENCODE_EXPERIMENTAL` | Since |
-| --- | --- | --- |
-| `OPENCODE_ENABLE_GRAPH_MODE=1` | No | current |
-| `OPENCODE_EXPERIMENTAL_GRAPH_MODE=1` | No (self-enabling) | initial |
-| `OPENCODE_EXPERIMENTAL=1` | — (master switch, enables all experimental features) | initial |
+| Flag                                 | Requires `OPENCODE_EXPERIMENTAL`                     | Since   |
+| ------------------------------------ | ---------------------------------------------------- | ------- |
+| `OPENCODE_ENABLE_GRAPH_MODE=1`       | No                                                   | current |
+| `OPENCODE_EXPERIMENTAL_GRAPH_MODE=1` | No (self-enabling)                                   | initial |
+| `OPENCODE_EXPERIMENTAL=1`            | — (master switch, enables all experimental features) | initial |
 
 ## How It Works
 
@@ -61,6 +93,7 @@ Navigate to `/<base64(directory)>/session/<id>/graph` or click the Graph button
 (branch icon) in the session header.
 
 Features:
+
 - **Plan / Main toggle**: view the session's Current Plan or the project's Main Graph.
 - **Graph / List view**: force-directed canvas or flat list.
 - **L1 / L2 filter**: filter by node type (PRD/composite vs atomic).
@@ -73,27 +106,27 @@ and refreshes automatically.
 
 ## HTTP API
 
-| Endpoint | Method | Description |
-| --- | --- | --- |
-| `/graph/main` | GET | Main graph for the project directory |
-| `/graph/current-plan` | GET | Current Plan for a session |
-| `/graph/node/:id` | GET | Node detail by ID |
-| `/graph/node-readiness` | GET | Blockers and validation issues for a node |
-| `/graph/plan/admit` | POST | Admit nodes/edges into Current Plan |
-| `/graph/node/:id/status` | PATCH | Update node status |
-| `/graph/plan/promote` | POST | Promote Current Plan to a versioned Main Graph snapshot |
+| Endpoint                 | Method | Description                                             |
+| ------------------------ | ------ | ------------------------------------------------------- |
+| `/graph/main`            | GET    | Main graph for the project directory                    |
+| `/graph/current-plan`    | GET    | Current Plan for a session                              |
+| `/graph/node/:id`        | GET    | Node detail by ID                                       |
+| `/graph/node-readiness`  | GET    | Blockers and validation issues for a node               |
+| `/graph/plan/admit`      | POST   | Admit nodes/edges into Current Plan                     |
+| `/graph/node/:id/status` | PATCH  | Update node status                                      |
+| `/graph/plan/promote`    | POST   | Promote Current Plan to a versioned Main Graph snapshot |
 
 All endpoints require a `directory` query parameter.
 
 ## Database Tables
 
-| Table | Purpose |
-| --- | --- |
-| `graph_node` | Plan nodes (PRD, composite, atomic) with status and test status |
-| `graph_edge` | Relationships (contains, blocks, addresses, uses, deprecated_by) |
-| `graph_generation_run` | LLM generation tracking per node |
-| `graph_tool_run` | Tool execution tracking per node |
-| `graph_artifact_draft` | Staged file artifacts per node |
+| Table                  | Purpose                                                          |
+| ---------------------- | ---------------------------------------------------------------- |
+| `graph_node`           | Plan nodes (PRD, composite, atomic) with status and test status  |
+| `graph_edge`           | Relationships (contains, blocks, addresses, uses, deprecated_by) |
+| `graph_generation_run` | LLM generation tracking per node                                 |
+| `graph_tool_run`       | Tool execution tracking per node                                 |
+| `graph_artifact_draft` | Staged file artifacts per node                                   |
 
 ## Status Flow
 

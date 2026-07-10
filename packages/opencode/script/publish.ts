@@ -34,6 +34,7 @@ const version = Object.values(binaries)[0]
 await $`mkdir -p ./dist/${pkg.name}`
 await $`mkdir -p ./dist/${pkg.name}/bin`
 await $`cp ./script/postinstall.mjs ./dist/${pkg.name}/postinstall.mjs`
+await $`cp ./bin/graph-vibe.cjs ./dist/${pkg.name}/bin/graph-vibe.cjs`
 await Bun.file(`./dist/${pkg.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
 await Bun.file(`./dist/${pkg.name}/bin/${pkg.name}.exe`).write(
   [
@@ -57,6 +58,7 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
       name: pkg.name + "-ai",
       bin: {
         [pkg.name]: `./bin/${pkg.name}.exe`,
+        "graph-vibe": "./bin/graph-vibe.cjs",
       },
       scripts: {
         postinstall: "node ./postinstall.mjs",
