@@ -86,6 +86,10 @@ import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
+import { Product } from "@opencode-ai/core/product"
+import { DialogGraphGuide } from "./component/dialog-graph-guide"
+import { DialogGraphStatus } from "./component/dialog-graph-status"
+import { graphWebUrl, startGraphPrompt, summarizeCurrentPlan } from "./graph/workflow"
 
 registerOpencodeSpinner()
 
@@ -141,6 +145,7 @@ const appBindingCommands = [
 
 export type TuiInput = {
   url: string
+  webUrl?: string
   args: Args
   config: TuiConfig.Resolved
   onSnapshot?: () => Promise<string[]>
@@ -297,6 +302,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                       <PluginRuntimeProvider value={pluginRuntime}>
                                         <SDKProvider
                                           url={input.url}
+                                          webUrl={input.webUrl}
                                           directory={input.directory}
                                           fetch={input.fetch}
                                           headers={input.headers}
@@ -454,24 +460,24 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (!terminalTitleEnabled() || Flag.OPENCODE_DISABLE_TERMINAL_TITLE) return
 
     if (route.data.type === "home") {
-      renderer.setTerminalTitle("OpenCode")
+      renderer.setTerminalTitle(Product.current().name)
       return
     }
 
     if (route.data.type === "session") {
       const session = sync.session.get(route.data.sessionID)
       if (!session || isDefaultTitle(session.title)) {
-        renderer.setTerminalTitle("OpenCode")
+        renderer.setTerminalTitle(Product.current().name)
         return
       }
 
       const title = session.title.length > 40 ? session.title.slice(0, 37) + "..." : session.title
-      renderer.setTerminalTitle(`OC | ${title}`)
+      renderer.setTerminalTitle(`${Product.current().name} | ${title}`)
       return
     }
 
     if (route.data.type === "plugin") {
-      renderer.setTerminalTitle(`OC | ${route.data.id}`)
+      renderer.setTerminalTitle(`${Product.current().name} | ${route.data.id}`)
     }
   })
 
@@ -592,6 +598,89 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           dialog.clear()
         },
       },
+      ...(Flag.OPENCODE_EXPERIMENTAL_GRAPH_MODE
+        ? [
+            {
+              name: "graph.guide",
+              title: "Graph Workflow guide",
+              category: "Graph Workflow",
+              slashName: "graph",
+              run: () => dialog.replace(() => <DialogGraphGuide />),
+            },
+            {
+              name: "graph.start",
+              title: "Start a graph-guided task",
+              category: "Graph Workflow",
+              slashName: "graph-start",
+              run: () => {
+                if (!startGraphPrompt(promptRef.current)) {
+                  toast.show({
+                    variant: "warning",
+                    message: "Open a prompt, then run /graph-start again.",
+                  })
+                  return
+                }
+                dialog.clear()
+              },
+            },
+            {
+              name: "graph.status",
+              title: "View Graph Workflow status",
+              category: "Graph Workflow",
+              slashName: "graph-status",
+              run: async () => {
+                if (route.data.type !== "session") {
+                  toast.show({
+                    variant: "info",
+                    message: "Start or select a session, then run /graph-status again.",
+                  })
+                  return
+                }
+                const response = await sdk.client.graph.currentPlan({
+                  session: route.data.sessionID,
+                  directory: sdk.directory,
+                })
+                if (response.error || !response.data) {
+                  toast.show({ variant: "error", message: "Unable to load the Current Plan." })
+                  return
+                }
+                dialog.replace(() => <DialogGraphStatus summary={summarizeCurrentPlan(response.data.nodes)} />)
+              },
+            },
+            {
+              name: "graph.open",
+              title: "Open Graph in Web",
+              category: "Graph Workflow",
+              slashName: "graph-open",
+              run: () => {
+                if (route.data.type !== "session") {
+                  toast.show({
+                    variant: "info",
+                    message: "Start or select a session, then run /graph-open again.",
+                  })
+                  return
+                }
+                const url = graphWebUrl({
+                  webUrl: sdk.webUrl,
+                  serverUrl: sdk.url,
+                  directory: sdk.directory ?? process.cwd(),
+                  sessionID: route.data.sessionID,
+                })
+                if (!url) {
+                  toast.show({
+                    variant: "info",
+                    message: "Graph Vibe Web is unavailable. Run `graph-vibe web`, then retry /graph-open.",
+                  })
+                  return
+                }
+                open(url).catch(() =>
+                  toast.show({ variant: "warning", message: `Could not open the browser. Open ${url} manually.` }),
+                )
+                dialog.clear()
+              },
+            },
+          ]
+        : []),
       {
         name: "workspace.copy_path",
         title: "Copy worktree path",
@@ -1070,7 +1159,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     await DialogAlert.show(
       dialog,
       "Update Complete",
-      `Successfully updated to OpenCode v${result.data.version}. Please restart the application.`,
+      `Successfully updated to ${Product.current().name} v${result.data.version}. Please restart the application.`,
     )
 
     void exit()

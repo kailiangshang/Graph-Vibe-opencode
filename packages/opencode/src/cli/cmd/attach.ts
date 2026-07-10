@@ -134,6 +134,7 @@ export const AttachCommand = cmd({
     await Effect.runPromise(
       run({
         url: args.url,
+        webUrl: args.url,
         config,
         pluginHost: createLegacyTuiPluginHost(),
         args: {

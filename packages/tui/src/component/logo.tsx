@@ -2,6 +2,7 @@ import { RGBA, TextAttributes } from "@opentui/core"
 import { For, type JSX } from "solid-js"
 import { tint, useTheme } from "../context/theme"
 import { logo } from "../logo"
+import { Product } from "@opencode-ai/core/product"
 
 export function Logo() {
   const { theme } = useTheme()
@@ -57,7 +58,7 @@ export function Logo() {
         )}
       </For>
       <text fg={theme.textMuted} selectable={false}>
-        Graph Vibe OpenCode · forked from anomalyco/opencode
+        {Product.current().name}
       </text>
     </box>
   )

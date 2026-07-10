@@ -2,6 +2,8 @@ import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
 import { useDialog } from "./dialog"
 import { useBindings, useCommandShortcut } from "../keymap"
+import { Flag } from "@opencode-ai/core/flag/flag"
+import { Product } from "@opencode-ai/core/product"
 
 export function DialogHelp() {
   const dialog = useDialog()
@@ -30,6 +32,18 @@ export function DialogHelp() {
           Press {commandShortcut()} to see all available actions and commands in any context.
         </text>
       </box>
+      {Flag.OPENCODE_EXPERIMENTAL_GRAPH_MODE && (
+        <box paddingBottom={1}>
+          <text attributes={TextAttributes.BOLD} fg={theme.text}>
+            Graph Workflow
+          </text>
+          <text fg={theme.textMuted}>/graph workflow guide</text>
+          <text fg={theme.textMuted}>/graph-start create a guided task draft</text>
+          <text fg={theme.textMuted}>/graph-status inspect Current Plan progress</text>
+          <text fg={theme.textMuted}>/graph-open open the session graph in Web</text>
+          {Product.current().attribution && <text fg={theme.textMuted}>{Product.current().attribution}</text>}
+        </box>
+      )}
       <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
         <box paddingLeft={3} paddingRight={3} backgroundColor={theme.primary} onMouseUp={() => dialog.clear()}>
           <text fg={theme.selectedListItemText}>ok</text>

@@ -2,6 +2,7 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createMemo, For, type Accessor } from "solid-js"
 import { DEFAULT_THEMES, useTheme } from "../../context/theme"
 import { useCommandShortcut } from "../../keymap"
+import { Product } from "@opencode-ai/core/product"
 
 const themeCount = Object.keys(DEFAULT_THEMES).length
 
@@ -233,16 +234,16 @@ const TIPS: Tip[] = [
   "Tool definitions can invoke scripts written in Python, Go, etc",
   "Add {highlight}.ts{/highlight} files to {highlight}.opencode/plugins/{/highlight} for event hooks",
   "Use plugins to send OS notifications when sessions complete",
-  "Create a plugin to prevent OpenCode from reading sensitive files",
-  "Use {highlight}opencode run{/highlight} for non-interactive scripting",
-  "Use {highlight}opencode --continue{/highlight} to resume the last session",
-  "Use {highlight}opencode run -f file.ts{/highlight} to attach files via CLI",
+  `Create a plugin to prevent ${Product.current().name} from reading sensitive files`,
+  `Use {highlight}${Product.current().cli} run{/highlight} for non-interactive scripting`,
+  `Use {highlight}${Product.current().cli} --continue{/highlight} to resume the last session`,
+  `Use {highlight}${Product.current().cli} run -f file.ts{/highlight} to attach files via CLI`,
   "Use {highlight}--format json{/highlight} for machine-readable output in scripts",
-  "Run {highlight}opencode serve{/highlight} for headless API access to OpenCode",
-  "Use {highlight}opencode run --attach{/highlight} to connect to a running server",
-  "Run {highlight}opencode upgrade{/highlight} to update to the latest version",
-  "Run {highlight}opencode auth list{/highlight} to see all configured providers",
-  "Run {highlight}opencode agent create{/highlight} for guided agent creation",
+  `Run {highlight}${Product.current().cli} serve{/highlight} for headless API access to ${Product.current().name}`,
+  `Use {highlight}${Product.current().cli} run --attach{/highlight} to connect to a running server`,
+  `Run {highlight}${Product.current().cli} upgrade{/highlight} to update to the latest version`,
+  `Run {highlight}${Product.current().cli} auth list{/highlight} to see all configured providers`,
+  `Run {highlight}${Product.current().cli} agent create{/highlight} for guided agent creation`,
   "Use {highlight}/opencode{/highlight} in GitHub issues/PRs to trigger AI actions",
   "Run {highlight}opencode github install{/highlight} to set up the GitHub workflow",
   "Comment {highlight}/opencode fix this{/highlight} on issues to auto-create PRs",
@@ -264,7 +265,7 @@ const TIPS: Tip[] = [
   "Run {highlight}/unshare{/highlight} to remove a session from public access",
   "Permission {highlight}doom_loop{/highlight} prevents infinite tool call loops",
   "Permission {highlight}external_directory{/highlight} protects files outside project",
-  "Run {highlight}opencode debug config{/highlight} to troubleshoot configuration",
+  `Run {highlight}${Product.current().cli} debug config{/highlight} to troubleshoot configuration`,
   "Use {highlight}--print-logs{/highlight} flag to see detailed logs in stderr",
   (shortcuts) => `Use ${commandText("/timeline", shortcuts.sessionTimeline())} to jump to specific messages`,
   (shortcuts) => press(shortcuts.messagesToggleConceal(), "to toggle code block visibility in messages"),

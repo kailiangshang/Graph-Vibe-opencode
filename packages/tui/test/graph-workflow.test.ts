@@ -1,9 +1,22 @@
 import { describe, expect, test } from "bun:test"
-import { TASK_DRAFT, graphWebUrl, summarizeCurrentPlan } from "../src/graph/workflow"
+import { TASK_DRAFT, graphWebUrl, startGraphPrompt, summarizeCurrentPlan } from "../src/graph/workflow"
 
 describe("Graph Workflow", () => {
   test("provides the beginner task draft", () => {
     expect(TASK_DRAFT).toBe("What do you want to build or change?\n\nGoal:\nSuccess criteria:\nConstraints:")
+  })
+
+  test("writes and focuses the mounted prompt", () => {
+    const calls: string[] = []
+
+    expect(
+      startGraphPrompt({
+        set: (prompt) => calls.push(prompt.input),
+        focus: () => calls.push("focus"),
+      }),
+    ).toBe(true)
+    expect(calls).toEqual([TASK_DRAFT, "focus"])
+    expect(startGraphPrompt(undefined)).toBe(false)
   })
 
   test("summarizes plan and diagnostic states in stable order", () => {

@@ -2,13 +2,24 @@ import { base64Encode } from "@opencode-ai/core/util/encode"
 
 export const TASK_DRAFT = "What do you want to build or change?\n\nGoal:\nSuccess criteria:\nConstraints:"
 
+export function startGraphPrompt(
+  prompt: { set(value: { input: string; parts: never[] }): void; focus(): void } | undefined,
+) {
+  if (!prompt) return false
+  prompt.set({ input: TASK_DRAFT, parts: [] })
+  prompt.focus()
+  return true
+}
+
 type NodeStatus = "pending" | "implemented" | "verified" | "deprecated"
 type TestStatus = "none" | "pending" | "passed" | "failed"
 type GraphNode = { status: NodeStatus; testStatus: TestStatus }
 
 export function summarizeCurrentPlan(nodes: readonly GraphNode[]) {
   const counts = <T extends string>(values: readonly T[], get: (node: GraphNode) => T) =>
-    values.map((value) => [value[0].toUpperCase() + value.slice(1), nodes.filter((node) => get(node) === value).length] as const)
+    values.map(
+      (value) => [value[0].toUpperCase() + value.slice(1), nodes.filter((node) => get(node) === value).length] as const,
+    )
 
   return {
     total: nodes.length,
@@ -17,12 +28,7 @@ export function summarizeCurrentPlan(nodes: readonly GraphNode[]) {
   }
 }
 
-export function graphWebUrl(input: {
-  webUrl?: string
-  serverUrl: string
-  directory: string
-  sessionID: string
-}) {
+export function graphWebUrl(input: { webUrl?: string; serverUrl: string; directory: string; sessionID: string }) {
   if (!input.webUrl) return
   const web = new URL(input.webUrl)
   const server = new URL(input.serverUrl)

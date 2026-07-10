@@ -16,6 +16,7 @@ test("graph-vibe launcher selects product identity and preserves the caller dire
       'printf "%s\\n" "$OPENCODE_ENABLE_GRAPH_MODE"',
       'printf "%s\\n" "$OPENCODE_GRAPH_VIBE_SOURCE_ROOT"',
       'printf "%s\\n" "$OPENCODE_INITIAL_DIRECTORY"',
+      'printf "%s\\n" "$OPENCODE_GRAPH_VIBE_WEB_URL"',
       'printf "%s\\n" "$PWD"',
       'printf "%s\\n" "$*"',
     ].join("\n"),
@@ -40,6 +41,7 @@ test("graph-vibe launcher selects product identity and preserves the caller dire
     "1",
     root,
     tmp.path,
+    "http://localhost:4444",
     path.join(root, "packages/opencode"),
     `run --conditions=browser ./src/index.ts ${tmp.path} --version`,
   ])

@@ -274,6 +274,7 @@ export const TuiThreadCommand = cmd({
         await Effect.runPromise(
           run({
             url: transport.url,
+            webUrl: transport.fetch ? process.env.OPENCODE_GRAPH_VIBE_WEB_URL : transport.url,
             async onSnapshot() {
               const tui = writeHeapSnapshot("tui.heapsnapshot")
               const server = await client.call("snapshot", undefined)
