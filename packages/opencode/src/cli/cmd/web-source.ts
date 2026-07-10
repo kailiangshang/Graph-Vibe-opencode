@@ -15,7 +15,7 @@ export type SourceWebInput = {
 
 export type SourceWebProcess = {
   exited: Promise<number>
-  kill: () => void
+  kill: (signal?: NodeJS.Signals) => void
 }
 
 type SourceWebProcessSpec = {
@@ -28,7 +28,7 @@ type SourceWebDependencies = {
   spawn: (spec: SourceWebProcessSpec) => SourceWebProcess
   waitForUrl: (url: string) => Promise<void>
   open: (url: string) => Promise<void>
-  interrupted: Promise<string>
+  interrupted: Promise<NodeJS.Signals>
 }
 
 export function sourceWebRoot(productID: string, sourceRoot: string | undefined) {
@@ -102,6 +102,7 @@ export async function runSourceWeb(input: SourceWebInput, dependencies?: SourceW
   }
   const backend = deps.spawn(plan.backend)
   let web: SourceWebProcess | undefined
+  let terminationSignal: NodeJS.Signals | undefined
 
   try {
     await waitUntilReady("backend", backend, `${plan.backendUrl}/global/health`, deps.waitForUrl)
@@ -109,16 +110,17 @@ export async function runSourceWeb(input: SourceWebInput, dependencies?: SourceW
     await waitUntilReady("web", web, `${plan.webOrigin}/`, deps.waitForUrl)
     await deps.open(plan.webUrl)
     const stopped = await Promise.race([
-      backend.exited.then((code) => ({ source: "backend", code } as const)),
-      web.exited.then((code) => ({ source: "web", code } as const)),
-      deps.interrupted.then((name) => ({ source: "signal", name } as const)),
+      backend.exited.then((code) => ({ source: "backend", code }) as const),
+      web.exited.then((code) => ({ source: "web", code }) as const),
+      deps.interrupted.then((name) => ({ source: "signal", name }) as const),
     ])
     if (stopped.source !== "signal") {
       throw new Error(`${stopped.source} exited unexpectedly with code ${stopped.code}`)
     }
+    terminationSignal = stopped.name
   } finally {
-    backend.kill()
-    web?.kill()
+    backend.kill(terminationSignal)
+    web?.kill(terminationSignal)
     await Promise.allSettled([backend.exited, ...(web ? [web.exited] : [])])
     signal?.dispose()
   }
@@ -149,7 +151,7 @@ function spawnProcess(spec: SourceWebProcessSpec): SourceWebProcess {
   })
   return {
     exited: child.exited,
-    kill: () => child.kill(),
+    kill: (signal) => child.kill(signal),
   }
 }
 
@@ -170,7 +172,7 @@ async function openBrowser(url: string) {
 
 function interruption() {
   const listeners = new Map<string, () => void>()
-  const promise = new Promise<string>((resolve) => {
+  const promise = new Promise<NodeJS.Signals>((resolve) => {
     for (const name of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
       const listener = () => resolve(name)
       listeners.set(name, listener)

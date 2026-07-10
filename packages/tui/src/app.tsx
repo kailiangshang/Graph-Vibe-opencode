@@ -89,7 +89,13 @@ import { cliErrorMessage, errorFormat } from "./util/error"
 import { Product } from "@opencode-ai/core/product"
 import { DialogGraphGuide } from "./component/dialog-graph-guide"
 import { DialogGraphStatus } from "./component/dialog-graph-status"
-import { graphWebUrl, startGraphPrompt, summarizeCurrentPlan } from "./graph/workflow"
+import {
+  graphServerUrl,
+  graphWebAvailable,
+  graphWebUrl,
+  startGraphPrompt,
+  summarizeCurrentPlan,
+} from "./graph/workflow"
 
 registerOpencodeSpinner()
 
@@ -146,6 +152,7 @@ const appBindingCommands = [
 export type TuiInput = {
   url: string
   webUrl?: string
+  webServerUrl?: string
   args: Args
   config: TuiConfig.Resolved
   onSnapshot?: () => Promise<string[]>
@@ -303,6 +310,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                         <SDKProvider
                                           url={input.url}
                                           webUrl={input.webUrl}
+                                          webServerUrl={input.webServerUrl}
                                           directory={input.directory}
                                           fetch={input.fetch}
                                           headers={input.headers}
@@ -652,7 +660,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
               title: "Open Graph in Web",
               category: "Graph Workflow",
               slashName: "graph-open",
-              run: () => {
+              run: async () => {
                 if (route.data.type !== "session") {
                   toast.show({
                     variant: "info",
@@ -662,11 +670,18 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
                 }
                 const url = graphWebUrl({
                   webUrl: sdk.webUrl,
-                  serverUrl: sdk.url,
+                  serverUrl: graphServerUrl(sdk.webServerUrl, sdk.url),
                   directory: sdk.directory ?? process.cwd(),
                   sessionID: route.data.sessionID,
                 })
                 if (!url) {
+                  toast.show({
+                    variant: "info",
+                    message: "Graph Vibe Web is unavailable. Run `graph-vibe web`, then retry /graph-open.",
+                  })
+                  return
+                }
+                if (!(await graphWebAvailable(sdk.webUrl))) {
                   toast.show({
                     variant: "info",
                     message: "Graph Vibe Web is unavailable. Run `graph-vibe web`, then retry /graph-open.",

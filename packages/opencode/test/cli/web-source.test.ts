@@ -92,14 +92,14 @@ describe("runSourceWeb", () => {
         open: async (url) => {
           opened.push(url)
         },
-        interrupted: Promise.resolve("SIGTERM"),
+        interrupted: Promise.resolve("SIGTERM" as const),
       },
     )
 
     expect(spawned).toEqual(["/work/project", path.join(root, "packages/app")])
     expect(waited).toEqual(["http://127.0.0.1:4096/global/health", "http://127.0.0.1:4444/"])
     expect(opened).toEqual(["http://127.0.0.1:4444/L3dvcmsvcHJvamVjdA"])
-    expect(killed).toEqual(["backend", "web"])
+    expect(killed).toEqual(["backend:SIGTERM", "web:SIGTERM"])
   })
 
   test("fails immediately when the backend exits before readiness", async () => {
@@ -141,8 +141,8 @@ function process(name: string, killed: string[]): SourceWebProcess {
   })
   return {
     exited,
-    kill: () => {
-      killed.push(name)
+    kill: (signal) => {
+      killed.push(`${name}:${signal ?? "default"}`)
       resolve(0)
     },
   }

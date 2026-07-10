@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { type GraphView, countByStatus, filterByLevel } from "./graph-helpers"
+import { CURRENT_PLAN_EMPTY_MESSAGE, type GraphView, countByStatus, filterByLevel } from "./graph-helpers"
 
 describe("countByStatus", () => {
+  test("keeps internal tool names out of beginner guidance", () => {
+    expect(CURRENT_PLAN_EMPTY_MESSAGE).toBe(
+      "No Current Plan nodes yet. Describe your goal in Graph Vibe to create a plan.",
+    )
+    expect(CURRENT_PLAN_EMPTY_MESSAGE).not.toContain("graph_plan_admit")
+  })
+
   test("counts nodes grouped by status", () => {
     const nodes = [
       { id: "a", status: "pending" },

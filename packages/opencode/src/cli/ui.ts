@@ -48,6 +48,11 @@ export function empty() {
 
 export function logo(pad?: string) {
   const product = Product.current()
+  if (product === Product.GraphVibe) {
+    const lines = [product.name, product.capability, product.attribution].map((line) => (pad ?? "") + line)
+    if (!process.stdout.isTTY && !process.stderr.isTTY) return lines.join(EOL)
+    return `${Style.TEXT_NORMAL_BOLD}${lines[0]}${Style.TEXT_NORMAL}${EOL}${Style.TEXT_DIM}${lines.slice(1).join(EOL)}${Style.TEXT_NORMAL}`
+  }
   const subtitle = [`${product.name} · ${product.capability}`, product.attribution]
     .filter((line) => line.length > 0)
     .map((line) => (pad ?? "") + line)

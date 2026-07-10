@@ -23,6 +23,9 @@ export interface GraphView {
 
 export type LevelFilter = "all" | "L1" | "L2"
 
+export const CURRENT_PLAN_EMPTY_MESSAGE =
+  "No Current Plan nodes yet. Describe your goal in Graph Vibe to create a plan."
+
 export function countByStatus(nodes: GraphNode[]): Record<string, number> {
   const counts: Record<string, number> = {}
   for (const n of nodes) counts[n.status] = (counts[n.status] ?? 0) + 1

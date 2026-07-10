@@ -22,10 +22,12 @@ describe("CLI product identity", () => {
       })
 
       expect(result.exitCode).toBe(0)
+      expect(result.stderr.trimStart()).toStartWith("Graph Vibe\nGraph-guided development\nPowered by OpenCode")
       expect(result.stderr).toContain("Graph Vibe")
       expect(result.stderr).toContain("Graph-guided development")
       expect(result.stderr).toContain("Powered by OpenCode")
       expect(result.stderr).toContain("graph-vibe [project]")
+      expect(result.stderr).toContain("Usage: graph-vibe [project]")
       expect(result.stderr).toContain("attach to a running Graph Vibe server")
       expect(result.stderr).toContain("run Graph Vibe with a message")
       expect(result.stderr).toContain("upgrade Graph Vibe to the latest or a specific version")

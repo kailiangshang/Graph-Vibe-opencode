@@ -3,7 +3,14 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-j
 import { useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { Spinner } from "@opencode-ai/ui/spinner"
-import { type GraphNode, type GraphView, type LevelFilter, countByStatus, filterByLevel } from "./graph-helpers"
+import {
+  CURRENT_PLAN_EMPTY_MESSAGE,
+  type GraphNode,
+  type GraphView,
+  type LevelFilter,
+  countByStatus,
+  filterByLevel,
+} from "./graph-helpers"
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "#ffc107",
@@ -55,7 +62,13 @@ export default function GraphPage() {
   onMount(() => {
     const stop = sdk().event.listen((evt: { details: { type: string } }) => {
       const type = evt.details.type
-      if (type === "message.updated" || type === "file.watcher.updated" || type === "session.updated" || type === "graph.plan.updated" || type === "graph.main.updated") {
+      if (
+        type === "message.updated" ||
+        type === "file.watcher.updated" ||
+        type === "session.updated" ||
+        type === "graph.plan.updated" ||
+        type === "graph.main.updated"
+      ) {
         queryClient.invalidateQueries({ queryKey: [directory(), params.id, "graph"] })
       }
     })
@@ -104,21 +117,31 @@ export default function GraphPage() {
       <div class="border-b p-4">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
-            <h1 class="text-lg font-semibold">
-              {dataSource() === "currentPlan" ? "Current Plan" : "Main Graph"}
-            </h1>
+            <h1 class="text-lg font-semibold">{dataSource() === "currentPlan" ? "Current Plan" : "Main Graph"}</h1>
             <div class="flex gap-1 rounded-lg bg-muted p-0.5">
               <button
                 class="rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors"
-                classList={{ "bg-background shadow-sm": dataSource() === "currentPlan", "text-muted-foreground": dataSource() !== "currentPlan" }}
-                onClick={() => { setDataSource("currentPlan"); setSelectedNodeID(null) }}
+                classList={{
+                  "bg-background shadow-sm": dataSource() === "currentPlan",
+                  "text-muted-foreground": dataSource() !== "currentPlan",
+                }}
+                onClick={() => {
+                  setDataSource("currentPlan")
+                  setSelectedNodeID(null)
+                }}
               >
                 Plan
               </button>
               <button
                 class="rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors"
-                classList={{ "bg-background shadow-sm": dataSource() === "main", "text-muted-foreground": dataSource() !== "main" }}
-                onClick={() => { setDataSource("main"); setSelectedNodeID(null) }}
+                classList={{
+                  "bg-background shadow-sm": dataSource() === "main",
+                  "text-muted-foreground": dataSource() !== "main",
+                }}
+                onClick={() => {
+                  setDataSource("main")
+                  setSelectedNodeID(null)
+                }}
               >
                 Main
               </button>
@@ -127,21 +150,30 @@ export default function GraphPage() {
           <div class="flex gap-1 rounded-lg bg-muted p-0.5">
             <button
               class="rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors"
-              classList={{ "bg-background shadow-sm": levelFilter() === "all", "text-muted-foreground": levelFilter() !== "all" }}
+              classList={{
+                "bg-background shadow-sm": levelFilter() === "all",
+                "text-muted-foreground": levelFilter() !== "all",
+              }}
               onClick={() => setLevelFilter("all")}
             >
               All
             </button>
             <button
               class="rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors"
-              classList={{ "bg-background shadow-sm": levelFilter() === "L1", "text-muted-foreground": levelFilter() !== "L1" }}
+              classList={{
+                "bg-background shadow-sm": levelFilter() === "L1",
+                "text-muted-foreground": levelFilter() !== "L1",
+              }}
               onClick={() => setLevelFilter("L1")}
             >
               L1
             </button>
             <button
               class="rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors"
-              classList={{ "bg-background shadow-sm": levelFilter() === "L2", "text-muted-foreground": levelFilter() !== "L2" }}
+              classList={{
+                "bg-background shadow-sm": levelFilter() === "L2",
+                "text-muted-foreground": levelFilter() !== "L2",
+              }}
               onClick={() => setLevelFilter("L2")}
             >
               L2
@@ -150,14 +182,20 @@ export default function GraphPage() {
           <div class="flex gap-1 rounded-lg bg-muted p-0.5">
             <button
               class="rounded-md px-3 py-1 text-sm font-medium transition-colors"
-              classList={{ "bg-background shadow-sm": viewMode() === "graph", "text-muted-foreground": viewMode() !== "graph" }}
+              classList={{
+                "bg-background shadow-sm": viewMode() === "graph",
+                "text-muted-foreground": viewMode() !== "graph",
+              }}
               onClick={() => setViewMode("graph")}
             >
               Graph
             </button>
             <button
               class="rounded-md px-3 py-1 text-sm font-medium transition-colors"
-              classList={{ "bg-background shadow-sm": viewMode() === "list", "text-muted-foreground": viewMode() !== "list" }}
+              classList={{
+                "bg-background shadow-sm": viewMode() === "list",
+                "text-muted-foreground": viewMode() !== "list",
+              }}
               onClick={() => setViewMode("list")}
             >
               List
@@ -186,7 +224,7 @@ export default function GraphPage() {
             fallback={
               <div class="flex h-full items-center justify-center text-muted-foreground">
                 {dataSource() === "currentPlan"
-                  ? "No CurrentPlan nodes. Use the graph_plan_admit tool to create a plan."
+                  ? CURRENT_PLAN_EMPTY_MESSAGE
                   : "No main graph nodes. Promote a CurrentPlan to populate the main graph."}
               </div>
             }
@@ -215,11 +253,7 @@ export default function GraphPage() {
                 </div>
               }
             >
-              <GraphCanvas
-                data={filteredData()}
-                selectedNodeID={selectedNodeID()}
-                onSelectNode={setSelectedNodeID}
-              />
+              <GraphCanvas data={filteredData()} selectedNodeID={selectedNodeID()} onSelectNode={setSelectedNodeID} />
             </Show>
           </Show>
         </div>
@@ -227,9 +261,7 @@ export default function GraphPage() {
         <Show when={selectedNodeID()}>
           <div class="w-80 shrink-0 overflow-auto border-l p-4">
             <Show when={!nodeReadinessQuery.isLoading} fallback={<Spinner />}>
-              <h2 class="mb-2 font-semibold">
-                {graphQuery.data?.nodes.find((n) => n.id === selectedNodeID())?.name}
-              </h2>
+              <h2 class="mb-2 font-semibold">{graphQuery.data?.nodes.find((n) => n.id === selectedNodeID())?.name}</h2>
 
               <Show when={nodeReadinessQuery.data}>
                 <div class="mb-3 text-sm">
@@ -294,14 +326,16 @@ function GraphCanvas(props: {
       const prev = existing.get(node.id)
       const angle = (i / props.data.nodes.length) * Math.PI * 2
       const r = 150
-      return prev ?? {
-        id: node.id,
-        x: Math.cos(angle) * r + (Math.random() - 0.5) * 50,
-        y: Math.sin(angle) * r + (Math.random() - 0.5) * 50,
-        vx: 0,
-        vy: 0,
-        data: node,
-      }
+      return (
+        prev ?? {
+          id: node.id,
+          x: Math.cos(angle) * r + (Math.random() - 0.5) * 50,
+          y: Math.sin(angle) * r + (Math.random() - 0.5) * 50,
+          vx: 0,
+          vy: 0,
+          data: node,
+        }
+      )
     })
   }
 
@@ -404,14 +438,8 @@ function GraphCanvas(props: {
       ctx.fillStyle = EDGE_COLORS[edge.relation] ?? "#666"
       ctx.beginPath()
       ctx.moveTo(mx + Math.cos(angle) * arrowSize, my + Math.sin(angle) * arrowSize)
-      ctx.lineTo(
-        mx + Math.cos(angle + 2.5) * arrowSize,
-        my + Math.sin(angle + 2.5) * arrowSize,
-      )
-      ctx.lineTo(
-        mx + Math.cos(angle - 2.5) * arrowSize,
-        my + Math.sin(angle - 2.5) * arrowSize,
-      )
+      ctx.lineTo(mx + Math.cos(angle + 2.5) * arrowSize, my + Math.sin(angle + 2.5) * arrowSize)
+      ctx.lineTo(mx + Math.cos(angle - 2.5) * arrowSize, my + Math.sin(angle - 2.5) * arrowSize)
       ctx.fill()
     }
 

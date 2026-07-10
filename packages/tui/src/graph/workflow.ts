@@ -38,3 +38,17 @@ export function graphWebUrl(input: { webUrl?: string; serverUrl: string; directo
       : `/server/${base64Encode(input.serverUrl.replace(/\/$/, ""))}/session/${input.sessionID}/graph`
   return web.origin + route
 }
+
+export function graphServerUrl(webServerUrl: string | undefined, sdkUrl: string) {
+  return webServerUrl ?? sdkUrl
+}
+
+export async function graphWebAvailable(
+  webUrl: string | undefined,
+  request: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> = fetch,
+) {
+  if (!webUrl) return false
+  return request(webUrl, { method: "HEAD" })
+    .then((response) => response.ok)
+    .catch(() => false)
+}

@@ -79,7 +79,7 @@ const cli = yargs(args)
     process.env.OPENCODE = "1"
     process.env.OPENCODE_PID = String(process.pid)
   })
-  .usage("$0 [project]")
+  .usage("Usage: $0 [project]")
   .completion("completion", "generate shell completion script")
   .command(AcpCommand)
   .command(McpCommand)

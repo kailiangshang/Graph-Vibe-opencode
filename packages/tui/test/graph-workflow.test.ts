@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { TASK_DRAFT, graphWebUrl, startGraphPrompt, summarizeCurrentPlan } from "../src/graph/workflow"
+import {
+  TASK_DRAFT,
+  graphServerUrl,
+  graphWebAvailable,
+  graphWebUrl,
+  startGraphPrompt,
+  summarizeCurrentPlan,
+} from "../src/graph/workflow"
 
 describe("Graph Workflow", () => {
   test("provides the beginner task draft", () => {
@@ -69,6 +76,22 @@ describe("Graph Workflow", () => {
         sessionID: "ses_123",
       }),
     ).toBe("http://localhost:4444/server/aHR0cDovLzEyNy4wLjAuMTo0MDk2/session/ses_123/graph")
+  })
+
+  test("prefers the browser-reachable backend URL", () => {
+    expect(graphServerUrl("http://127.0.0.1:4096", "http://opencode.internal")).toBe("http://127.0.0.1:4096")
+    expect(graphServerUrl(undefined, "http://localhost:4096")).toBe("http://localhost:4096")
+  })
+
+  test("checks Web availability before opening", async () => {
+    expect(await graphWebAvailable(undefined, async () => new Response())).toBe(false)
+    expect(await graphWebAvailable("http://localhost:4444", async () => new Response(null, { status: 200 }))).toBe(true)
+    expect(await graphWebAvailable("http://localhost:4444", async () => new Response(null, { status: 503 }))).toBe(
+      false,
+    )
+    expect(await graphWebAvailable("http://localhost:4444", async () => Promise.reject(new Error("offline")))).toBe(
+      false,
+    )
   })
 
   test("reports a missing Web endpoint", () => {

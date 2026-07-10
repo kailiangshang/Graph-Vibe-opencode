@@ -275,6 +275,7 @@ export const TuiThreadCommand = cmd({
           run({
             url: transport.url,
             webUrl: transport.fetch ? process.env.OPENCODE_GRAPH_VIBE_WEB_URL : transport.url,
+            webServerUrl: transport.fetch ? process.env.OPENCODE_GRAPH_VIBE_SERVER_URL : transport.url,
             async onSnapshot() {
               const tui = writeHeapSnapshot("tui.heapsnapshot")
               const server = await client.call("snapshot", undefined)
