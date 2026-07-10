@@ -37,11 +37,36 @@ export const WebCommand = effectCmd({
   // ambient project InstanceContext needed at startup.
   instance: false,
   handler: Effect.fn("Cli.web")(function* (args) {
-    const { Server } = yield* Effect.promise(() => import("../../server/server"))
     if (!Flag.OPENCODE_SERVER_PASSWORD) {
       UI.println(UI.Style.TEXT_WARNING_BOLD + "!  OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
     }
     const opts = yield* resolveNetworkOptions(args)
+    const { runSourceWeb, sourceWebPlan, sourceWebRoot } = yield* Effect.promise(() => import("./web-source"))
+    const sourceRoot = sourceWebRoot(Product.current().id, process.env.OPENCODE_GRAPH_VIBE_SOURCE_ROOT)
+    if (sourceRoot) {
+      const requestedUiPort = Number.parseInt(process.env.OPENCODE_GRAPH_VIBE_UI_PORT ?? "4444", 10)
+      const input = {
+        sourceRoot,
+        directory: process.env.OPENCODE_INITIAL_DIRECTORY ?? process.cwd(),
+        hostname: opts.hostname,
+        port: opts.port,
+        uiPort: Number.isFinite(requestedUiPort) && requestedUiPort > 0 ? requestedUiPort : 4444,
+        mdns: opts.mdns,
+        mdnsDomain: opts.mdnsDomain,
+        cors: opts.cors,
+        env: process.env,
+      }
+      const plan = sourceWebPlan(input)
+      UI.empty()
+      UI.println(UI.logo("  "))
+      UI.empty()
+      UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, plan.webUrl)
+      UI.println(UI.Style.TEXT_INFO_BOLD + "  Backend:          ", UI.Style.TEXT_NORMAL, plan.backendUrl)
+      yield* Effect.promise(() => runSourceWeb(input))
+      return
+    }
+
+    const { Server } = yield* Effect.promise(() => import("../../server/server"))
     const server = yield* Effect.promise(() => Server.listen(opts))
     UI.empty()
     UI.println(UI.logo("  "))
