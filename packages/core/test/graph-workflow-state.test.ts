@@ -10,6 +10,7 @@ import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import type { EdgeID, EdgeRow, GraphView, NodeID, NodeRow } from "@opencode-ai/core/graph/storage"
 import { GraphEdgeTable, GraphNodeTable } from "@opencode-ai/core/graph/sql"
 import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
+import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 
 describe("Graph collaboration schemas", () => {
   test("accepts execution modes and checkpoint values", () => {
@@ -78,8 +79,9 @@ describe("Graph collaboration schemas", () => {
 const PID = ProjectV2.ID.make("proj_workflow")
 const SID = "ses_workflow"
 
+const storageLayer = GraphStorage.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:")))
 const workflowLayer = GraphWorkflowState.layer.pipe(
-  Layer.provideMerge(GraphStorage.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:")))),
+  Layer.provideMerge(GraphAudit.layer.pipe(Layer.provideMerge(storageLayer))),
 )
 
 const seed = Effect.gen(function* () {
@@ -115,7 +117,11 @@ const seed = Effect.gen(function* () {
     .pipe(Effect.orDie)
 })
 
-const run = <A, E>(effect: Effect.Effect<A, E, Database.Service | GraphStorage.Service | GraphWorkflowState.Service>) =>
+const run = <A, E>(effect: Effect.Effect<
+  A,
+  E,
+  Database.Service | GraphStorage.Service | GraphAudit.Service | GraphWorkflowState.Service
+>) =>
   Effect.runPromise(
     Effect.gen(function* () {
       yield* seed
@@ -263,6 +269,21 @@ describe("GraphWorkflowState", () => {
     )
   })
 
+  test("rejects approval when no checkpoint is pending", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        expect(planned.checkpointStatus).toBe("none")
+
+        const error = yield* workflow.approve({ sessionID: SID, expectedRevision: planned.revision }).pipe(Effect.flip)
+        expect(error._tag).toBe("GraphWorkflowState.CheckpointNotPending")
+        expect((yield* workflow.get(SID))?.checkpointStatus).toBe("none")
+      }),
+    )
+  })
+
   test("advances atomic mode to a pending task checkpoint", async () => {
     await run(
       Effect.gen(function* () {
@@ -362,6 +383,50 @@ describe("GraphWorkflowState", () => {
         expect(advanced.currentNodeID).toBe(taskZ.id)
         expect(advanced.checkpointScopeNodeID).toBe(moduleA.id)
         expect(advanced.checkpointStatus).toBe("approved")
+      }),
+    )
+  })
+
+  test("selects a ready prerequisite before a blocked task in the current module", async () => {
+    const prerequisite = node("task-b")
+    const blocked = node("task-c")
+    const graph: GraphView = {
+      nodes: [blocked, prerequisite, atomicA, moduleA, moduleB],
+      edges: [
+        edge(moduleA.id, atomicA.id, "contains"),
+        edge(moduleA.id, blocked.id, "contains"),
+        edge(moduleB.id, prerequisite.id, "contains"),
+        edge(prerequisite.id, blocked.id, "blocks"),
+      ],
+    }
+    await run(
+      Effect.gen(function* () {
+        const database = yield* Database.Service
+        yield* database.db.insert(GraphNodeTable).values([
+          { id: prerequisite.id, project_id: PID, session_id: SID, type: "atomic", name: prerequisite.name, level: "L2" },
+          { id: blocked.id, project_id: PID, session_id: SID, type: "atomic", name: blocked.name, level: "L2" },
+        ]).run().pipe(Effect.orDie)
+        const workflow = yield* GraphWorkflowState.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "module", expectedRevision: 0 })
+        yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph })
+
+        const advanced = yield* workflow.advanceVerified({
+          sessionID: SID,
+          nodeID: atomicA.id,
+          graph: {
+            ...graph,
+            nodes: graph.nodes.map((item) => item.id === atomicA.id
+              ? { ...item, status: "verified" as const, testStatus: "passed" as const }
+              : item),
+          },
+        })
+        expect(advanced.currentNodeID).toBe(prerequisite.id)
+        expect(advanced.checkpointScopeNodeID).toBe(moduleB.id)
+        expect(advanced.checkpointStatus).toBe("pending")
+        const audit = yield* GraphAudit.Service
+        expect((yield* audit.tool.list({ projectID: PID, sessionID: SID })).map((record) => record.toolName)).not.toContain(
+          "graph.workflow.module.completed",
+        )
       }),
     )
   })
@@ -492,6 +557,70 @@ describe("GraphWorkflowState", () => {
         expect(error._tag).toBe("GraphWorkflowState.ModuleScopeError")
         if (error._tag !== "GraphWorkflowState.ModuleScopeError") return
         expect(error.nodeID).toBe(atomicB.id)
+      }),
+    )
+  })
+
+  test("records bounded workflow transition history", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "module", expectedRevision: 0 })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        const advanced = yield* workflow.advanceVerified({
+          sessionID: SID,
+          nodeID: atomicA.id,
+          graph: {
+            ...workflowGraph,
+            nodes: workflowGraph.nodes.map((item) => item.id === atomicA.id
+              ? { ...item, status: "verified" as const, testStatus: "passed" as const }
+              : item),
+          },
+        })
+        const paused = yield* workflow.pause({ sessionID: SID, expectedRevision: advanced.revision, reason: "review" })
+        yield* workflow.approve({ sessionID: SID, expectedRevision: paused.revision })
+
+        const audit = yield* GraphAudit.Service
+        const records = yield* audit.tool.list({ projectID: PID, sessionID: SID })
+        expect(records.map((record) => record.toolName)).toEqual(expect.arrayContaining([
+          "graph.workflow.mode.changed",
+          "graph.workflow.current_task.changed",
+          "graph.workflow.task.verified",
+          "graph.workflow.module.completed",
+          "graph.workflow.checkpoint.requested",
+          "graph.workflow.paused",
+          "graph.workflow.checkpoint.approved",
+        ]))
+        expect(records.every((record) => (record.inputSummary?.length ?? 0) <= 1_024)).toBe(true)
+        expect(records.every((record) => (record.outputSummary?.length ?? 0) <= 1_024)).toBe(true)
+        expect(planned.currentNodeID).toBe(atomicA.id)
+      }),
+    )
+  })
+
+  test("creates a durable failure checkpoint and audit transition", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "atomic", expectedRevision: 0 })
+        yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        expect(workflow).toHaveProperty("fail")
+        if (!("fail" in workflow)) return
+        const fail = workflow.fail as (input: {
+          readonly sessionID: string
+          readonly nodeID: NodeID
+          readonly reason: string
+        }) => Effect.Effect<GraphWorkflowState.State>
+        const failed = yield* fail({ sessionID: SID, nodeID: atomicA.id, reason: "repair budget exhausted" })
+
+        expect(failed.checkpointKind).toBe("failure")
+        expect(failed.checkpointStatus).toBe("pending")
+        expect(failed.checkpointScopeNodeID).toBe(atomicA.id)
+        expect(failed.checkpointReason).toBe("repair budget exhausted")
+        const audit = yield* GraphAudit.Service
+        const records = yield* audit.tool.list({ projectID: PID, sessionID: SID })
+        expect(records.map((record) => record.toolName)).toContain("graph.workflow.failed")
+        expect(records.find((record) => record.toolName === "graph.workflow.failed")?.status).toBe("failed")
       }),
     )
   })

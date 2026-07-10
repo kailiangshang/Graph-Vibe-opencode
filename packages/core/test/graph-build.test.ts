@@ -78,7 +78,7 @@ describe("GraphBuild.evaluate", () => {
       const tools = yield* audit.tool.list({ projectID: PID, nodeID: targetNodeID })
       expect(generations.map((run) => run.status)).toEqual(["dry_run"])
       expect(generations[0].artifactSummary).toBe("full src/a.ts")
-      expect(tools.map((run) => run.status)).toEqual(["dry_run"])
+      expect(tools.filter((run) => run.toolName === "graph.build.gate").map((run) => run.status)).toEqual(["dry_run"])
     }))
   })
 

@@ -11,6 +11,7 @@ import { hashContent } from "@opencode-ai/core/graph/workflow/artifact"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphArtifactDraft } from "@opencode-ai/core/graph/workflow/artifact-draft"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
+import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -45,6 +46,7 @@ const it = testEffect(
       GraphAudit.node,
       GraphArtifactDraft.node,
       GraphBuild.node,
+      GraphWorkflowState.node,
       FSUtil.node,
       EventV2Bridge.node,
       Truncate.node,
@@ -118,6 +120,18 @@ const init = Effect.fn("GraphArtifactApplyTest.init")(function* () {
   return yield* Tool.init(info)
 })
 
+const authorize = Effect.fn("GraphArtifactApplyTest.authorize")(function* (targetNodeID: GraphStorage.NodeID) {
+  const workflow = yield* GraphWorkflowState.Service
+  yield* workflow.setMode({ sessionID, projectID, mode: "atomic", expectedRevision: 0 })
+  const storage = yield* GraphStorage.Service
+  yield* workflow.resetPlan({
+    sessionID,
+    projectID,
+    graph: yield* storage.currentPlan({ sessionID }),
+  })
+  expect((yield* workflow.get(sessionID))?.currentNodeID).toBe(targetNodeID)
+})
+
 describe("graph_artifact_apply", () => {
   it.instance("does not ask permission or write when the Build gate blocks", () =>
     Effect.gen(function* () {
@@ -160,6 +174,7 @@ describe("graph_artifact_apply", () => {
         name: "BuildMe",
         level: "L2",
       })
+      yield* authorize(targetNodeID)
       const permissionRequests: PermissionRequest[] = []
       const metadataUpdates: MetadataUpdate[] = []
       const tool = yield* init()
@@ -233,6 +248,7 @@ describe("graph_artifact_apply", () => {
         name: "BuildFiles",
         level: "L2",
       })
+      yield* authorize(targetNodeID)
       const permissionRequests: PermissionRequest[] = []
       const tool = yield* init()
       const fs = yield* FSUtil.Service
@@ -353,6 +369,7 @@ describe("graph_artifact_apply", () => {
         name: "InvalidPatch",
         level: "L2",
       })
+      yield* authorize(targetNodeID)
       const permissionRequests: PermissionRequest[] = []
       const tool = yield* init()
       const fs = yield* FSUtil.Service
@@ -512,6 +529,7 @@ describe("graph_artifact_apply", () => {
         name: "ApplyDraft",
         level: "L2",
       })
+      yield* authorize(targetNodeID)
       const draftID = yield* drafts.create({
         projectID,
         sessionID,

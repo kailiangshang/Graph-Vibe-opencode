@@ -78,7 +78,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
         .flatMap((edge) => {
           const sourceNode = plan.nodes.find((n) => n.id === edge.sourceID)
           if (!sourceNode) return []
-          if (sourceNode.status === "implemented" || sourceNode.status === "verified") return []
+          if (sourceNode.status === "verified") return []
           return [{
             nodeID: edge.sourceID,
             nodeName: sourceNode.name,
@@ -228,6 +228,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       }).pipe(
         Effect.catchTag("GraphV2.ValidationError", () => Effect.fail(new HttpApiError.BadRequest({}))),
         Effect.catchTag("GraphV2.NotFoundError", (error) => Effect.fail(notFound(error.id))),
+        Effect.catchTag("GraphWorkflowState.ModuleScopeError", () => Effect.fail(new HttpApiError.BadRequest({}))),
       )
       if (!ctx.payload.dryRun) yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
       return result

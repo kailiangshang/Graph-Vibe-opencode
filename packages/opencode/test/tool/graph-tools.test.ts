@@ -250,10 +250,9 @@ describe("graph tools", () => {
       const result = yield* tool.execute({ targetNodeID }, context())
 
       expect(result.title).toBe("Build gate blocked")
-      expect(JSON.parse(result.output)).toMatchObject({
-        allowed: false,
-        issues: [{ code: "target_not_in_current_plan" }],
-      })
+      const parsed = JSON.parse(result.output)
+      expect(parsed.allowed).toBe(false)
+      expect(parsed.issues.some((issue: { code: string }) => issue.code === "target_not_in_current_plan")).toBe(true)
     }),
   )
 })

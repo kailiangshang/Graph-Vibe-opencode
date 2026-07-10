@@ -495,6 +495,8 @@ const layer = Layer.effectDiscard(
                 (record) => record.toolName === "graph.diagnostics.run" && record.status === "failed",
               ).length
               if (failedDiagCount >= MAX_FIX_ATTEMPTS) {
+                const reason = `Node has ${failedDiagCount} previous failed diagnostics (max ${MAX_FIX_ATTEMPTS}). Review the failures and revise the plan or seek human input.`
+                yield* workflow.fail({ sessionID: session.sessionID, nodeID: input.targetNodeID, reason })
                 yield* audit.tool.record({
                   projectID: session.projectID,
                   sessionID: session.sessionID,
@@ -509,7 +511,7 @@ const layer = Layer.effectDiscard(
                   { gate: summarizeGate(gate), ran: false, passed: false, results: [] },
                   {
                     ran: false,
-                    reason: `Node has ${failedDiagCount} previous failed diagnostics (max ${MAX_FIX_ATTEMPTS}). Review the failures and revise the plan or seek human input.`,
+                    reason,
                   },
                 )
               }

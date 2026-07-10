@@ -372,6 +372,69 @@ describe("LocationServiceMap", () => {
     ),
   )
 
+  it.live("creates a durable failure checkpoint when the diagnostics repair budget is exhausted", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            const state = yield* setupGraphDiagnostics(dir.path, [
+              { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+            ]).pipe(
+              Effect.flatMap((state) =>
+                Effect.gen(function* () {
+                  yield* state.db.insert(GraphToolRunTable).values([
+                    {
+                      id: "gtr_failed_1",
+                      project_id: ProjectV2.ID.global,
+                      session_id: state.sessionID,
+                      node_id: state.targetNodeID,
+                      tool_name: "graph.diagnostics.run",
+                      tool_type: "diagnostics",
+                      status: "failed",
+                    },
+                    {
+                      id: "gtr_failed_2",
+                      project_id: ProjectV2.ID.global,
+                      session_id: state.sessionID,
+                      node_id: state.targetNodeID,
+                      tool_name: "graph.diagnostics.run",
+                      tool_type: "diagnostics",
+                      status: "failed",
+                    },
+                  ]).run().pipe(Effect.orDie)
+                  yield* executeTool(state.registry, {
+                    sessionID: state.sessionID,
+                    ...toolIdentity,
+                    call: {
+                      type: "tool-call",
+                      id: "call-diagnostics-budget-exhausted",
+                      name: "graph_diagnostics_run",
+                      input: { targetNodeID: state.targetNodeID },
+                    },
+                  })
+                  return state
+                }),
+              ),
+              Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+            )
+            const workflow = yield* state.db
+              .select()
+              .from(GraphWorkflowStateTable)
+              .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+              .get()
+              .pipe(Effect.orDie)
+            expect(workflow?.checkpoint_kind).toBe("failure")
+            expect(workflow?.checkpoint_status).toBe("pending")
+            expect(workflow?.checkpoint_reason).toContain("previous failed diagnostics")
+          }),
+        ),
+      ),
+    ),
+  )
+
   it.live("blocks artifact apply before write permission or filesystem mutation at a checkpoint", () =>
     withGraphMode(
       Effect.acquireRelease(

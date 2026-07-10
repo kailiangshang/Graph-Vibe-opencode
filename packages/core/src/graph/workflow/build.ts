@@ -28,6 +28,8 @@ export interface BuildEvaluateInput {
 
 export interface Interface {
   readonly evaluate: (input: BuildEvaluateInput) => Effect.Effect<GateResult>
+  readonly advanceVerified: GraphWorkflowState.Interface["advanceVerified"]
+  readonly fail: GraphWorkflowState.Interface["fail"]
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/GraphBuild") {}
@@ -91,7 +93,11 @@ export const layer = Layer.effect(
       return result
     })
 
-    return Service.of({ evaluate })
+    return Service.of({
+      evaluate,
+      advanceVerified: workflowState.advanceVerified,
+      fail: workflowState.fail,
+    })
   }),
 )
 

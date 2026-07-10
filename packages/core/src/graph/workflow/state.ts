@@ -10,6 +10,7 @@ import * as GraphStorage from "../storage"
 import type { GraphView, NodeID } from "../storage"
 import { nearestCompositeIDs, orderedAtomicNodes } from "./order"
 import { GraphWorkflowStateTable } from "./state.sql"
+import * as GraphAudit from "./audit"
 
 export interface State {
   readonly sessionID: string
@@ -40,6 +41,11 @@ export class ModuleScopeError extends Schema.TaggedErrorClass<ModuleScopeError>(
   { nodeID: Schema.String, moduleIDs: Schema.Array(Schema.String) },
 ) {}
 
+export class CheckpointNotPending extends Schema.TaggedErrorClass<CheckpointNotPending>()(
+  "GraphWorkflowState.CheckpointNotPending",
+  { status: Schema.Literals(["none", "approved"]) },
+) {}
+
 export interface Interface {
   readonly get: (sessionID: string) => Effect.Effect<State | undefined>
   readonly setMode: (input: {
@@ -53,7 +59,10 @@ export interface Interface {
     readonly projectID: ProjectV2.ID
     readonly graph: GraphView
   }) => Effect.Effect<State, ModuleScopeError>
-  readonly approve: (input: { readonly sessionID: string; readonly expectedRevision: number }) => Effect.Effect<State, RevisionConflict>
+  readonly approve: (input: {
+    readonly sessionID: string
+    readonly expectedRevision: number
+  }) => Effect.Effect<State, RevisionConflict | CheckpointNotPending>
   readonly pause: (input: {
     readonly sessionID: string
     readonly expectedRevision: number
@@ -64,6 +73,11 @@ export interface Interface {
     readonly nodeID: NodeID
     readonly graph: GraphView
   }) => Effect.Effect<State, ModuleScopeError>
+  readonly fail: (input: {
+    readonly sessionID: string
+    readonly nodeID: NodeID
+    readonly reason: string
+  }) => Effect.Effect<State>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/GraphWorkflowState") {}
@@ -87,6 +101,25 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const database = yield* Database.Service
     const storage = yield* GraphStorage.Service
+    const audit = yield* GraphAudit.Service
+
+    const recordTransition = (input: {
+      readonly state: State
+      readonly toolName: string
+      readonly nodeID?: NodeID
+      readonly status?: GraphAudit.ToolRunCreate["status"]
+      readonly inputSummary?: string
+      readonly outputSummary?: string
+    }) => audit.tool.record({
+      projectID: input.state.projectID,
+      sessionID: input.state.sessionID,
+      nodeID: input.nodeID,
+      toolName: input.toolName,
+      toolType: "graph",
+      status: input.status ?? "succeeded",
+      inputSummary: input.inputSummary?.slice(0, 1_024),
+      outputSummary: input.outputSummary?.slice(0, 1_024),
+    })
 
     const get = Effect.fn("GraphWorkflowState.get")(function* (sessionID: string) {
       const row = yield* database.db
@@ -169,7 +202,15 @@ export const layer = Layer.effect(
               .returning()
               .get()
               .pipe(Effect.orDie)
-            return fromRow(row)
+            const state = fromRow(row)
+            yield* recordTransition({
+              state,
+              toolName: "graph.workflow.mode.changed",
+              nodeID: state.currentNodeID ?? undefined,
+              inputSummary: `mode=${current?.mode ?? "none"}`,
+              outputSummary: `mode=${state.mode} revision=${state.revision}`,
+            })
+            return state
           }),
         )
         .pipe(Effect.catchTag("SqlError", Effect.die))
@@ -224,7 +265,17 @@ export const layer = Layer.effect(
               .returning()
               .get()
               .pipe(Effect.orDie)
-            return fromRow(row)
+            const state = fromRow(row)
+            if (state.currentNodeID !== current?.currentNodeID) {
+              yield* recordTransition({
+                state,
+                toolName: "graph.workflow.current_task.changed",
+                nodeID: state.currentNodeID ?? undefined,
+                inputSummary: `from=${current?.currentNodeID ?? "none"}`,
+                outputSummary: `to=${state.currentNodeID ?? "none"} revision=${state.revision}`,
+              })
+            }
+            return state
           }),
         )
         .pipe(Effect.catchTag("SqlError", Effect.die))
@@ -239,6 +290,9 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const current = yield* requireState(get, input.sessionID, input.expectedRevision)
             if (current.checkpointStatus === "approved") return current
+            if (current.checkpointStatus !== "pending") {
+              return yield* new CheckpointNotPending({ status: current.checkpointStatus })
+            }
             const row = yield* database.db
               .update(GraphWorkflowStateTable)
               .set({ checkpoint_status: "approved" })
@@ -246,7 +300,15 @@ export const layer = Layer.effect(
               .returning()
               .get()
               .pipe(Effect.orDie)
-            return fromRow(row)
+            const state = fromRow(row)
+            yield* recordTransition({
+              state,
+              toolName: "graph.workflow.checkpoint.approved",
+              nodeID: state.currentNodeID ?? undefined,
+              inputSummary: `kind=${state.checkpointKind ?? "none"}`,
+              outputSummary: `revision=${state.revision}`,
+            })
+            return state
           }),
         )
         .pipe(Effect.catchTag("SqlError", Effect.die))
@@ -274,7 +336,22 @@ export const layer = Layer.effect(
               .returning()
               .get()
               .pipe(Effect.orDie)
-            return fromRow(row)
+            const state = fromRow(row)
+            yield* recordTransition({
+              state,
+              toolName: "graph.workflow.paused",
+              nodeID: state.currentNodeID ?? undefined,
+              inputSummary: input.reason,
+              outputSummary: `revision=${state.revision}`,
+            })
+            yield* recordTransition({
+              state,
+              toolName: "graph.workflow.checkpoint.requested",
+              nodeID: state.checkpointScopeNodeID ?? undefined,
+              inputSummary: "kind=pause",
+              outputSummary: `revision=${state.revision}`,
+            })
+            return state
           }),
         )
         .pipe(Effect.catchTag("SqlError", Effect.die))
@@ -295,12 +372,10 @@ export const layer = Layer.effect(
               return current
             }
             const ordered = orderedAtomicNodes(input.graph)
-            const remaining = ordered
-              .slice(ordered.findIndex((node) => node.id === input.nodeID) + 1)
-              .filter((node) => node.status !== "verified")
+            const ready = ordered.filter((node) => isReady(input.graph, node.id))
             const next = current.mode === "module"
-              ? yield* nextModuleTask(input.graph, input.nodeID, ordered.filter((node) => node.status !== "verified"))
-              : remaining[0]
+              ? yield* nextModuleTask(input.graph, input.nodeID, ready)
+              : ready[0]
             const transition = yield* advancement(input.graph, current, input.nodeID, next?.id ?? null)
             const row = yield* database.db
               .update(GraphWorkflowStateTable)
@@ -309,20 +384,108 @@ export const layer = Layer.effect(
               .returning()
               .get()
               .pipe(Effect.orDie)
-            return fromRow(row)
+            const state = fromRow(row)
+            yield* recordTransition({
+              state,
+              toolName: "graph.workflow.task.verified",
+              nodeID: input.nodeID,
+              outputSummary: `revision=${state.revision}`,
+            })
+            if (state.currentNodeID !== current.currentNodeID) {
+              yield* recordTransition({
+                state,
+                toolName: "graph.workflow.current_task.changed",
+                nodeID: state.currentNodeID ?? undefined,
+                inputSummary: `from=${current.currentNodeID}`,
+                outputSummary: `to=${state.currentNodeID ?? "none"} revision=${state.revision}`,
+              })
+            }
+            if (current.mode === "module") {
+              const completedModule = yield* requireModule(input.graph, input.nodeID)
+              const nextModule = state.currentNodeID ? yield* requireModule(input.graph, state.currentNodeID) : undefined
+              if (moduleComplete(input.graph, completedModule)) {
+                yield* recordTransition({
+                  state,
+                  toolName: "graph.workflow.module.completed",
+                  nodeID: completedModule,
+                  outputSummary: `next=${nextModule ?? "none"} revision=${state.revision}`,
+                })
+              }
+            }
+            if (state.checkpointStatus === "pending") {
+              yield* recordTransition({
+                state,
+                toolName: "graph.workflow.checkpoint.requested",
+                nodeID: state.checkpointScopeNodeID ?? undefined,
+                inputSummary: `kind=${state.checkpointKind ?? "none"}`,
+                outputSummary: `revision=${state.revision}`,
+              })
+            }
+            return state
           }),
         )
         .pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
-    return Service.of({ get, setMode, resetPlan, approve, pause, advanceVerified })
+    const fail = Effect.fn("GraphWorkflowState.fail")(function* (input: {
+      readonly sessionID: string
+      readonly nodeID: NodeID
+      readonly reason: string
+    }) {
+      return yield* database.db
+        .transaction(() =>
+          Effect.gen(function* () {
+            const current = yield* get(input.sessionID)
+            if (!current) return yield* Effect.die(new Error(`Workflow state not found: ${input.sessionID}`))
+            const reason = input.reason.slice(0, 1_024)
+            const row = yield* database.db
+              .update(GraphWorkflowStateTable)
+              .set({
+                checkpoint_kind: "failure",
+                checkpoint_scope_node_id: input.nodeID,
+                checkpoint_status: "pending",
+                checkpoint_reason: reason,
+                revision: current.revision + 1,
+              })
+              .where(eq(GraphWorkflowStateTable.session_id, input.sessionID))
+              .returning()
+              .get()
+              .pipe(Effect.orDie)
+            const state = fromRow(row)
+            yield* recordTransition({
+              state,
+              toolName: "graph.workflow.failed",
+              nodeID: input.nodeID,
+              status: "failed",
+              inputSummary: reason,
+              outputSummary: `revision=${state.revision}`,
+            })
+            yield* recordTransition({
+              state,
+              toolName: "graph.workflow.checkpoint.requested",
+              nodeID: input.nodeID,
+              inputSummary: "kind=failure",
+              outputSummary: `revision=${state.revision}`,
+            })
+            return state
+          }),
+        )
+        .pipe(Effect.catchTag("SqlError", Effect.die))
+    })
+
+    return Service.of({ get, setMode, resetPlan, approve, pause, advanceVerified, fail })
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer, deps: [Database.node, GraphStorage.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer,
+  deps: [Database.node, GraphStorage.node, GraphAudit.node],
+})
 
 export const defaultLayer = layer.pipe(
   Layer.provide(GraphStorage.defaultLayer),
+  Layer.provide(GraphAudit.defaultLayer),
   Layer.provide(Database.layerFromPath(Database.path())),
 )
 
@@ -395,4 +558,17 @@ function nextModuleTask(graph: GraphView, completedNodeID: NodeID, candidates: R
     )
     return scoped.find((item) => item.moduleID === completedModule)?.node ?? scoped[0]?.node
   })
+}
+
+function isReady(graph: GraphView, nodeID: NodeID) {
+  const node = graph.nodes.find((item) => item.id === nodeID)
+  if (!node || node.status === "verified" || node.status === "deprecated") return false
+  return graph.edges
+    .filter((edge) => edge.relation === "blocks" && edge.targetID === nodeID)
+    .every((edge) => graph.nodes.find((item) => item.id === edge.sourceID)?.status === "verified")
+}
+
+function moduleComplete(graph: GraphView, moduleID: NodeID) {
+  const tasks = orderedAtomicNodes(graph).filter((node) => nearestCompositeIDs(graph, node.id)[0] === moduleID)
+  return tasks.length > 0 && tasks.every((node) => node.status === "verified")
 }

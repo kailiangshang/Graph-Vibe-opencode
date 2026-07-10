@@ -18,6 +18,7 @@ import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
+import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -45,6 +46,7 @@ const it = testEffect(
     LayerNode.group([
       Database.node, Session.node, GraphStorage.node, GraphDomain.node,
       GraphAudit.node, GraphBuild.node, GraphPlan.node,
+      GraphWorkflowState.node,
       CrossSpawnSpawner.node, EventV2Bridge.node, Truncate.node, Agent.node,
     ]),
     [
@@ -169,7 +171,7 @@ describe("graph mode 开发流程演示", () => {
       })
 
       expect(gate.allowed).toBe(false)
-      expect(gate.issues.some((i) => i.code === "blocked_by_dependency")).toBe(true)
+      expect(gate.issues.some((i) => i.code === "dependency_not_verified")).toBe(true)
     }),
   )
 
@@ -182,6 +184,9 @@ describe("graph mode 开发流程演示", () => {
       yield* seed(test.directory)
       const plan = yield* GraphPlan.Service
       const storage = yield* GraphStorage.Service
+      const workflow = yield* GraphWorkflowState.Service
+
+      yield* workflow.setMode({ projectID, sessionID, mode: "atomic", expectedRevision: 0 })
 
       yield* plan.admit({
         projectID, sessionID,
@@ -215,6 +220,9 @@ describe("graph mode 开发流程演示", () => {
       yield* seed(projectDir)
       const plan = yield* GraphPlan.Service
       const storage = yield* GraphStorage.Service
+      const workflow = yield* GraphWorkflowState.Service
+
+      yield* workflow.setMode({ projectID, sessionID, mode: "atomic", expectedRevision: 0 })
 
       yield* plan.admit({
         projectID, sessionID,
@@ -256,6 +264,9 @@ describe("graph mode 开发流程演示", () => {
       const plan = yield* GraphPlan.Service
       const storage = yield* GraphStorage.Service
       const audit = yield* GraphAudit.Service
+      const workflow = yield* GraphWorkflowState.Service
+
+      yield* workflow.setMode({ projectID, sessionID, mode: "atomic", expectedRevision: 0 })
 
       yield* plan.admit({
         projectID, sessionID,
@@ -282,6 +293,10 @@ describe("graph mode 开发流程演示", () => {
       const parsed = JSON.parse(result.output)
       expect(parsed.ran).toBe(false)
       expect(parsed.reason).toContain("previous failed diagnostics")
+      expect(yield* workflow.get(sessionID)).toMatchObject({
+        checkpointKind: "failure",
+        checkpointStatus: "pending",
+      })
     }),
   )
 

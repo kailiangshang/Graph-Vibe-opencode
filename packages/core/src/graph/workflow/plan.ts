@@ -47,11 +47,9 @@ export const layer = Layer.effect(
     const workflow = yield* GraphWorkflowState.Service
 
     const admit = Effect.fn("GraphPlan.admit")(function* (input: AdmitPlanInput) {
-      if (input.dryRun) {
-        const issues = validateDryRun(input)
-        if (issues.length > 0) return yield* new GraphDomain.ValidationError({ rule: issues[0].rule, message: issues[0].message })
-        return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: true }
-      }
+      const issues = validatePlan(input)
+      if (issues.length > 0) return yield* new GraphDomain.ValidationError({ rule: issues[0].rule, message: issues[0].message })
+      if (input.dryRun) return { nodesCreated: input.nodes.length, edgesCreated: input.edges.length, dryRun: true }
 
       return yield* db.transaction(() =>
         Effect.gen(function* () {
@@ -121,8 +119,18 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Database.layerFromPath(Database.path())),
 )
 
-function validateDryRun(input: AdmitPlanInput) {
+function validatePlan(input: AdmitPlanInput) {
   const nodeIDs = input.nodes.map((node) => (node.id ?? GraphStorage.NodeID.create()) as GraphStorage.NodeID)
+  const unknownRef = input.edges
+    .flatMap((edge) => [edge.sourceID, edge.targetID])
+    .find((ref) => ref.startsWith("@") && nodeIDs[Number.parseInt(ref.slice(1), 10)] === undefined)
+  if (unknownRef) {
+    return [{
+      rule: "edge.dangling_endpoint",
+      message: `edge references unknown node index: ${unknownRef}`,
+      context: { ref: unknownRef, nodeCount: nodeIDs.length },
+    }]
+  }
   const resolveRef = (ref: string): GraphStorage.NodeID => {
     if (ref.startsWith("@")) {
       const idx = Number.parseInt(ref.slice(1), 10)
