@@ -3,29 +3,7 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-j
 import { useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { Spinner } from "@opencode-ai/ui/spinner"
-
-interface GraphNode {
-  id: string
-  name: string
-  type: string
-  level: string
-  status: string
-  testStatus: string
-  priority: string | null
-  sessionID: string | null
-}
-
-interface GraphEdge {
-  id: string
-  sourceID: string
-  targetID: string
-  relation: string
-}
-
-interface GraphView {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-}
+import { type GraphNode, type GraphView, type LevelFilter, countByStatus, filterByLevel } from "./graph-helpers"
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "#ffc107",
@@ -117,26 +95,9 @@ export default function GraphPage() {
     },
   }))
 
-  const statusCounts = createMemo(() => {
-    const nodes = graphQuery.data?.nodes ?? []
-    const counts: Record<string, number> = {}
-    for (const n of nodes) counts[n.status] = (counts[n.status] ?? 0) + 1
-    return counts
-  })
+  const statusCounts = createMemo(() => countByStatus(graphQuery.data?.nodes ?? []))
 
-  const filteredData = createMemo(() => {
-    const data = graphQuery.data
-    if (!data) return { nodes: [], edges: [] }
-    const filter = levelFilter()
-    if (filter === "all") return data
-    const filteredNodes = data.nodes.filter((n) => {
-      if (filter === "L1") return n.type === "prd" || n.type === "composite"
-      return n.type === "atomic"
-    })
-    const nodeIDs = new Set(filteredNodes.map((n) => n.id))
-    const filteredEdges = data.edges.filter((e) => nodeIDs.has(e.sourceID) && nodeIDs.has(e.targetID))
-    return { nodes: filteredNodes, edges: filteredEdges }
-  })
+  const filteredData = createMemo(() => filterByLevel(graphQuery.data, levelFilter()))
 
   return (
     <div class="flex h-full flex-col">
