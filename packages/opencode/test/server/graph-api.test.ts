@@ -11,6 +11,7 @@ import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
+import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap as InstanceBootstrapService } from "@/project/bootstrap-service"
@@ -39,6 +40,7 @@ const appLayer = AppNodeBuilder.build(
     GraphAudit.node,
     GraphPlan.node,
     GraphBuild.node,
+    GraphWorkflowState.node,
   ]),
   [[InstanceStore.bootstrapNode, noopBootstrapLayer]],
 )
@@ -244,6 +246,12 @@ describe("graph HttpApi", () => {
       expect(result.blockers.length).toBe(1)
       expect(result.blockers[0].nodeID).toBe(sourceID)
       expect(result.blockers[0].nodeStatus).toBe("pending")
+
+      yield* domain.node.update(sourceID, { status: "implemented" })
+      const implemented = yield* requestJson<{
+        blockers: Array<{ nodeID: string; nodeName: string; nodeStatus: string }>
+      }>(`/graph/node/${targetID}/readiness?directory=${encodeURIComponent(test.directory)}&session=${session.id}`)
+      expect(implemented.blockers).toEqual([{ nodeID: sourceID, nodeName: "Dependency", nodeStatus: "implemented" }])
     }),
   )
 
@@ -314,6 +322,34 @@ describe("graph HttpApi", () => {
       )
 
       expect(result.status).toBe(400)
+    }),
+  )
+
+  it.instance("maps ambiguous module plan admission to 400", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      const workflow = yield* GraphWorkflowState.Service
+      yield* workflow.setMode({ sessionID: session.id, projectID: session.projectID, mode: "module", expectedRevision: 0 })
+
+      const response = yield* send(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        {
+          nodes: [
+            { id: "module-a", type: "composite", name: "Module A", level: "L1" },
+            { id: "module-b", type: "composite", name: "Module B", level: "L1" },
+            { id: "task", type: "atomic", name: "Task", level: "L2" },
+          ],
+          edges: [
+            { sourceID: "module-a", targetID: "task", relation: "contains" },
+            { sourceID: "module-b", targetID: "task", relation: "contains" },
+          ],
+        },
+      )
+
+      expect(response.status).toBe(400)
     }),
   )
 

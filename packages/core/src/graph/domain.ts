@@ -58,7 +58,7 @@ export const layer = Layer.effect(
         id: "" as NodeID, projectID: input.projectID, sessionID: input.sessionID ?? null,
         type: input.type, name: input.name, level: input.level, priority: input.priority ?? null,
         category: input.category ?? null, status: input.status ?? "pending", desc: input.desc ?? null,
-        content: input.content ?? null, codeHash: input.codeHash ?? null,
+        content: input.content ?? null, verification: input.verification ?? null, codeHash: input.codeHash ?? null,
         testStatus: input.testStatus ?? "none", confidence: input.confidence ?? 1,
         timeCreated: 0, timeUpdated: 0,
       }

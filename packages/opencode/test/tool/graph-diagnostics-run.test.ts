@@ -7,6 +7,7 @@ import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
+import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -40,6 +41,7 @@ const it = testEffect(
       GraphDomain.node,
       GraphAudit.node,
       GraphBuild.node,
+      GraphWorkflowState.node,
       CrossSpawnSpawner.node,
       EventV2Bridge.node,
       Truncate.node,
@@ -110,6 +112,18 @@ const init = Effect.fn("GraphDiagnosticsTest.init")(function* () {
   return yield* Tool.init(info)
 })
 
+const authorize = Effect.fn("GraphDiagnosticsTest.authorize")(function* (targetNodeID: GraphStorage.NodeID) {
+  const workflow = yield* GraphWorkflowState.Service
+  yield* workflow.setMode({ sessionID, projectID, mode: "atomic", expectedRevision: 0 })
+  const storage = yield* GraphStorage.Service
+  yield* workflow.resetPlan({
+    sessionID,
+    projectID,
+    graph: yield* storage.currentPlan({ sessionID }),
+  })
+  expect((yield* workflow.get(sessionID))?.currentNodeID).toBe(targetNodeID)
+})
+
 describe("graph_diagnostics_run", () => {
   it.instance("does not expose model-supplied commands", () =>
     Effect.gen(function* () {
@@ -156,6 +170,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
       yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "true" } })))
 
       const permissionRequests: PermissionRequest[] = []
@@ -171,6 +186,8 @@ describe("graph_diagnostics_run", () => {
       expect(permissionRequests).toMatchObject([{ permission: "graph.diagnostics_run", patterns: ["bun run test"], always: ["bun run test"] }])
       expect(node.testStatus).toBe("passed")
       expect(node.status).toBe("verified")
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(sessionID))?.currentNodeID).toBeNull()
     }),
   )
 
@@ -187,6 +204,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
       yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "false" } })))
 
       const tool = yield* init()
@@ -214,6 +232,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
       yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "false" } })))
 
       const tool = yield* init()
@@ -227,6 +246,8 @@ describe("graph_diagnostics_run", () => {
       expect(JSON.parse(result.output)).toMatchObject({ ran: true, passed: false })
       expect(node.testStatus).toBe("failed")
       expect(node.status).toBe("implemented")
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(sessionID))?.currentNodeID).toBe(targetNodeID)
     }),
   )
 
@@ -243,6 +264,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
 
       yield* Effect.promise(() =>
         Bun.write(
@@ -283,6 +305,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
       yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "sleep 10" } })))
 
       const tool = yield* init()
@@ -312,6 +335,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
 
       yield* Effect.promise(async () => {
         await Bun.write(
@@ -334,6 +358,8 @@ describe("graph_diagnostics_run", () => {
       const node = yield* storage.node.get(targetNodeID)
       expect(node.status).toBe("implemented")
       expect(node.testStatus).not.toBe("passed")
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(sessionID))?.currentNodeID).toBe(targetNodeID)
     }),
   )
 
@@ -351,6 +377,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
 
       yield* audit.tool.record({
         projectID,
@@ -382,6 +409,12 @@ describe("graph_diagnostics_run", () => {
       const parsed = JSON.parse(result.output)
       expect(parsed.ran).toBe(false)
       expect(parsed.reason).toContain("previous failed diagnostics")
+      const workflow = yield* GraphWorkflowState.Service
+      expect(yield* workflow.get(sessionID)).toMatchObject({
+        currentNodeID: targetNodeID,
+        checkpointKind: "failure",
+        checkpointStatus: "pending",
+      })
     }),
   )
 })

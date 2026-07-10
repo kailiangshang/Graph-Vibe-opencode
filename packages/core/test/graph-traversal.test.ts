@@ -8,7 +8,7 @@ function makeNode(id: string): NodeRow {
   return {
     id: nid(id), projectID: "p" as any, sessionID: null, type: "atomic", name: id,
     level: "L2", priority: null, category: null, status: "pending", desc: null,
-    content: null, codeHash: null, testStatus: "none", confidence: 1,
+    content: null, verification: null, codeHash: null, testStatus: "none", confidence: 1,
     timeCreated: 0, timeUpdated: 0,
   }
 }

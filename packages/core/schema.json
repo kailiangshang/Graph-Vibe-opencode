@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "16857c6a-2c9f-4e5b-b63f-e2e0afc0f56b",
+  "id": "7e72efaf-ad27-4e80-8511-4ca8d6cd0504",
   "prevIds": [
-    "d5ba880f-7c01-4a96-a446-fabf0b9cd503"
+    "16857c6a-2c9f-4e5b-b63f-e2e0afc0f56b"
   ],
   "ddl": [
     {
@@ -24,6 +24,10 @@
     },
     {
       "name": "graph_tool_run",
+      "entityType": "tables"
+    },
+    {
+      "name": "graph_workflow_state",
       "entityType": "tables"
     },
     {
@@ -527,6 +531,16 @@
       "table": "graph_tool_run"
     },
     {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "evidence",
+      "entityType": "columns",
+      "table": "graph_tool_run"
+    },
+    {
       "type": "integer",
       "notNull": true,
       "autoincrement": false,
@@ -535,6 +549,116 @@
       "name": "time_created",
       "entityType": "columns",
       "table": "graph_tool_run"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "mode",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "current_node_id",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "checkpoint_kind",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "checkpoint_scope_node_id",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'none'",
+      "generated": null,
+      "name": "checkpoint_status",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "checkpoint_reason",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
     },
     {
       "type": "integer",
@@ -1083,6 +1207,16 @@
       "default": null,
       "generated": null,
       "name": "content",
+      "entityType": "columns",
+      "table": "graph_node"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "verification",
       "entityType": "columns",
       "table": "graph_node"
     },
@@ -2298,6 +2432,66 @@
     },
     {
       "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_graph_workflow_state_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "graph_workflow_state"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "project",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_graph_workflow_state_project_id_project_id_fk",
+      "entityType": "fks",
+      "table": "graph_workflow_state"
+    },
+    {
+      "columns": [
+        "current_node_id"
+      ],
+      "tableTo": "graph_node",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "SET NULL",
+      "nameExplicit": false,
+      "name": "fk_graph_workflow_state_current_node_id_graph_node_id_fk",
+      "entityType": "fks",
+      "table": "graph_workflow_state"
+    },
+    {
+      "columns": [
+        "checkpoint_scope_node_id"
+      ],
+      "tableTo": "graph_node",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "SET NULL",
+      "nameExplicit": false,
+      "name": "fk_graph_workflow_state_checkpoint_scope_node_id_graph_node_id_fk",
+      "entityType": "fks",
+      "table": "graph_workflow_state"
+    },
+    {
+      "columns": [
         "active_account_id"
       ],
       "tableTo": "account",
@@ -2669,6 +2863,15 @@
       "nameExplicit": false,
       "name": "graph_tool_run_pk",
       "table": "graph_tool_run",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "graph_workflow_state_pk",
+      "table": "graph_workflow_state",
       "entityType": "pks"
     },
     {

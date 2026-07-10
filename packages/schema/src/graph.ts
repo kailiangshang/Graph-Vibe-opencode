@@ -39,11 +39,76 @@ export type NodeStatus = typeof NodeStatus.Type
 export const TestStatus = Schema.Literals(["none", "pending", "passed", "failed"])
 export type TestStatus = typeof TestStatus.Type
 
+export const ExecutionMode = Schema.Literals(["atomic", "module", "autopilot"])
+export type ExecutionMode = typeof ExecutionMode.Type
+
+export const CheckpointKind = Schema.Literals(["atomic", "module", "decision", "failure", "pause"])
+export type CheckpointKind = typeof CheckpointKind.Type
+
+export const CheckpointStatus = Schema.Literals(["none", "pending", "approved"])
+export type CheckpointStatus = typeof CheckpointStatus.Type
+
 export const EdgeRelation = Schema.Literals(["contains", "blocks", "addresses", "uses", "deprecated_by"])
 export type EdgeRelation = typeof EdgeRelation.Type
 
 export const NodeContent = Schema.Record(Schema.String, Schema.Unknown)
 export type NodeContent = typeof NodeContent.Type
+
+const boundedString = (maxLength: number) =>
+  Schema.String.check(
+    Schema.makeFilter((value) => value.trim().length > 0 && value.length <= maxLength, {
+      expected: `a non-empty string no longer than ${maxLength} characters`,
+    }),
+  )
+
+export const RelativePath = Schema.String.check(
+  Schema.makeFilter(
+    (value) => {
+      if (value.length === 0 || value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(value)) {
+        return false
+      }
+      if (value.includes("\\")) return false
+      const segments = value.split("/")
+      return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..")
+    },
+    { expected: "a normalized relative path without empty, current, or parent segments" },
+  ),
+)
+export type RelativePath = typeof RelativePath.Type
+
+export const DiagnosticName = Schema.Literals(["test", "typecheck", "lint"])
+export type DiagnosticName = typeof DiagnosticName.Type
+
+export const VerificationSpec = Schema.Struct({
+  criteria: Schema.NonEmptyArray(boundedString(1_024)).check(Schema.isMaxLength(64)),
+  diagnostics: Schema.NonEmptyArray(
+    Schema.Struct({
+      name: DiagnosticName,
+      paths: Schema.optional(Schema.Array(RelativePath).check(Schema.isMaxLength(64))),
+    }),
+  ).check(Schema.isMaxLength(16)),
+})
+export interface VerificationSpec extends Schema.Schema.Type<typeof VerificationSpec> {}
+
+export const VerificationEvidence = Schema.Struct({
+  kind: Schema.Literal("diagnostics"),
+  nodeID: Schema.String,
+  criteria: Schema.Array(boundedString(1_024)).check(Schema.isMaxLength(64)),
+  artifactPaths: Schema.Array(RelativePath).check(Schema.isMaxLength(256)),
+  complete: Schema.Boolean,
+  passed: Schema.Boolean,
+  commands: Schema.Array(
+    Schema.Struct({
+      name: boundedString(128),
+      command: boundedString(2_048),
+      exitCode: Schema.NullOr(Schema.Number),
+      timedOut: Schema.Boolean,
+      passed: Schema.Boolean,
+      excerpt: Schema.optional(Schema.String.check(Schema.isMaxLength(8_192))),
+    }),
+  ).check(Schema.isMaxLength(32)),
+})
+export interface VerificationEvidence extends Schema.Schema.Type<typeof VerificationEvidence> {}
 
 export { ProjectID }
 

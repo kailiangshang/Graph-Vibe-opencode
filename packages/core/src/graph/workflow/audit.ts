@@ -9,6 +9,7 @@ import type { NodeID } from "../storage"
 import { GraphGenerationRunTable, GraphToolRunTable } from "./audit.sql"
 import type { GenerationExecutor, GenerationRunStatus, ToolRunStatus, ToolRunType } from "./audit.sql"
 import type { GateResult } from "./gate"
+import type { VerificationEvidence } from "@opencode-ai/schema/graph"
 
 export type ToolRunID = string & { readonly "GraphToolRun.ID": unique symbol }
 export type GenerationRunID = string & { readonly "GraphGenerationRun.ID": unique symbol }
@@ -24,6 +25,7 @@ export interface ToolRun {
   readonly outputSummary: string | null
   readonly status: ToolRunStatus
   readonly error: string | null
+  readonly evidence: VerificationEvidence | null
   readonly timeCreated: number
 }
 
@@ -53,6 +55,7 @@ export interface ToolRunCreate {
   readonly outputSummary?: string
   readonly status: ToolRunStatus
   readonly error?: string
+  readonly evidence?: VerificationEvidence
 }
 
 export interface GenerationRunCreate {
@@ -102,6 +105,7 @@ const toolRun = (row: typeof GraphToolRunTable.$inferSelect): ToolRun => ({
   outputSummary: row.output_summary,
   status: row.status,
   error: row.error,
+  evidence: row.evidence,
   timeCreated: row.time_created,
 })
 
@@ -141,6 +145,7 @@ export const layer = Layer.effect(
           output_summary: input.outputSummary ?? null,
           status: input.status,
           error: input.error ?? null,
+          evidence: input.evidence ?? null,
         })
         .run()
         .pipe(Effect.orDie)
@@ -155,7 +160,7 @@ export const layer = Layer.effect(
         .select()
         .from(GraphToolRunTable)
         .where(and(...conds))
-        .orderBy(asc(GraphToolRunTable.time_created))
+        .orderBy(asc(GraphToolRunTable.time_created), asc(GraphToolRunTable.id))
         .all()
         .pipe(Effect.orDie)
       return rows.map(toolRun)
@@ -192,7 +197,7 @@ export const layer = Layer.effect(
         .select()
         .from(GraphGenerationRunTable)
         .where(and(...conds))
-        .orderBy(asc(GraphGenerationRunTable.time_created))
+        .orderBy(asc(GraphGenerationRunTable.time_created), asc(GraphGenerationRunTable.id))
         .all()
         .pipe(Effect.orDie)
       return rows.map(generationRun)

@@ -145,6 +145,8 @@ export const GraphDiagnosticsRunTool = Tool.define(
             (r) => r.toolName === "graph.diagnostics.run" && r.status === "failed",
           ).length
           if (failedDiagCount >= MAX_FIX_ATTEMPTS) {
+            const reason = `Node has ${failedDiagCount} previous failed diagnostics (max ${MAX_FIX_ATTEMPTS}). Review the failures and revise the plan or seek human input.`
+            yield* build.fail({ sessionID: session.sessionID, nodeID: params.targetNodeID, reason })
             yield* audit.tool.record({
               projectID: session.projectID,
               sessionID: session.sessionID,
@@ -168,7 +170,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
                 ran: false,
                 complete: false,
                 verified: false,
-                reason: `Node has ${failedDiagCount} previous failed diagnostics (max ${MAX_FIX_ATTEMPTS}). Review the failures and revise the plan or seek human input.`,
+                reason,
               }),
             }
           }
@@ -212,6 +214,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
           let nextHint = ""
           if (verified) {
             const cp = yield* domain.currentPlan({ sessionID: session.sessionID })
+            yield* build.advanceVerified({ sessionID: session.sessionID, nodeID: params.targetNodeID, graph: cp })
             const newlyBuildable = buildableNodes(cp.nodes, cp.edges)
               .filter((n) => n.id !== params.targetNodeID)
               .map((n) => n.name)
