@@ -27,6 +27,7 @@ const testStateLayer = Layer.effectDiscard(
       OPENCODE_SERVER_USERNAME: Flag.OPENCODE_SERVER_USERNAME,
       envPassword: process.env.OPENCODE_SERVER_PASSWORD,
       envUsername: process.env.OPENCODE_SERVER_USERNAME,
+      sourceToken: process.env.OPENCODE_GRAPH_VIBE_SOURCE_TOKEN,
     }
 
     yield* Effect.addFinalizer(() =>
@@ -35,6 +36,7 @@ const testStateLayer = Layer.effectDiscard(
         Flag.OPENCODE_SERVER_USERNAME = original.OPENCODE_SERVER_USERNAME
         restoreEnv("OPENCODE_SERVER_PASSWORD", original.envPassword)
         restoreEnv("OPENCODE_SERVER_USERNAME", original.envUsername)
+        restoreEnv("OPENCODE_GRAPH_VIBE_SOURCE_TOKEN", original.sourceToken)
       }),
     )
   }),
@@ -195,6 +197,19 @@ function responseText(response: Response) {
 }
 
 describe("HttpApi UI fallback", () => {
+  it.effect("identifies the source Web backend with a process token", () =>
+    Effect.gen(function* () {
+      process.env.OPENCODE_GRAPH_VIBE_SOURCE_TOKEN = "ready-token"
+
+      const ready = yield* app().request("/__graph-vibe/source-ready?token=ready-token")
+      const rejected = yield* app().request("/__graph-vibe/source-ready?token=foreign")
+
+      expect(ready.status).toBe(200)
+      expect(yield* Effect.promise(() => ready.text())).toBe("ready-token")
+      expect(rejected.status).toBe(404)
+    }),
+  )
+
   it.live("refuses upstream UI fallback for Graph Vibe", () =>
     Effect.gen(function* () {
       let requested = false

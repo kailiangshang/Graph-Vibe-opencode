@@ -197,6 +197,15 @@ const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effe
   Layer.provide(authOnlyRouterLayer),
 )
 
+const sourceWebReadyRoute = HttpRouter.use((router) =>
+  router.add("GET", "/__graph-vibe/source-ready", (request) => {
+    const token = process.env.OPENCODE_GRAPH_VIBE_SOURCE_TOKEN
+    const requested = new URL(request.url, "http://localhost").searchParams.get("token")
+    if (!token || requested !== token) return Effect.succeed(HttpServerResponse.empty({ status: 404 }))
+    return Effect.succeed(HttpServerResponse.text(token))
+  }),
+)
+
 const uiRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -294,6 +303,7 @@ export function createRoutes(
     instanceRoutes,
     serverRoutes,
     docRoute,
+    sourceWebReadyRoute,
     uiRoute,
   ).pipe(
     Layer.provide([
