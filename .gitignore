@@ -34,3 +34,4 @@ logs/
 tsconfig.tsbuildinfo
 GRAPH_VIBE_COMPETITION.local.md
 examples/grid-arena/
+examples/game-2048/
