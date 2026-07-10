@@ -18,4 +18,9 @@ export function current() {
   return process.env.OPENCODE_CLIENT === GraphVibe.id ? GraphVibe : OpenCode
 }
 
+export function commandName() {
+  const product = current()
+  return product === GraphVibe ? product.name : product.cli
+}
+
 export * as Product from "./product"

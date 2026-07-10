@@ -29,12 +29,15 @@ import { DbCommand } from "./cli/cmd/db"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
+import { Product } from "@opencode-ai/core/product"
 
 const args = hideBin(process.argv)
+const product = Product.current()
 
 function show(out: string) {
   const text = out.trimStart()
-  if (!text.startsWith("opencode ")) {
+  const command = args.find((arg) => !arg.startsWith("-"))
+  if (!command || !text.startsWith(`${product.cli} ${command}`)) {
     process.stderr.write(UI.logo() + EOL + EOL)
     process.stderr.write(text + EOL)
     return
@@ -44,7 +47,7 @@ function show(out: string) {
 
 const cli = yargs(args)
   .parserConfiguration({ "populate--": true })
-  .scriptName("opencode")
+  .scriptName(product.cli)
   .wrap(100)
   .help("help", "show help")
   .alias("help", "h")
@@ -76,7 +79,7 @@ const cli = yargs(args)
     process.env.OPENCODE = "1"
     process.env.OPENCODE_PID = String(process.pid)
   })
-  .usage("")
+  .usage("$0 [project]")
   .completion("completion", "generate shell completion script")
   .command(AcpCommand)
   .command(McpCommand)

@@ -15,7 +15,7 @@ async function run(alias: "graph-vibe" | "opencode") {
   await chmod(wrapper, 0o755)
   const command = path.join(tmp.path, alias)
   if (alias === "graph-vibe") await symlink(wrapper, command)
-  const env = { ...process.env, OPENCODE_BIN_PATH: target }
+  const env: Record<string, string | undefined> = { ...process.env, OPENCODE_BIN_PATH: target }
   delete env.OPENCODE_CLIENT
   delete env.OPENCODE_ENABLE_GRAPH_MODE
   const proc = Bun.spawn({ cmd: [command], env, stdout: "pipe", stderr: "pipe" })

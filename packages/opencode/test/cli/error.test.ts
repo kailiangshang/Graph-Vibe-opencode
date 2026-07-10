@@ -1,7 +1,17 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { AccountTransportError } from "../../src/account/schema"
 import { FormatError } from "../../src/cli/error"
 import { UI } from "../../src/cli/ui"
+
+const originalClient = process.env.OPENCODE_CLIENT
+
+afterEach(() => {
+  if (originalClient === undefined) {
+    delete process.env.OPENCODE_CLIENT
+    return
+  }
+  process.env.OPENCODE_CLIENT = originalClient
+})
 
 describe("cli.error", () => {
   test("formats legacy and tagged config errors the same way", () => {
@@ -79,6 +89,17 @@ describe("cli.error", () => {
 
     expect(FormatError({ name: "ProviderModelNotFoundError", data })).toBe(expected)
     expect(FormatError({ _tag: "ProviderModelNotFoundError", ...data })).toBe(expected)
+  })
+
+  test("uses the active CLI name in model guidance", () => {
+    process.env.OPENCODE_CLIENT = "graph-vibe"
+
+    expect(
+      FormatError({
+        name: "ProviderModelNotFoundError",
+        data: { providerID: "anthropic", modelID: "missing", suggestions: [] },
+      }),
+    ).toContain("Try: `graph-vibe models`")
   })
 
   test("formats legacy and tagged provider init errors the same way", () => {

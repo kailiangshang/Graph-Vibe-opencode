@@ -37,4 +37,12 @@ describe("Product.current", () => {
     process.env.OPENCODE_CLIENT = "cli"
     expect(Product.current()).toBe(Product.OpenCode)
   })
+
+  test("preserves upstream command wording outside Graph Vibe", () => {
+    delete process.env.OPENCODE_CLIENT
+    expect(Product.commandName()).toBe("opencode")
+
+    process.env.OPENCODE_CLIENT = "graph-vibe"
+    expect(Product.commandName()).toBe("Graph Vibe")
+  })
 })
