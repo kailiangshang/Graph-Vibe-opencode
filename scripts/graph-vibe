@@ -11,6 +11,21 @@ set -euo pipefail
 export OPENCODE_ENABLE_GRAPH_MODE=1
 export OPENCODE_DISABLE_CHANNEL_DB="${OPENCODE_DISABLE_CHANNEL_DB:-1}"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  if [[ "$SCRIPT_PATH" != /* ]]; then
+    SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+  fi
+done
+REPO_ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+PROJECT_DIR="$PWD"
 
-exec bun run --conditions=browser "${REPO_ROOT}/packages/opencode/src/index.ts" "$@"
+cd "$REPO_ROOT/packages/opencode"
+
+if [ "$#" -eq 0 ] || [[ "$1" == -* ]]; then
+  set -- "$PROJECT_DIR" "$@"
+fi
+
+exec bun run --conditions=browser ./src/index.ts "$@"
