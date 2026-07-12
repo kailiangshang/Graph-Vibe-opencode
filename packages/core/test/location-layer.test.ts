@@ -1,4 +1,6 @@
 import fs from "fs/promises"
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import os from "node:os"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
@@ -48,14 +50,14 @@ import { ApplicationTools } from "../src/tool/application-tools"
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node])),
 )
+const symlinkLive = symlinkAvailable() ? it.live : it.live.skip
 
 describe("LocationServiceMap", () => {
-  it.live("invalidates focused execution when the canonical target changes", () =>
+  symlinkLive("invalidates focused execution when the canonical target changes", () =>
     Effect.acquireRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
     ).pipe(Effect.flatMap(([root, outside]) => Effect.gen(function* () {
-      if (!(yield* Effect.promise(() => supportsSymlink(root.path)))) return
       yield* Effect.promise(async () => {
         await fs.mkdir(path.join(root.path, "test"), { recursive: true })
         await fs.mkdir(path.join(root.path, "scripts"), { recursive: true })
@@ -1075,14 +1077,17 @@ async function fileExists(file: string) {
   return fs.access(file).then(() => true, () => false)
 }
 
-async function supportsSymlink(directory: string) {
-  const target = path.join(directory, ".symlink-capability-target")
-  const link = path.join(directory, ".symlink-capability-link")
-  await fs.writeFile(target, "test")
-  return fs.symlink(target, link).then(
-    () => fs.rm(link, { force: true }).then(() => true),
-    () => false,
-  ).finally(() => fs.rm(target, { force: true }))
+function symlinkAvailable() {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "graph-symlink-capability-"))
+  try {
+    writeFileSync(path.join(directory, "target"), "test")
+    symlinkSync(path.join(directory, "target"), path.join(directory, "link"))
+    return true
+  } catch {
+    return false
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 }
 
 function waitForFile(file: string): Effect.Effect<void> {

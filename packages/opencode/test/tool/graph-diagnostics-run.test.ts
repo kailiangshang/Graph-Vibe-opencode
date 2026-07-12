@@ -1,6 +1,7 @@
 import { afterEach, describe, expect } from "bun:test"
 import path from "node:path"
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -56,6 +57,7 @@ const it = testEffect(
     ],
   ),
 )
+const symlinkInstance = symlinkAvailable() ? it.instance : it.instance.skip
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -263,11 +265,10 @@ describe("graph_diagnostics_run", () => {
     }),
   )
 
-  it.instance("blocks a symlink escape before permission or command execution", () =>
+  symlinkInstance("blocks a symlink escape before permission or command execution", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       yield* seed(test.directory)
-      if (!(yield* Effect.promise(() => supportsSymlink(test.directory)))) return
       const outside = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "graph-diagnostics-outside-")))
       yield* Effect.addFinalizer(() => Effect.promise(() => rm(outside, { recursive: true, force: true })))
       yield* Effect.promise(async () => {
@@ -302,11 +303,10 @@ describe("graph_diagnostics_run", () => {
     }),
   )
 
-  it.instance("rejects a canonical target changed during permission", () =>
+  symlinkInstance("rejects a canonical target changed during permission", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       yield* seed(test.directory)
-      if (!(yield* Effect.promise(() => supportsSymlink(test.directory)))) return
       const outside = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "graph-swap-outside-")))
       yield* Effect.addFinalizer(() => Effect.promise(() => rm(outside, { recursive: true, force: true })))
       yield* Effect.promise(async () => {
@@ -328,16 +328,6 @@ describe("graph_diagnostics_run", () => {
       expect(JSON.parse(result.output)).toMatchObject({ verified: false, passed: false })
     }),
   )
-
-async function supportsSymlink(directory: string) {
-  const target = path.join(directory, ".symlink-capability-target")
-  const link = path.join(directory, ".symlink-capability-link")
-  await Bun.write(target, "test")
-  return symlink(target, link).then(
-    () => rm(link, { force: true }).then(() => true),
-    () => false,
-  ).finally(() => rm(target, { force: true }))
-}
 
   it.instance("rejects a canonical target changed during command execution", () =>
     Effect.gen(function* () {
@@ -696,3 +686,16 @@ async function supportsSymlink(directory: string) {
     }),
   )
 })
+
+function symlinkAvailable() {
+  const directory = mkdtempSync(path.join(tmpdir(), "graph-symlink-capability-"))
+  try {
+    writeFileSync(path.join(directory, "target"), "test")
+    symlinkSync(path.join(directory, "target"), path.join(directory, "link"))
+    return true
+  } catch {
+    return false
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+}

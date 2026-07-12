@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Graph } from "@opencode-ai/schema"
 import { Effect, Exit, Layer, Schema } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { Database } from "@opencode-ai/core/database/database"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -846,15 +847,17 @@ describe("GraphWorkflowState", () => {
       const workflow = yield* GraphWorkflowState.Service
       yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
       const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
-      const first = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision })
+      const first = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision, operationID: "apply-first" })
       const applied = yield* workflow.completeArtifactApply({
         projectID: PID, sessionID: SID, nodeID: atomicA.id,
         reservedRevision: first.revision,
+        operationID: "apply-first",
         evidence: { kind: "artifact", nodeID: atomicA.id, artifactPaths: ["src/a.ts"] },
       })
-      expect(applied.revision).toBe(planned.revision + 1)
+      expect(applied.revision).toBe(planned.revision + 2)
+      expect(applied.activeOperationID).toBeNull()
       const staleRevision = applied.revision
-      yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: staleRevision })
+      yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: staleRevision, operationID: "apply-second" })
       const exit = yield* workflow.completeVerification({
         projectID: PID, sessionID: SID, nodeID: atomicA.id, expectedRevision: staleRevision,
         evidence: { kind: "diagnostics", nodeID: atomicA.id, criteria: [], artifactPaths: ["src/a.ts"], projectChecksOnly: true, complete: true, passed: true, commands: [] },
@@ -870,16 +873,40 @@ describe("GraphWorkflowState", () => {
       const workflow = yield* GraphWorkflowState.Service
       yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
       const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
-      const reserved = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision })
-      const conflict = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision }).pipe(Effect.exit)
+      const reserved = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision, operationID: "apply-1" })
+      expect((yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision, operationID: "apply-1" })).revision).toBe(reserved.revision)
+      const conflict = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: reserved.revision, operationID: "apply-2" }).pipe(Effect.exit)
       expect(Exit.isFailure(conflict)).toBe(true)
+      const wrongOwner = yield* workflow.completeArtifactApply({ projectID: PID, sessionID: SID, nodeID: atomicA.id,
+        reservedRevision: reserved.revision, operationID: "apply-2",
+        evidence: { kind: "artifact", nodeID: atomicA.id, artifactPaths: ["src/a.ts"] } }).pipe(Effect.exit)
+      expect(Exit.isFailure(wrongOwner)).toBe(true)
+      expect(yield* workflow.get(SID)).toMatchObject({ activeOperationID: "apply-1", revision: reserved.revision })
       yield* workflow.failArtifactApply({ projectID: PID, sessionID: SID, nodeID: atomicA.id, reservedRevision: reserved.revision,
-        evidence: { kind: "artifact", nodeID: atomicA.id, artifactPaths: ["src/a.ts"] }, error: "interrupted before write" })
+        operationID: "apply-1", evidence: { kind: "artifact", nodeID: atomicA.id, artifactPaths: ["src/a.ts"] }, error: "interrupted before write" })
       const storage = yield* GraphStorage.Service
       expect(yield* storage.node.get(atomicA.id)).toMatchObject({ status: "pending", testStatus: "none" })
+      expect(yield* workflow.get(SID)).toMatchObject({ activeOperationID: null, checkpointStatus: "pending", checkpointKind: "failure" })
       const audit = yield* GraphAudit.Service
-      expect((yield* audit.tool.list({ projectID: PID, nodeID: atomicA.id })).at(-1)).toMatchObject({ status: "failed", error: "interrupted before write" })
+      expect((yield* audit.tool.list({ projectID: PID, nodeID: atomicA.id })).find((item) => item.toolName === "graph.artifact.apply")).toMatchObject({ status: "failed", error: "interrupted before write" })
     }))
+  })
+
+  test("recovers an artifact owner exactly at the fifteen minute timeout", async () => {
+    await run(Effect.gen(function* () {
+      yield* TestClock.setTime(1_000)
+      const workflow = yield* GraphWorkflowState.Service
+      yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+      const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+      const reserved = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision, operationID: "stale-apply" })
+      yield* TestClock.adjust(GraphWorkflowState.ARTIFACT_APPLY_STALE_AFTER_MS - 1)
+      expect(yield* workflow.recoverStaleArtifactApply(SID)).toMatchObject({ activeOperationID: "stale-apply", revision: reserved.revision })
+      yield* TestClock.adjust(1)
+      const recovered = yield* workflow.recoverStaleArtifactApply(SID)
+      expect(recovered).toMatchObject({ activeOperationID: null, revision: reserved.revision + 1, checkpointKind: "failure", checkpointStatus: "pending" })
+      if (!recovered) return yield* Effect.die(new Error("missing recovered workflow"))
+      expect(yield* workflow.approve({ sessionID: SID, expectedRevision: recovered.revision })).toMatchObject({ activeOperationID: null, checkpointStatus: "approved", revision: recovered.revision + 1 })
+    }).pipe(Effect.provide(TestClock.layer())))
   })
 
   test("failed diagnostics persist status and matching evidence atomically", async () => {

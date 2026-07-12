@@ -1,7 +1,7 @@
 export * as GraphWorkflowState from "./state"
 
 import { and, eq } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Clock, Context, Effect, Layer, Schema } from "effect"
 import type { ArtifactEvidence, CheckpointKind, CheckpointStatus, ExecutionMode, VerificationEvidence } from "@opencode-ai/schema/graph"
 import { Database } from "../../database/database"
 import { LayerNode } from "../../effect/layer-node"
@@ -23,13 +23,23 @@ export interface State {
   readonly checkpointStatus: CheckpointStatus
   readonly checkpointReason: string | null
   readonly revision: number
+  readonly activeOperationID: string | null
+  readonly activeOperationKind: "artifact_apply" | null
+  readonly activeOperationStartedAt: number | null
   readonly timeCreated: number
   readonly timeUpdated: number
 }
 
+export const ARTIFACT_APPLY_STALE_AFTER_MS = 15 * 60 * 1_000
+
 export class RevisionConflict extends Schema.TaggedErrorClass<RevisionConflict>()(
   "GraphWorkflowState.RevisionConflict",
   { expectedRevision: Schema.Number, actualRevision: Schema.Number },
+) {}
+
+export class ArtifactApplyOwnershipConflict extends Schema.TaggedErrorClass<ArtifactApplyOwnershipConflict>()(
+  "GraphWorkflowState.ArtifactApplyOwnershipConflict",
+  { operationID: Schema.String, activeOperationID: Schema.String },
 ) {}
 
 export class ActiveWorkflowError extends Schema.TaggedErrorClass<ActiveWorkflowError>()(
@@ -92,24 +102,28 @@ export interface Interface {
   readonly beginArtifactApply: (input: {
     readonly sessionID: string
     readonly expectedRevision: number
-  }) => Effect.Effect<State, RevisionConflict>
+    readonly operationID: string
+  }) => Effect.Effect<State, RevisionConflict | ArtifactApplyOwnershipConflict>
+  readonly recoverStaleArtifactApply: (sessionID: string) => Effect.Effect<State | undefined>
   readonly completeArtifactApply: (input: {
     readonly projectID: ProjectV2.ID
     readonly sessionID: string
     readonly nodeID: NodeID
     readonly reservedRevision: number
+    readonly operationID: string
     readonly evidence: ArtifactEvidence
     readonly inputSummary?: string
     readonly outputSummary?: string
-  }) => Effect.Effect<State, RevisionConflict>
+  }) => Effect.Effect<State, RevisionConflict | ArtifactApplyOwnershipConflict>
   readonly failArtifactApply: (input: {
     readonly projectID: ProjectV2.ID
     readonly sessionID: string
     readonly nodeID: NodeID
     readonly reservedRevision: number
+    readonly operationID: string
     readonly evidence: ArtifactEvidence
     readonly error: string
-  }) => Effect.Effect<State, RevisionConflict>
+  }) => Effect.Effect<State, RevisionConflict | ArtifactApplyOwnershipConflict>
   readonly failVerification: (input: {
     readonly projectID: ProjectV2.ID
     readonly sessionID: string
@@ -139,6 +153,9 @@ const fromRow = (row: typeof GraphWorkflowStateTable.$inferSelect): State => ({
   checkpointStatus: row.checkpoint_status,
   checkpointReason: row.checkpoint_reason,
   revision: row.revision,
+  activeOperationID: row.active_operation_id,
+  activeOperationKind: row.active_operation_kind,
+  activeOperationStartedAt: row.active_operation_started_at,
   timeCreated: row.time_created,
   timeUpdated: row.time_updated,
 })
@@ -570,13 +587,53 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
+    const recoverStaleArtifactApply = Effect.fn("GraphWorkflowState.recoverStaleArtifactApply")(function* (sessionID: string) {
+      const now = yield* Clock.currentTimeMillis
+      return yield* database.db.transaction(() => Effect.gen(function* () {
+        const current = yield* get(sessionID)
+        if (!current?.activeOperationID || current.activeOperationStartedAt === null) return current
+        if (now - current.activeOperationStartedAt < ARTIFACT_APPLY_STALE_AFTER_MS) return current
+        const reason = `artifact apply ${current.activeOperationID} exceeded ${ARTIFACT_APPLY_STALE_AFTER_MS}ms`
+        const row = yield* database.db.update(GraphWorkflowStateTable).set({
+          active_operation_id: null,
+          active_operation_kind: null,
+          active_operation_started_at: null,
+          checkpoint_kind: "failure",
+          checkpoint_scope_node_id: current.currentNodeID,
+          checkpoint_status: "pending",
+          checkpoint_reason: reason,
+          revision: current.revision + 1,
+        }).where(and(
+          eq(GraphWorkflowStateTable.session_id, sessionID),
+          eq(GraphWorkflowStateTable.revision, current.revision),
+          eq(GraphWorkflowStateTable.active_operation_id, current.activeOperationID),
+        )).returning().get().pipe(Effect.orDie)
+        if (!row) return yield* get(sessionID)
+        const state = fromRow(row)
+        yield* recordTransition({ state, toolName: "graph.artifact.apply.recovered", nodeID: current.currentNodeID ?? undefined, status: "failed", inputSummary: reason, outputSummary: `revision=${state.revision}` })
+        yield* recordTransition({ state, toolName: "graph.workflow.checkpoint.requested", nodeID: current.currentNodeID ?? undefined, inputSummary: "kind=failure", outputSummary: `revision=${state.revision}` })
+        return state
+      }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
+    })
+
     const beginArtifactApply = Effect.fn("GraphWorkflowState.beginArtifactApply")(function* (input: {
       readonly sessionID: string
       readonly expectedRevision: number
+      readonly operationID: string
     }) {
+      const now = yield* Clock.currentTimeMillis
       return yield* database.db.transaction(() => Effect.gen(function* () {
-        const current = yield* requireState(get, input.sessionID, input.expectedRevision)
-        const row = yield* database.db.update(GraphWorkflowStateTable).set({ revision: current.revision + 1 })
+        const current = yield* get(input.sessionID)
+        if (!current) return yield* new RevisionConflict({ expectedRevision: input.expectedRevision, actualRevision: 0 })
+        if (current.activeOperationID === input.operationID) return current
+        if (current.activeOperationID) return yield* new ArtifactApplyOwnershipConflict({ operationID: input.operationID, activeOperationID: current.activeOperationID })
+        if (current.revision !== input.expectedRevision) return yield* new RevisionConflict({ expectedRevision: input.expectedRevision, actualRevision: current.revision })
+        const row = yield* database.db.update(GraphWorkflowStateTable).set({
+          revision: current.revision + 1,
+          active_operation_id: input.operationID,
+          active_operation_kind: "artifact_apply",
+          active_operation_started_at: now,
+        })
           .where(and(eq(GraphWorkflowStateTable.session_id, input.sessionID), eq(GraphWorkflowStateTable.revision, current.revision)))
           .returning().get().pipe(Effect.orDie)
         if (!row) return yield* new RevisionConflict({ expectedRevision: input.expectedRevision, actualRevision: (yield* get(input.sessionID))?.revision ?? 0 })
@@ -589,12 +646,14 @@ export const layer = Layer.effect(
       readonly sessionID: string
       readonly nodeID: NodeID
       readonly reservedRevision: number
+      readonly operationID: string
       readonly evidence: ArtifactEvidence
       readonly inputSummary?: string
       readonly outputSummary?: string
     }) {
       return yield* database.db.transaction(() => Effect.gen(function* () {
         const current = yield* requireState(get, input.sessionID, input.reservedRevision)
+        yield* requireArtifactOwner(current, input.operationID)
         yield* database.db.update(GraphNodeTable).set({ status: "implemented", test_status: "pending" })
           .where(eq(GraphNodeTable.id, input.nodeID)).run().pipe(Effect.orDie)
         yield* audit.tool.record({
@@ -602,7 +661,11 @@ export const layer = Layer.effect(
           toolName: "graph.artifact.apply", toolType: "artifact", status: "succeeded",
           inputSummary: input.inputSummary, outputSummary: input.outputSummary, evidence: input.evidence,
         })
-        return current
+        const row = yield* database.db.update(GraphWorkflowStateTable).set({
+          active_operation_id: null, active_operation_kind: null, active_operation_started_at: null, revision: current.revision + 1,
+        }).where(and(eq(GraphWorkflowStateTable.session_id, input.sessionID), eq(GraphWorkflowStateTable.revision, current.revision), eq(GraphWorkflowStateTable.active_operation_id, input.operationID))).returning().get().pipe(Effect.orDie)
+        if (!row) return yield* new RevisionConflict({ expectedRevision: input.reservedRevision, actualRevision: (yield* get(input.sessionID))?.revision ?? 0 })
+        return fromRow(row)
       }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
@@ -611,14 +674,30 @@ export const layer = Layer.effect(
       readonly sessionID: string
       readonly nodeID: NodeID
       readonly reservedRevision: number
+      readonly operationID: string
       readonly evidence: ArtifactEvidence
       readonly error: string
     }) {
       return yield* database.db.transaction(() => Effect.gen(function* () {
         const current = yield* requireState(get, input.sessionID, input.reservedRevision)
+        yield* requireArtifactOwner(current, input.operationID)
+        const reason = input.error.slice(0, 1_024)
+        const row = yield* database.db.update(GraphWorkflowStateTable).set({
+          active_operation_id: null,
+          active_operation_kind: null,
+          active_operation_started_at: null,
+          checkpoint_kind: "failure",
+          checkpoint_scope_node_id: input.nodeID,
+          checkpoint_status: "pending",
+          checkpoint_reason: reason,
+          revision: current.revision + 1,
+        }).where(and(eq(GraphWorkflowStateTable.session_id, input.sessionID), eq(GraphWorkflowStateTable.revision, current.revision), eq(GraphWorkflowStateTable.active_operation_id, input.operationID))).returning().get().pipe(Effect.orDie)
+        if (!row) return yield* new RevisionConflict({ expectedRevision: input.reservedRevision, actualRevision: (yield* get(input.sessionID))?.revision ?? 0 })
         yield* audit.tool.record({ projectID: input.projectID, sessionID: input.sessionID, nodeID: input.nodeID,
-          toolName: "graph.artifact.apply", toolType: "artifact", status: "failed", error: input.error, evidence: input.evidence })
-        return current
+          toolName: "graph.artifact.apply", toolType: "artifact", status: "failed", error: reason, evidence: input.evidence })
+        const state = fromRow(row)
+        yield* recordTransition({ state, toolName: "graph.workflow.checkpoint.requested", nodeID: input.nodeID, inputSummary: "kind=failure", outputSummary: `revision=${state.revision}` })
+        return state
       }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
@@ -715,7 +794,7 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
-    return Service.of({ get, setMode, resetPlan, approve, pause, advanceVerified, completeVerification, beginArtifactApply, completeArtifactApply, failArtifactApply, failVerification, fail, promote })
+    return Service.of({ get, setMode, resetPlan, approve, pause, advanceVerified, completeVerification, recoverStaleArtifactApply, beginArtifactApply, completeArtifactApply, failArtifactApply, failVerification, fail, promote })
   }),
 )
 
@@ -745,6 +824,11 @@ function requireState(
     }
     return current
   })
+}
+
+function requireArtifactOwner(state: State, operationID: string) {
+  if (state.activeOperationID === operationID) return Effect.void
+  return new ArtifactApplyOwnershipConflict({ operationID, activeOperationID: state.activeOperationID ?? "" })
 }
 
 function requireModule(graph: GraphView, nodeID: NodeID) {

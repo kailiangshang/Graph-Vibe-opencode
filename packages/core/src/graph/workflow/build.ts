@@ -52,6 +52,7 @@ export const layer = Layer.effect(
     const workflowState = yield* GraphWorkflowState.Service
 
     const evaluateWithRevision = Effect.fn("GraphBuild.evaluateWithRevision")(function* (input: BuildEvaluateInput) {
+      yield* workflowState.recoverStaleArtifactApply(input.sessionID)
       const main = yield* storage.main({ projectID: input.projectID })
       const currentPlan = yield* storage.currentPlan({ sessionID: input.sessionID })
       const state = yield* workflowState.get(input.sessionID)
@@ -69,6 +70,7 @@ export const layer = Layer.effect(
           checkpointKind: state?.checkpointKind ?? null,
           checkpointScopeNodeID: state?.checkpointScopeNodeID ?? null,
           checkpointStatus: state?.checkpointStatus ?? "none",
+          artifactApplyActive: state?.activeOperationKind === "artifact_apply",
           ...(latestEvidence == null || input.diagnosticsRequested
             ? {}
             : { latestEvidenceComplete: latestEvidence.complete }),
