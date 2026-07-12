@@ -568,18 +568,13 @@ const layer = Layer.effectDiscard(
               const results = yield* Effect.forEach(commands, (command) => runDiagnostic(processes, command, session.directory, input.timeout ?? DEFAULT_TIMEOUT_MS), { concurrency: 1 })
               const allPassed = results.every((result) => result.passed)
               const verified = allPassed && completeDiagnostics
-              if (!allPassed) {
-                yield* storage.node.update(input.targetNodeID, {
-                  testStatus: "failed",
-                })
-              }
               const artifactPaths = (yield* audit.tool.list({
                 projectID: session.projectID,
                 sessionID: session.sessionID,
                 nodeID: input.targetNodeID,
               }))
-                .filter((record) => record.toolName === "graph.artifact.apply" && record.status === "succeeded")
-                .at(-1)?.inputSummary?.replace(/^files=/, "").split(",").filter((item) => item.length > 0) ?? []
+                .flatMap((record) => record.evidence?.kind === "artifact" ? [record.evidence] : [])
+                .at(-1)?.artifactPaths ?? []
               const evidence: Graph.VerificationEvidence = {
                 kind: "diagnostics",
                 nodeID: input.targetNodeID,
@@ -634,6 +629,11 @@ const layer = Layer.effectDiscard(
                   }, { ran: true, passed: true, complete: true, verified: false, reason: "workflow_revision_conflict" })
                 }
                 yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
+              } else if (!allPassed) {
+                yield* workflow.failVerification({
+                  projectID: session.projectID, sessionID: session.sessionID, nodeID: input.targetNodeID,
+                  expectedRevision: evaluation.workflowRevision, evidence, inputSummary, outputSummary,
+                }).pipe(Effect.catchTag("GraphWorkflowState.RevisionConflict", () => Effect.void))
               } else {
                 yield* audit.tool.record({
                   projectID: session.projectID,
@@ -762,18 +762,15 @@ const layer = Layer.effectDiscard(
             yield* events.publish(Watcher.Event.Updated, { file: item.absolute, event: item.existed ? "change" : "add" })
           }),
         )
-        yield* storage.node.update(input.targetNodeID, { status: "implemented", testStatus: "pending" })
-        yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
-        yield* audit.tool.record({
+        yield* workflow.artifactApplied({
           projectID: session.projectID,
           sessionID: session.sessionID,
           nodeID: input.targetNodeID,
-          toolName: "graph.artifact.apply",
-          toolType: "graph",
-          status: "succeeded",
+          evidence: { kind: "artifact", nodeID: input.targetNodeID, artifactPaths: files },
           inputSummary: summarizePaths(paths),
           outputSummary: `applied:${paths.length}`,
         })
+        yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
         if (sourceInput.draftID !== undefined) yield* drafts.markApplied(sourceInput.draftID)
         return toolOutput("Artifact applied", {
           gate: summarizeGate(gate),

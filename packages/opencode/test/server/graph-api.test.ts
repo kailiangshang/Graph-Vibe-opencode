@@ -288,7 +288,7 @@ describe("graph HttpApi", () => {
             exitCode: 1,
             timedOut: false,
             passed: false,
-            excerpt: "x".repeat(20_000),
+            excerpt: `sk-supersecret123 access_token=token-secret-value ${"x".repeat(20_000)}`,
           }],
         },
       })
@@ -311,6 +311,10 @@ describe("graph HttpApi", () => {
       expect(nodeAudit.toolRuns[0]?.evidence?.commands[0]?.excerpt?.length).toBeLessThanOrEqual(8_192)
       expect(workflow.tasks[0]?.latestEvidence?.projectChecksOnly).toBe(true)
       expect(workflow.tasks[0]?.latestEvidence?.commands[0]?.excerpt?.length).toBeLessThanOrEqual(8_192)
+      expect(JSON.stringify(nodeAudit)).not.toContain("sk-supersecret123")
+      expect(JSON.stringify(workflow)).not.toContain("sk-supersecret123")
+      expect(JSON.stringify(nodeAudit)).not.toContain("token-secret-value")
+      expect(JSON.stringify(workflow)).not.toContain("token-secret-value")
     }),
   )
 

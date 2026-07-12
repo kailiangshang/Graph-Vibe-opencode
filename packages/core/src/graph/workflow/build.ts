@@ -35,6 +35,8 @@ export interface Interface {
   }>
   readonly advanceVerified: GraphWorkflowState.Interface["advanceVerified"]
   readonly completeVerification: GraphWorkflowState.Interface["completeVerification"]
+  readonly artifactApplied: GraphWorkflowState.Interface["artifactApplied"]
+  readonly failVerification: GraphWorkflowState.Interface["failVerification"]
   readonly fail: GraphWorkflowState.Interface["fail"]
 }
 
@@ -52,7 +54,7 @@ export const layer = Layer.effect(
       const currentPlan = yield* storage.currentPlan({ sessionID: input.sessionID })
       const state = yield* workflowState.get(input.sessionID)
       const evidence = yield* audit.tool.list({ projectID: input.projectID, sessionID: input.sessionID, nodeID: input.targetNodeID })
-      const latestEvidence = evidence.filter((record) => record.evidence !== null).at(-1)?.evidence
+      const latestEvidence = evidence.flatMap((record) => record.evidence?.kind === "diagnostics" ? [record.evidence] : []).at(-1)
       const result = evaluateBuildGate({
         projectID: input.projectID,
         sessionID: input.sessionID,
@@ -108,6 +110,8 @@ export const layer = Layer.effect(
       evaluateWithRevision,
       advanceVerified: workflowState.advanceVerified,
       completeVerification: workflowState.completeVerification,
+      artifactApplied: workflowState.artifactApplied,
+      failVerification: workflowState.failVerification,
       fail: workflowState.fail,
     })
   }),

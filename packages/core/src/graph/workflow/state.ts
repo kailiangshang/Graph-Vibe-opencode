@@ -2,7 +2,7 @@ export * as GraphWorkflowState from "./state"
 
 import { and, eq } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
-import type { CheckpointKind, CheckpointStatus, ExecutionMode, VerificationEvidence } from "@opencode-ai/schema/graph"
+import type { ArtifactEvidence, CheckpointKind, CheckpointStatus, ExecutionMode, VerificationEvidence } from "@opencode-ai/schema/graph"
 import { Database } from "../../database/database"
 import { LayerNode } from "../../effect/layer-node"
 import type { ProjectV2 } from "../../project"
@@ -89,6 +89,23 @@ export interface Interface {
     readonly inputSummary?: string
     readonly outputSummary?: string
   }) => Effect.Effect<State, RevisionConflict | ModuleScopeError>
+  readonly artifactApplied: (input: {
+    readonly projectID: ProjectV2.ID
+    readonly sessionID: string
+    readonly nodeID: NodeID
+    readonly evidence: ArtifactEvidence
+    readonly inputSummary?: string
+    readonly outputSummary?: string
+  }) => Effect.Effect<State>
+  readonly failVerification: (input: {
+    readonly projectID: ProjectV2.ID
+    readonly sessionID: string
+    readonly nodeID: NodeID
+    readonly expectedRevision: number
+    readonly evidence: VerificationEvidence
+    readonly inputSummary?: string
+    readonly outputSummary?: string
+  }) => Effect.Effect<State, RevisionConflict>
   readonly fail: (input: {
     readonly sessionID: string
     readonly nodeID: NodeID
@@ -483,6 +500,7 @@ export const layer = Layer.effect(
       readonly inputSummary?: string
       readonly outputSummary?: string
     }) {
+      const evidence = GraphAudit.sanitizeEvidence(input.evidence) as VerificationEvidence
       return yield* database.db
         .transaction(() =>
           Effect.gen(function* () {
@@ -501,7 +519,7 @@ export const layer = Layer.effect(
                   records.some((record) =>
                     record.toolName === "graph.diagnostics.run" &&
                     record.status === "succeeded" &&
-                    JSON.stringify(record.evidence) === JSON.stringify(input.evidence)
+                    JSON.stringify(record.evidence) === JSON.stringify(evidence)
                   )
                 ) return current
               }
@@ -526,7 +544,7 @@ export const layer = Layer.effect(
               status: "succeeded",
               inputSummary: input.inputSummary?.slice(0, 1_024),
               outputSummary: input.outputSummary?.slice(0, 1_024),
-              evidence: input.evidence,
+              evidence,
             })
             return yield* advance(
               current,
@@ -537,6 +555,52 @@ export const layer = Layer.effect(
           { behavior: "immediate" },
         )
         .pipe(Effect.catchTag("SqlError", Effect.die))
+    })
+
+    const artifactApplied = Effect.fn("GraphWorkflowState.artifactApplied")(function* (input: {
+      readonly projectID: ProjectV2.ID
+      readonly sessionID: string
+      readonly nodeID: NodeID
+      readonly evidence: ArtifactEvidence
+      readonly inputSummary?: string
+      readonly outputSummary?: string
+    }) {
+      return yield* database.db.transaction(() => Effect.gen(function* () {
+        const current = yield* get(input.sessionID)
+        if (!current) return yield* Effect.die(new Error(`Workflow state not found: ${input.sessionID}`))
+        yield* database.db.update(GraphNodeTable).set({ status: "implemented", test_status: "pending" })
+          .where(eq(GraphNodeTable.id, input.nodeID)).run().pipe(Effect.orDie)
+        const row = yield* database.db.update(GraphWorkflowStateTable).set({ revision: current.revision + 1 })
+          .where(eq(GraphWorkflowStateTable.session_id, input.sessionID)).returning().get().pipe(Effect.orDie)
+        yield* audit.tool.record({
+          projectID: input.projectID, sessionID: input.sessionID, nodeID: input.nodeID,
+          toolName: "graph.artifact.apply", toolType: "artifact", status: "succeeded",
+          inputSummary: input.inputSummary, outputSummary: input.outputSummary, evidence: input.evidence,
+        })
+        return fromRow(row)
+      }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
+    })
+
+    const failVerification = Effect.fn("GraphWorkflowState.failVerification")(function* (input: {
+      readonly projectID: ProjectV2.ID
+      readonly sessionID: string
+      readonly nodeID: NodeID
+      readonly expectedRevision: number
+      readonly evidence: VerificationEvidence
+      readonly inputSummary?: string
+      readonly outputSummary?: string
+    }) {
+      return yield* database.db.transaction(() => Effect.gen(function* () {
+        const current = yield* requireState(get, input.sessionID, input.expectedRevision)
+        yield* database.db.update(GraphNodeTable).set({ test_status: "failed" })
+          .where(eq(GraphNodeTable.id, input.nodeID)).run().pipe(Effect.orDie)
+        yield* audit.tool.record({
+          projectID: input.projectID, sessionID: input.sessionID, nodeID: input.nodeID,
+          toolName: "graph.diagnostics.run", toolType: "diagnostics", status: "failed",
+          inputSummary: input.inputSummary, outputSummary: input.outputSummary, evidence: input.evidence,
+        })
+        return current
+      }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
     const fail = Effect.fn("GraphWorkflowState.fail")(function* (input: {
@@ -610,7 +674,7 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
-    return Service.of({ get, setMode, resetPlan, approve, pause, advanceVerified, completeVerification, fail, promote })
+    return Service.of({ get, setMode, resetPlan, approve, pause, advanceVerified, completeVerification, artifactApplied, failVerification, fail, promote })
   }),
 )
 

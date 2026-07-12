@@ -145,7 +145,7 @@ const ToolRunItem = Schema.Struct({
   outputSummary: Schema.NullOr(Schema.String),
   status: Schema.String,
   error: Schema.NullOr(Schema.String),
-  evidence: Schema.NullOr(Graph.VerificationEvidence),
+  evidence: Schema.NullOr(Graph.ToolEvidence),
   timeCreated: Schema.Number,
 }).annotate({ identifier: "GraphToolRun" })
 

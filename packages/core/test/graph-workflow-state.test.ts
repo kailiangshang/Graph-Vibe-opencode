@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Graph } from "@opencode-ai/schema"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Exit, Layer, Schema } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -839,6 +839,45 @@ describe("GraphWorkflowState", () => {
         expect(yield* storage.node.get(atomicA.id)).toMatchObject({ status: "pending", testStatus: "none" })
       }),
     )
+  })
+
+  test("a later artifact application invalidates in-flight verification", async () => {
+    await run(Effect.gen(function* () {
+      const workflow = yield* GraphWorkflowState.Service
+      yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+      const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+      const applied = yield* workflow.artifactApplied({
+        projectID: PID, sessionID: SID, nodeID: atomicA.id,
+        evidence: { kind: "artifact", nodeID: atomicA.id, artifactPaths: ["src/a.ts"] },
+      })
+      expect(applied.revision).toBe(planned.revision + 1)
+      const staleRevision = applied.revision
+      yield* workflow.artifactApplied({
+        projectID: PID, sessionID: SID, nodeID: atomicA.id,
+        evidence: { kind: "artifact", nodeID: atomicA.id, artifactPaths: ["src/a,b.ts"] },
+      })
+      const exit = yield* workflow.completeVerification({
+        projectID: PID, sessionID: SID, nodeID: atomicA.id, expectedRevision: staleRevision,
+        evidence: { kind: "diagnostics", nodeID: atomicA.id, criteria: [], artifactPaths: ["src/a.ts"], projectChecksOnly: true, complete: true, passed: true, commands: [] },
+      }).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      const storage = yield* GraphStorage.Service
+      expect(yield* storage.node.get(atomicA.id)).toMatchObject({ status: "implemented", testStatus: "pending" })
+    }))
+  })
+
+  test("failed diagnostics persist status and matching evidence atomically", async () => {
+    await run(Effect.gen(function* () {
+      const workflow = yield* GraphWorkflowState.Service
+      yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+      const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+      const evidence = { kind: "diagnostics" as const, nodeID: atomicA.id, criteria: [], artifactPaths: [], projectChecksOnly: true, complete: true, passed: false, commands: [] }
+      yield* workflow.failVerification({ projectID: PID, sessionID: SID, nodeID: atomicA.id, expectedRevision: planned.revision, evidence })
+      const storage = yield* GraphStorage.Service
+      const audit = yield* GraphAudit.Service
+      expect((yield* storage.node.get(atomicA.id)).testStatus).toBe("failed")
+      expect((yield* audit.tool.list({ projectID: PID, nodeID: atomicA.id })).at(-1)?.evidence).toEqual(evidence)
+    }))
   })
 
   test("rejects promotion while workflow work or checkpoints remain", async () => {

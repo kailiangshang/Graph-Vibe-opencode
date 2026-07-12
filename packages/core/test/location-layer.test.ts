@@ -35,6 +35,7 @@ import { GraphStorage } from "../src/graph/storage"
 import { GraphNodeTable } from "../src/graph/sql"
 import { GraphToolRunTable } from "../src/graph/workflow/audit.sql"
 import { GraphWorkflowStateTable } from "../src/graph/workflow/state.sql"
+import { GraphDiagnostics } from "../src/graph/workflow/diagnostics"
 import { ModelsDev } from "../src/models-dev"
 import { Npm } from "../src/npm"
 import { Project } from "../src/project"
@@ -49,6 +50,33 @@ const it = testEffect(
 )
 
 describe("LocationServiceMap", () => {
+  it.live("binds focused execution to the canonical target across a symlink swap", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
+    ).pipe(Effect.flatMap(([root, outside]) => Effect.gen(function* () {
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(root.path, "test"), { recursive: true })
+        await fs.mkdir(path.join(root.path, "scripts"), { recursive: true })
+        await fs.writeFile(path.join(root.path, "test/inside.txt"), "inside")
+        await fs.writeFile(path.join(outside.path, "outside.txt"), "outside")
+        await fs.symlink(path.join(root.path, "test/inside.txt"), path.join(root.path, "test/focused.test.ts"))
+        await fs.writeFile(path.join(root.path, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/check.ts" } }))
+        await fs.writeFile(path.join(root.path, "scripts/check.ts"), 'const file = process.argv[2]\nif (file) process.exit((await Bun.file(file).text()) === "inside" ? 0 : 1)\n')
+      })
+      const resolution = yield* Effect.promise(() => GraphDiagnostics.resolve({ directory: root.path, verification: { criteria: ["canonical"], diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }] } }))
+      if (!resolution.ok) return yield* Effect.die(new Error(resolution.reason))
+      yield* Effect.promise(async () => {
+        await fs.unlink(path.join(root.path, "test/focused.test.ts"))
+        await fs.symlink(path.join(outside.path, "outside.txt"), path.join(root.path, "test/focused.test.ts"))
+      })
+      const focused = resolution.commands[0]
+      if (!focused) return yield* Effect.die(new Error("missing focused command"))
+      const child = Bun.spawn([focused.executable, ...focused.args], { cwd: root.path, stdout: "pipe", stderr: "pipe" })
+      expect(yield* Effect.promise(() => child.exited)).toBe(0)
+      expect(focused.args.at(-1)).toBe(path.join(root.path, "test/inside.txt"))
+    }))),
+  )
   it.live("materializes graph tools instead of raw write tools when graph mode is enabled", () =>
     withGraphMode(
       Effect.acquireRelease(
@@ -305,7 +333,7 @@ describe("LocationServiceMap", () => {
                   .all()
                   .pipe(Effect.orDie)
                 expect(workflow?.current_node_id).toBe(state.targetNodeID)
-                expect(evidence.find((record) => record.evidence)?.evidence?.complete).toBe(false)
+                expect(evidence.find((record) => record.evidence?.kind === "diagnostics")?.evidence).toMatchObject({ complete: false })
               }),
             ),
           ),
@@ -412,11 +440,11 @@ describe("LocationServiceMap", () => {
                 )
                 const node = yield* state.db.select().from(GraphNodeTable).where(eq(GraphNodeTable.id, state.targetNodeID)).get().pipe(Effect.orDie)
                 const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
-                const evidence = audit.find((record) => record.tool_name === "graph.diagnostics.run")?.evidence
+                const evidence = audit.find((record) => record.tool_name === "graph.diagnostics.run" && record.evidence?.kind === "diagnostics")?.evidence
                 expect(node).toMatchObject({ status: "verified", test_status: "passed" })
                 expect(evidence).toMatchObject({ projectChecksOnly: false, complete: true, passed: true })
-                expect(evidence?.commands.map((command) => command.command)).toEqual([
-                  "bun run test -- ./test/focused.test.ts",
+                expect(evidence?.kind === "diagnostics" ? evidence.commands.map((command) => command.command) : []).toEqual([
+                  `bun run test -- ${path.join(dir.path, "test/focused.test.ts")}`,
                   "bun run test",
                 ])
               }),
@@ -554,11 +582,11 @@ describe("LocationServiceMap", () => {
                 )
                 const node = yield* state.db.select().from(GraphNodeTable).where(eq(GraphNodeTable.id, state.targetNodeID)).get().pipe(Effect.orDie)
                 const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
-                const evidence = audit.find((record) => record.tool_name === "graph.diagnostics.run")?.evidence
+                const evidence = audit.find((record) => record.tool_name === "graph.diagnostics.run" && record.evidence?.kind === "diagnostics")?.evidence
                 const workflow = yield* state.db.select().from(GraphWorkflowStateTable).where(eq(GraphWorkflowStateTable.session_id, state.sessionID)).get().pipe(Effect.orDie)
                 expect(node).toMatchObject({ status: "verified", test_status: "passed" })
                 expect(evidence).toMatchObject({ projectChecksOnly: true, complete: true, passed: true })
-                expect(evidence?.commands.map((command) => command.command)).toEqual(["bun test"])
+                expect(evidence?.kind === "diagnostics" ? evidence.commands.map((command) => command.command) : []).toEqual(["bun test"])
                 expect(workflow?.current_node_id).toBeNull()
               }),
             ),

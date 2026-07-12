@@ -250,23 +250,20 @@ export const GraphArtifactApplyTool = Tool.define(
                 }),
               )
               yield* progress("updating_graph", { bytesPlanned, bytesWritten: bytesPlanned })
-              yield* storage.node.update(params.targetNodeID, { status: "implemented", testStatus: "pending" })
+              yield* build.artifactApplied({
+                projectID: session.projectID,
+                sessionID: session.sessionID,
+                nodeID: params.targetNodeID,
+                evidence: { kind: "artifact", nodeID: params.targetNodeID, artifactPaths: files },
+                inputSummary: summarizePaths(paths),
+                outputSummary: `applied:${paths.length}`,
+              })
               yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
               const completedProgress = {
                 bytesPlanned,
                 bytesWritten: bytesPlanned,
                 ...(files.length > 0 ? { currentFile: files[files.length - 1] } : {}),
               }
-              yield* audit.tool.record({
-                projectID: session.projectID,
-                sessionID: session.sessionID,
-                nodeID: params.targetNodeID,
-                toolName: "graph.artifact.apply",
-                toolType: "graph",
-                status: "succeeded",
-                inputSummary: summarizePaths(paths),
-                outputSummary: `applied:${paths.length}`,
-              })
               if (source.draftID !== undefined) yield* drafts.markApplied(source.draftID)
               yield* progress("completed", completedProgress)
               const metadata: Record<string, unknown> = {
