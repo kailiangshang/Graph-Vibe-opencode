@@ -8,6 +8,30 @@ const sessionID = "ses_graph_workflow_cockpit"
 const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
 
 for (const route of ["source", "embedded"] as const) {
+  test(`${route} route renders intentional loading state while workflow is delayed`, async ({ page }) => {
+    const state = await setup(page, route === "embedded", "loading")
+    await page.goto(routeUrl(route))
+
+    await expect(page.getByRole("status")).toContainText("Calibrating workflow")
+    await expect(page.getByRole("status")).toContainText("Loading tasks, authority, and verification evidence.")
+    await expect(page.getByRole("region", { name: "Graph workflow cockpit" })).toHaveCount(0)
+    state.releaseWorkflow()
+    await expect(page.getByRole("region", { name: "Graph workflow cockpit" })).toBeVisible()
+  })
+
+  test(`${route} route renders explicit empty-plan guidance without workflow actions`, async ({ page }) => {
+    await setup(page, route === "embedded", "empty")
+    await page.goto(routeUrl(route))
+
+    await expect(page.getByRole("status")).toContainText("No plan admitted")
+    await expect(page.getByRole("status")).toContainText(
+      "No Current Plan nodes yet. Describe your goal in Graph Vibe to create a plan.",
+    )
+    await expect(page.getByLabel("Execution mode")).toHaveCount(0)
+    await expect(page.getByRole("button", { name: "Continue" })).toHaveCount(0)
+    await expect(page.getByRole("button", { name: "Pause" })).toHaveCount(0)
+  })
+
   test(`${route} route renders the complete Graph workflow cockpit state matrix`, async ({ page }) => {
     const state = await setup(page, route === "embedded")
     const url =
@@ -105,9 +129,19 @@ for (const route of ["source", "embedded"] as const) {
   })
 }
 
-async function setup(page: Page, embedded: boolean) {
-  let view: WorkflowView = "checkpoint"
+function routeUrl(route: "source" | "embedded") {
+  return route === "embedded"
+    ? `/server/${base64Encode(server)}/session/${sessionID}/graph`
+    : `/${base64Encode(directory)}/session/${sessionID}/graph`
+}
+
+async function setup(page: Page, embedded: boolean, initialView: WorkflowView = "checkpoint") {
+  let view = initialView
   let approvals = 0
+  let releaseWorkflow = () => {}
+  const workflowReady = new Promise<void>((resolve) => {
+    releaseWorkflow = resolve
+  })
   const state = {
     get approvals() {
       return approvals
@@ -115,6 +149,7 @@ async function setup(page: Page, embedded: boolean) {
     set(next: WorkflowView) {
       view = next
     },
+    releaseWorkflow,
   }
   await mockOpenCodeServer(page, {
     directory,
@@ -144,6 +179,10 @@ async function setup(page: Page, embedded: boolean) {
     const url = new URL(route.request().url())
     if (url.pathname === "/graph/workflow") {
       if (route.request().method() === "GET") {
+        if (view === "loading") {
+          await workflowReady
+          view = "checkpoint"
+        }
         if (view === "network-error")
           return route.fulfill({
             status: 503,
@@ -158,7 +197,8 @@ async function setup(page: Page, embedded: boolean) {
       view = "building"
       return route.fulfill(json(projection(view)))
     }
-    if (url.pathname === "/graph/current-plan" || url.pathname === "/graph/main") return route.fulfill(json(graph))
+    if (url.pathname === "/graph/current-plan" || url.pathname === "/graph/main")
+      return route.fulfill(json(view === "empty" ? { nodes: [], edges: [] } : graph))
     return route.fallback()
   })
   await page.addInitScript(
@@ -178,9 +218,31 @@ async function setup(page: Page, embedded: boolean) {
   return state
 }
 
-type WorkflowView = "mode-required" | "paused" | "checkpoint" | "building" | "failed" | "complete" | "network-error"
+type WorkflowView =
+  | "loading"
+  | "empty"
+  | "mode-required"
+  | "paused"
+  | "checkpoint"
+  | "building"
+  | "failed"
+  | "complete"
+  | "network-error"
 
-function projection(view: Exclude<WorkflowView, "network-error">) {
+function projection(view: Exclude<WorkflowView, "loading" | "network-error">) {
+  if (view === "empty")
+    return {
+      mode: null,
+      revision: 2,
+      activeOperationKind: null,
+      phase: "planning",
+      checkpoint: { status: "none", kind: null, scopeNodeID: null, scopeName: null, reason: null },
+      currentTask: null,
+      progress: { total: 0, verified: 0, failed: 0, percent: 0 },
+      tasks: [],
+      modules: [],
+      rollups: [],
+    }
   const pending = view === "paused" || view === "checkpoint"
   const complete = view === "complete"
   const failed = view === "failed"
@@ -215,6 +277,7 @@ function projection(view: Exclude<WorkflowView, "network-error">) {
         taskIDs: ["task"],
       },
     ],
+    rollups: [],
   }
 }
 
