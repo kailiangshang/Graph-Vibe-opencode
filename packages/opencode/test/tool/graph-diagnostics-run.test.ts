@@ -1,6 +1,7 @@
 import { afterEach, describe, expect } from "bun:test"
 import path from "node:path"
-import { mkdir, symlink } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, unlink } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -93,7 +94,7 @@ function seed(directory: string) {
   )
 }
 
-function context(requests: PermissionRequest[] = []): Tool.Context {
+function context(requests: PermissionRequest[] = [], onAsk?: () => Effect.Effect<void>): Tool.Context {
   return {
     sessionID,
     messageID: MessageID.ascending(),
@@ -101,10 +102,9 @@ function context(requests: PermissionRequest[] = []): Tool.Context {
     abort: new AbortController().signal,
     messages: [],
     metadata: () => Effect.void,
-    ask: (input) =>
-      Effect.sync(() => {
+    ask: (input) => Effect.sync(() => {
         requests.push(input)
-      }),
+      }).pipe(Effect.andThen(onAsk?.() ?? Effect.void)),
   }
 }
 
@@ -250,13 +250,13 @@ describe("graph_diagnostics_run", () => {
       const tool = yield* init()
       const result = yield* tool.execute({ targetNodeID }, context(permissionRequests))
       const records = yield* (yield* GraphAudit.Service).tool.list({ projectID, nodeID: targetNodeID })
-      const evidence = records.find((record) => record.toolName === "graph.diagnostics.run")?.evidence
+      const evidence = records.find((record) => record.toolName === "graph.diagnostics.run" && record.evidence?.kind === "diagnostics")?.evidence
 
       expect(JSON.parse(result.output)).toMatchObject({ ran: true, complete: true, verified: true })
-      expect(permissionRequests[0]?.patterns).toEqual(["bun run test -- ./test/focused.test.ts", "bun run test"])
+      expect(permissionRequests[0]?.patterns).toEqual([`bun run test -- ${path.join(test.directory, "test/focused.test.ts")}`, "bun run test"])
       expect(evidence).toMatchObject({ complete: true, passed: true, projectChecksOnly: false })
-      expect(evidence?.commands.map((command) => command.command)).toEqual([
-        "bun run test -- ./test/focused.test.ts",
+      expect(evidence?.kind === "diagnostics" ? evidence.commands.map((command) => command.command) : []).toEqual([
+        `bun run test -- ${path.join(test.directory, "test/focused.test.ts")}`,
         "bun run test",
       ])
       expect((yield* storage.node.get(targetNodeID)).status).toBe("verified")
@@ -267,9 +267,13 @@ describe("graph_diagnostics_run", () => {
     Effect.gen(function* () {
       const test = yield* TestInstance
       yield* seed(test.directory)
+      const outside = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "graph-diagnostics-outside-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => rm(outside, { recursive: true, force: true })))
       yield* Effect.promise(async () => {
         await mkdir(path.join(test.directory, "test"), { recursive: true })
-        await symlink("/etc/hosts", path.join(test.directory, "test/escape.test.ts"))
+        const target = path.join(outside, "escape.test.ts")
+        await Bun.write(target, "outside\n")
+        await symlink(target, path.join(test.directory, "test/escape.test.ts"))
         await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "true" } }))
       })
       const storage = yield* GraphStorage.Service
@@ -294,6 +298,33 @@ describe("graph_diagnostics_run", () => {
       expect(JSON.parse(result.output)).toMatchObject({ ran: false, reason: "verification_path_escape" })
       expect(permissionRequests).toEqual([])
       expect((yield* storage.node.get(targetNodeID)).status).toBe("implemented")
+    }),
+  )
+
+  it.instance("executes the validated canonical target when a focused symlink is swapped during permission", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const outside = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "graph-swap-outside-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => rm(outside, { recursive: true, force: true })))
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "test"), { recursive: true })
+        await mkdir(path.join(test.directory, "scripts"), { recursive: true })
+        await Bun.write(path.join(test.directory, "test/inside.txt"), "inside")
+        await Bun.write(path.join(outside, "outside.txt"), "outside")
+        await symlink(path.join(test.directory, "test/inside.txt"), path.join(test.directory, "test/focused.test.ts"))
+        await Bun.write(path.join(test.directory, "scripts/check.ts"), 'const file = process.argv[2]\nif (file) process.exit((await Bun.file(file).text()) === "inside" ? 0 : 1)\n')
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/check.ts" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({ projectID, sessionID, type: "atomic", name: "Swap", level: "L2", status: "implemented", verification: { criteria: ["canonical target"], diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }] } })
+      yield* authorize(targetNodeID)
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context([], () => Effect.promise(async () => {
+        await unlink(path.join(test.directory, "test/focused.test.ts"))
+        await symlink(path.join(outside, "outside.txt"), path.join(test.directory, "test/focused.test.ts"))
+      })))
+      expect(JSON.parse(result.output)).toMatchObject({ verified: true, complete: true })
     }),
   )
 
@@ -355,11 +386,11 @@ describe("graph_diagnostics_run", () => {
       const tool = yield* init()
       const result = yield* tool.execute({ targetNodeID }, context([]))
       const records = yield* (yield* GraphAudit.Service).tool.list({ projectID, nodeID: targetNodeID })
-      const evidence = records.find((record) => record.toolName === "graph.diagnostics.run")?.evidence
+      const evidence = records.find((record) => record.toolName === "graph.diagnostics.run" && record.evidence?.kind === "diagnostics")?.evidence
 
       expect(JSON.parse(result.output)).toMatchObject({ ran: true, complete: true, verified: true })
       expect(evidence).toMatchObject({ projectChecksOnly: true, complete: true, passed: true })
-      expect(evidence?.commands.map((command) => command.command)).toEqual(["bun test"])
+      expect(evidence?.kind === "diagnostics" ? evidence.commands.map((command) => command.command) : []).toEqual(["bun test"])
       expect((yield* storage.node.get(targetNodeID)).status).toBe("verified")
       const workflow = yield* GraphWorkflowState.Service
       expect((yield* workflow.get(sessionID))?.currentNodeID).toBeNull()
@@ -376,7 +407,7 @@ describe("graph_diagnostics_run", () => {
         await Bun.write(path.join(test.directory, "test/focused.test.ts"), "// focused sentinel\n")
         await Bun.write(
           path.join(test.directory, "scripts/check.ts"),
-          'process.exit(process.argv.includes("./test/focused.test.ts") ? 1 : 0)\n',
+          'process.exit(process.argv.some((item) => item.endsWith("/test/focused.test.ts")) ? 1 : 0)\n',
         )
         await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/check.ts" } }))
       })

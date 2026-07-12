@@ -90,11 +90,20 @@ export const VerificationSpec = Schema.Struct({
 })
 export interface VerificationSpec extends Schema.Schema.Type<typeof VerificationSpec> {}
 
+const EvidencePath = RelativePath.check(Schema.isMaxLength(1_024))
+
+export const ArtifactEvidence = Schema.Struct({
+  kind: Schema.Literal("artifact"),
+  nodeID: Schema.String,
+  artifactPaths: Schema.Array(EvidencePath).check(Schema.isMaxLength(256)),
+})
+export interface ArtifactEvidence extends Schema.Schema.Type<typeof ArtifactEvidence> {}
+
 export const VerificationEvidence = Schema.Struct({
   kind: Schema.Literal("diagnostics"),
   nodeID: Schema.String,
   criteria: Schema.Array(boundedString(1_024)).check(Schema.isMaxLength(64)),
-  artifactPaths: Schema.Array(RelativePath).check(Schema.isMaxLength(256)),
+  artifactPaths: Schema.Array(EvidencePath).check(Schema.isMaxLength(256)),
   projectChecksOnly: Schema.Boolean,
   complete: Schema.Boolean,
   passed: Schema.Boolean,
@@ -110,6 +119,9 @@ export const VerificationEvidence = Schema.Struct({
   ).check(Schema.isMaxLength(32)),
 })
 export interface VerificationEvidence extends Schema.Schema.Type<typeof VerificationEvidence> {}
+
+export const ToolEvidence = Schema.Union([ArtifactEvidence, VerificationEvidence])
+export type ToolEvidence = typeof ToolEvidence.Type
 
 export { ProjectID }
 

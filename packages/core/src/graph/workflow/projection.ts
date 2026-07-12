@@ -89,6 +89,7 @@ export const layer = Layer.effect(
         graph,
         state,
         records.flatMap((record) => record.nodeID && record.evidence
+          && record.evidence.kind === "diagnostics"
           ? [{ nodeID: record.nodeID, evidence: record.evidence, timeCreated: record.timeCreated }]
           : []),
       )

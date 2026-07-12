@@ -2380,23 +2380,29 @@ export type GraphToolRun = {
   outputSummary: string | null
   status: string
   error: string | null
-  evidence: {
-    kind: "diagnostics"
-    nodeID: string
-    criteria: Array<string>
-    artifactPaths: Array<string>
-    projectChecksOnly: boolean
-    complete: boolean
-    passed: boolean
-    commands: Array<{
-      name: string
-      command: string
-      exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | null
-      timedOut: boolean
-      passed: boolean
-      excerpt?: string
-    }>
-  } | null
+  evidence:
+    | {
+        kind: "artifact"
+        nodeID: string
+        artifactPaths: Array<string>
+      }
+    | {
+        kind: "diagnostics"
+        nodeID: string
+        criteria: Array<string>
+        artifactPaths: Array<string>
+        projectChecksOnly: boolean
+        complete: boolean
+        passed: boolean
+        commands: Array<{
+          name: string
+          command: string
+          exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | null
+          timedOut: boolean
+          passed: boolean
+          excerpt?: string
+        }>
+      } | null
   timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 

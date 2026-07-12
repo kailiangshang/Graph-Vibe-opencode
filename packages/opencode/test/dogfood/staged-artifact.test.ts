@@ -10,6 +10,7 @@
 import { afterEach, describe, expect } from "bun:test"
 import path from "node:path"
 import { Database } from "@opencode-ai/core/database/database"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
@@ -35,6 +36,7 @@ import { GraphArtifactChunkTool } from "@/tool/graph/artifact-chunk"
 import { GraphArtifactSealTool } from "@/tool/graph/artifact-seal"
 import { GraphBuildGateTool } from "@/tool/graph/build-gate"
 import { GraphPlanAdmitTool } from "@/tool/graph/plan-admit"
+import { GraphDiagnosticsRunTool } from "@/tool/graph/diagnostics-run"
 import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { TestConfig } from "../fixture/config"
@@ -52,7 +54,7 @@ const it = testEffect(
     LayerNode.group([
       Database.node, Session.node, GraphStorage.node, GraphDomain.node,
       GraphAudit.node, GraphPlan.node, GraphBuild.node,
-      GraphArtifactDraft.node, FSUtil.node, EventV2Bridge.node,
+      GraphArtifactDraft.node, FSUtil.node, CrossSpawnSpawner.node, EventV2Bridge.node,
       Truncate.node, Agent.node,
     ]),
     [
@@ -100,6 +102,7 @@ describe("staged artifact end-to-end dogfood", () => {
     Effect.gen(function* () {
       const test = yield* TestInstance
       yield* seed(test.directory)
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun test" } })))
 
       const permissionRequests: PermissionRequest[] = []
       const metadataUpdates: MetadataUpdate[] = []
@@ -153,9 +156,11 @@ describe("staged artifact end-to-end dogfood", () => {
         {
           targetNodeID,
           test: "bun test src/hello.test.ts src/world.test.ts\n",
-          files: [
-            { path: "src/hello.ts", expectedChunks: 2 },
-            { path: "src/world.ts", expectedChunks: 1 },
+            files: [
+              { path: "src/hello.ts", expectedChunks: 2 },
+              { path: "src/world.ts", expectedChunks: 1 },
+              { path: "src/hello.test.ts", expectedChunks: 1 },
+              { path: "src/world.test.ts", expectedChunks: 1 },
           ],
         },
         ctx,
@@ -170,6 +175,8 @@ describe("staged artifact end-to-end dogfood", () => {
       yield* chunk.execute({ draftID, path: "src/hello.ts", index: 0, content: "export const " }, ctx)
       yield* chunk.execute({ draftID, path: "src/hello.ts", index: 1, content: "hello = 'world'\n" }, ctx)
       yield* chunk.execute({ draftID, path: "src/world.ts", index: 0, content: "export const world = 42\n" }, ctx)
+      yield* chunk.execute({ draftID, path: "src/hello.test.ts", index: 0, content: 'import { expect, test } from "bun:test"\nimport { hello } from "./hello"\ntest("hello", () => expect(hello).toBe("world"))\n' }, ctx)
+      yield* chunk.execute({ draftID, path: "src/world.test.ts", index: 0, content: 'import { expect, test } from "bun:test"\nimport { world } from "./world"\ntest("world", () => expect(world).toBe(42))\n' }, ctx)
 
       // ── Seal: finalize the draft ──
       const sealInfo = yield* GraphArtifactSealTool
@@ -177,7 +184,7 @@ describe("staged artifact end-to-end dogfood", () => {
       const sealResult = yield* seal.execute({ draftID }, ctx)
       const sealOutput = JSON.parse(sealResult.output)
       expect(sealOutput.sealed).toBe(true)
-      expect(sealOutput.fileCount).toBe(2)
+      expect(sealOutput.fileCount).toBe(4)
 
       // ── Apply: write files through the sealed draft ──
       const applyInfo = yield* GraphArtifactApplyTool
@@ -185,13 +192,13 @@ describe("staged artifact end-to-end dogfood", () => {
       const applyResult = yield* apply.execute({ targetNodeID, draftID }, ctx)
       const applyOutput = JSON.parse(applyResult.output)
       expect(applyOutput.applied).toBe(true)
-      expect(applyOutput.files).toEqual(["src/hello.ts", "src/world.ts"])
+      expect(applyOutput.files).toEqual(["src/hello.ts", "src/world.ts", "src/hello.test.ts", "src/world.test.ts"])
 
       // ── Verify: permission asked exactly once ──
       expect(permissionRequests).toHaveLength(1)
       expect(permissionRequests[0]).toMatchObject({
         permission: "graph.artifact_write",
-        patterns: ["src/hello.ts", "src/world.ts"],
+        patterns: ["src/hello.ts", "src/world.ts", "src/hello.test.ts", "src/world.test.ts"],
       })
 
       // ── Verify: files written to disk ──
@@ -199,11 +206,15 @@ describe("staged artifact end-to-end dogfood", () => {
       expect(yield* fs.readFileString(path.join(test.directory, "src/hello.ts"))).toBe("export const hello = 'world'\n")
       expect(yield* fs.readFileString(path.join(test.directory, "src/world.ts"))).toBe("export const world = 42\n")
 
+      const diagnostics = yield* Tool.init(yield* GraphDiagnosticsRunTool)
+      const diagnosticsResult = yield* diagnostics.execute({ targetNodeID }, ctx)
+      expect(JSON.parse(diagnosticsResult.output)).toMatchObject({ verified: true, complete: true })
+
       // ── Verify: node status implemented, testStatus pending ──
       const storage = yield* GraphStorage.Service
       const node = yield* storage.node.get(targetNodeID)
-      expect(node.status).toBe("implemented")
-      expect(node.testStatus).toBe("pending")
+      expect(node.status).toBe("verified")
+      expect(node.testStatus).toBe("passed")
 
       // ── Verify: draft status applied ──
       const drafts = yield* GraphArtifactDraft.Service
@@ -214,8 +225,8 @@ describe("staged artifact end-to-end dogfood", () => {
       expect(completed?.metadata).toMatchObject({
         stage: "completed",
         applied: true,
-        files: ["src/hello.ts", "src/world.ts"],
-        fileCount: 2,
+        files: ["src/hello.ts", "src/world.ts", "src/hello.test.ts", "src/world.test.ts"],
+        fileCount: 4,
       })
     }),
   )

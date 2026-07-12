@@ -240,19 +240,13 @@ export const GraphDiagnosticsRunTool = Tool.define(
           const allPassed = results.every((r) => r.passed)
           const verified = allPassed && completeDiagnostics
 
-          if (!allPassed) {
-            yield* storage.node.update(params.targetNodeID, {
-              testStatus: "failed",
-            })
-          }
-
           const artifactPaths = (yield* audit.tool.list({
             projectID: session.projectID,
             sessionID: session.sessionID,
             nodeID: params.targetNodeID,
           }))
-            .filter((record) => record.toolName === "graph.artifact.apply" && record.status === "succeeded")
-            .at(-1)?.inputSummary?.replace(/^files=/, "").split(",").filter((item) => item.length > 0) ?? []
+            .flatMap((record) => record.evidence?.kind === "artifact" ? [record.evidence] : [])
+            .at(-1)?.artifactPaths ?? []
           const evidence: Graph.VerificationEvidence = {
             kind: "diagnostics",
             nodeID: params.targetNodeID,
@@ -314,7 +308,12 @@ export const GraphDiagnosticsRunTool = Tool.define(
             }
           }
 
-          if (!verified) {
+          if (!verified && !allPassed) {
+            yield* build.failVerification({
+              projectID: session.projectID, sessionID: session.sessionID, nodeID: params.targetNodeID,
+              expectedRevision: evaluation.workflowRevision, evidence, inputSummary, outputSummary,
+            }).pipe(Effect.catchTag("GraphWorkflowState.RevisionConflict", () => Effect.void))
+          } else if (!verified) {
             yield* audit.tool.record({
               projectID: session.projectID,
               sessionID: session.sessionID,

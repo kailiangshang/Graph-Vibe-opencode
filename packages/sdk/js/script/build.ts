@@ -131,14 +131,15 @@ const graphVersionTypesPatched = patchGeneratedType(graphNodeTypesPatched, "Grap
   patchNullableScalarFields(body, [["  message", "string"]]),
 )
 const graphToolRunTypesPatched = patchGeneratedType(graphVersionTypesPatched, "GraphToolRun", (body) =>
-  patchNullableObjectFields(
+  patchNullableUnionField(
     patchNullableScalarFields(body, [
       ["  inputSummary", "string"],
       ["  outputSummary", "string"],
       ["  error", "string"],
-      ["      exitCode", 'number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"'],
+      ["          exitCode", 'number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"'],
     ]),
-    ["  evidence"],
+    "  evidence",
+    "  timeCreated",
   ),
 )
 const graphWorkflowTaskTypesPatched = patchGeneratedType(graphToolRunTypesPatched, "GraphWorkflowTask", (body) =>
@@ -198,4 +199,11 @@ function patchNullableObjectFields(body: string, fields: ReadonlyArray<string>) 
     }
     return source.replace(pattern, "$& | null")
   }, body)
+}
+
+function patchNullableUnionField(body: string, field: string, nextField: string) {
+  const pattern = new RegExp(`^${field}:\\n[\\s\\S]*?(?=^${nextField}:)`, "m")
+  const matches = [...body.matchAll(new RegExp(pattern.source, "gm"))]
+  if (matches.length !== 1) throw new Error(`Graph nullability patch expected exactly one generated union field: ${field.trim()}`)
+  return body.replace(pattern, (value) => `${value.trimEnd()} | null\n`)
 }

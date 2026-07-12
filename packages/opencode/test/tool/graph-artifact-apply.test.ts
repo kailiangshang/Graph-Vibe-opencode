@@ -260,7 +260,7 @@ describe("graph_artifact_apply", () => {
             mode: "files",
             test: "bun test src/a.test.ts src/b.test.ts\n",
             files: [
-              { path: "./src/a.ts", code: "export const a = 1\n" },
+              { path: "./src/a,b.ts", code: "export const a = 1\n" },
               { path: "src/b.ts", code: "export const b = 2\n" },
             ],
           },
@@ -268,12 +268,15 @@ describe("graph_artifact_apply", () => {
         context(permissionRequests),
       )
 
-      expect(JSON.parse(result.output)).toMatchObject({ applied: true, files: ["src/a.ts", "src/b.ts"] })
+      expect(JSON.parse(result.output)).toMatchObject({ applied: true, files: ["src/a,b.ts", "src/b.ts"] })
       expect(permissionRequests).toMatchObject([
-        { permission: "graph.artifact_write", patterns: ["src/a.ts", "src/b.ts"] },
+        { permission: "graph.artifact_write", patterns: ["src/a,b.ts", "src/b.ts"] },
       ])
-      expect(yield* fs.readFileString(path.join(test.directory, "src/a.ts"))).toBe("export const a = 1\n")
+      expect(yield* fs.readFileString(path.join(test.directory, "src/a,b.ts"))).toBe("export const a = 1\n")
       expect(yield* fs.readFileString(path.join(test.directory, "src/b.ts"))).toBe("export const b = 2\n")
+      const audit = yield* GraphAudit.Service
+      expect((yield* audit.tool.list({ projectID, nodeID: targetNodeID })).find((record) => record.evidence?.kind === "artifact")?.evidence)
+        .toEqual({ kind: "artifact", nodeID: targetNodeID, artifactPaths: ["src/a,b.ts", "src/b.ts"] })
     }),
   )
 

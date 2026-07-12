@@ -9,7 +9,7 @@ import type { NodeID } from "../storage"
 import { GraphGenerationRunTable, GraphToolRunTable } from "./audit.sql"
 import type { GenerationExecutor, GenerationRunStatus, ToolRunStatus, ToolRunType } from "./audit.sql"
 import type { GateResult } from "./gate"
-import type { VerificationEvidence } from "@opencode-ai/schema/graph"
+import type { ToolEvidence } from "@opencode-ai/schema/graph"
 
 export type ToolRunID = string & { readonly "GraphToolRun.ID": unique symbol }
 export type GenerationRunID = string & { readonly "GraphGenerationRun.ID": unique symbol }
@@ -25,7 +25,7 @@ export interface ToolRun {
   readonly outputSummary: string | null
   readonly status: ToolRunStatus
   readonly error: string | null
-  readonly evidence: VerificationEvidence | null
+  readonly evidence: ToolEvidence | null
   readonly timeCreated: number
 }
 
@@ -55,7 +55,7 @@ export interface ToolRunCreate {
   readonly outputSummary?: string
   readonly status: ToolRunStatus
   readonly error?: string
-  readonly evidence?: VerificationEvidence
+  readonly evidence?: ToolEvidence
 }
 
 export interface GenerationRunCreate {
@@ -145,7 +145,7 @@ export const layer = Layer.effect(
           output_summary: input.outputSummary?.slice(0, 1_024) ?? null,
           status: input.status,
           error: input.error?.slice(0, 1_024) ?? null,
-          evidence: input.evidence ? boundedEvidence(input.evidence) : null,
+          evidence: input.evidence ? sanitizeEvidence(input.evidence) : null,
         })
         .run()
         .pipe(Effect.orDie)
@@ -214,17 +214,35 @@ export const node = LayerNode.make({ service: Service, layer, deps: [Database.no
 
 export const defaultLayer = layer.pipe(Layer.provide(Database.layerFromPath(Database.path())))
 
-function boundedEvidence(evidence: VerificationEvidence): VerificationEvidence {
+export function sanitizeEvidence(evidence: ToolEvidence): ToolEvidence {
+  const artifactPaths = boundedPaths(evidence.artifactPaths)
+  if (evidence.kind === "artifact") return { ...evidence, nodeID: evidence.nodeID.slice(0, 1_024), artifactPaths }
   return {
     ...evidence,
     nodeID: evidence.nodeID.slice(0, 1_024),
     criteria: evidence.criteria.slice(0, 64).map((criterion) => criterion.slice(0, 1_024)),
-    artifactPaths: evidence.artifactPaths.slice(0, 256),
+    artifactPaths,
     commands: evidence.commands.slice(0, 32).map((command) => ({
       ...command,
       name: command.name.slice(0, 128),
       command: command.command.slice(0, 2_048),
-      ...(command.excerpt === undefined ? {} : { excerpt: command.excerpt.slice(0, 8_192) }),
+      ...(command.excerpt === undefined ? {} : { excerpt: redact(command.excerpt).slice(0, 8_192) }),
     })),
   }
+}
+
+function boundedPaths(paths: ReadonlyArray<string>) {
+  return paths.slice(0, 256).map((item) => item.slice(0, 1_024)).reduce(
+    (result, item) => JSON.stringify([...result, item]).length <= 16_384 ? [...result, item] : result,
+    [] as string[],
+  )
+}
+
+function redact(value: string) {
+  const secrets = Object.entries(process.env)
+    .filter(([name, secret]) => /(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(name) && (secret?.length ?? 0) >= 4)
+    .flatMap(([, secret]) => secret ? [secret] : [])
+  return secrets.reduce((text, secret) => text.replaceAll(secret, "[REDACTED]"), value)
+    .replace(/\b(?:sk|pk|ghp|github_pat|xox[baprs])-?[A-Za-z0-9_-]{8,}\b/g, "[REDACTED]")
+    .replace(/\b((?:api[_-]?key|access[_-]?token|secret|password)\s*[:=]\s*)\S+/gi, "$1[REDACTED]")
 }

@@ -5,7 +5,7 @@ import { GraphNodeTable } from "../sql"
 import type { ProjectV2 } from "../../project"
 import type { NodeID } from "../storage"
 import type { GateResult } from "./gate"
-import type { VerificationEvidence } from "@opencode-ai/schema/graph"
+import type { ToolEvidence } from "@opencode-ai/schema/graph"
 
 export type ToolRunStatus = "succeeded" | "failed" | "blocked" | "dry_run"
 export type ToolRunType = "graph" | "local" | "mcp" | "permission" | "artifact" | "diagnostics"
@@ -30,7 +30,7 @@ export const GraphToolRunTable = sqliteTable(
     output_summary: text(),
     status: text().$type<ToolRunStatus>().notNull(),
     error: text(),
-    evidence: text({ mode: "json" }).$type<VerificationEvidence>(),
+    evidence: text({ mode: "json" }).$type<ToolEvidence>(),
     time_created: integer()
       .notNull()
       .$default(() => Date.now()),

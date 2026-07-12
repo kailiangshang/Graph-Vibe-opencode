@@ -40,6 +40,7 @@ export async function resolve(input: {
   if (missing) return { ok: false, reason: "diagnostic_script_missing", diagnostic: missing.name }
 
   const root = realpathSync.native(input.directory)
+  const canonical = new Map<string, string>()
   const focused = required.flatMap((diagnostic) => {
     if (!diagnostic.paths || diagnostic.paths.length === 0) return []
     return [{ diagnostic, paths: diagnostic.paths }]
@@ -62,11 +63,15 @@ export async function resolve(input: {
         return { ok: false, reason: "verification_path_missing", path: relative }
       }
       if (!contains(root, resolved)) return { ok: false, reason: "verification_path_escape", path: relative }
+      canonical.set(relative, resolved)
     }
   }
 
   const focusedCommands = focused.map((item) =>
-    command(item.diagnostic.name, ["run", item.diagnostic.name, "--", ...item.paths.map((item) => `./${item}`)], true),
+    command(item.diagnostic.name, ["run", item.diagnostic.name, "--", ...item.paths.flatMap((item) => {
+      const resolved = canonical.get(item)
+      return resolved ? [resolved] : []
+    })], true),
   )
   const completeCommands = detected.length === 0 && input.verification === null
     ? [command("test", ["test"], false)]
