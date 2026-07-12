@@ -50,11 +50,12 @@ const it = testEffect(
 )
 
 describe("LocationServiceMap", () => {
-  it.live("binds focused execution to the canonical target across a symlink swap", () =>
+  it.live("invalidates focused execution when the canonical target changes", () =>
     Effect.acquireRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
     ).pipe(Effect.flatMap(([root, outside]) => Effect.gen(function* () {
+      if (!(yield* Effect.promise(() => supportsSymlink(root.path)))) return
       yield* Effect.promise(async () => {
         await fs.mkdir(path.join(root.path, "test"), { recursive: true })
         await fs.mkdir(path.join(root.path, "scripts"), { recursive: true })
@@ -66,14 +67,10 @@ describe("LocationServiceMap", () => {
       })
       const resolution = yield* Effect.promise(() => GraphDiagnostics.resolve({ directory: root.path, verification: { criteria: ["canonical"], diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }] } }))
       if (!resolution.ok) return yield* Effect.die(new Error(resolution.reason))
-      yield* Effect.promise(async () => {
-        await fs.unlink(path.join(root.path, "test/focused.test.ts"))
-        await fs.symlink(path.join(outside.path, "outside.txt"), path.join(root.path, "test/focused.test.ts"))
-      })
+      yield* Effect.promise(() => fs.writeFile(path.join(root.path, "test/inside.txt"), "changed"))
       const focused = resolution.commands[0]
       if (!focused) return yield* Effect.die(new Error("missing focused command"))
-      const child = Bun.spawn([focused.executable, ...focused.args], { cwd: root.path, stdout: "pipe", stderr: "pipe" })
-      expect(yield* Effect.promise(() => child.exited)).toBe(0)
+      expect(yield* Effect.promise(() => GraphDiagnostics.targetsUnchanged(focused))).toBe(false)
       expect(focused.args.at(-1)).toBe(path.join(root.path, "test/inside.txt"))
     }))),
   )
@@ -450,6 +447,46 @@ describe("LocationServiceMap", () => {
               }),
             ),
           ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("rejects a focused parent directory replaced during current-adapter execution", () =>
+    withGraphMode(
+      Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
+        Effect.flatMap((dir) => Effect.promise(async () => {
+          await fs.mkdir(path.join(dir.path, "test"), { recursive: true })
+          await fs.mkdir(path.join(dir.path, "scripts"), { recursive: true })
+          await fs.writeFile(path.join(dir.path, "test/focused.test.ts"), "original")
+          await fs.writeFile(path.join(dir.path, "scripts/change-parent.ts"), [
+            'import { mkdir, rename, writeFile } from "node:fs/promises"',
+            'import path from "node:path"',
+            "const target = process.argv[2]",
+            "if (target) {",
+            '  const parent = path.dirname(target)',
+            '  await rename(parent, `${parent}-old`)',
+            '  await mkdir(parent)',
+            '  await writeFile(target, "replacement")',
+            "}",
+          ].join("\n"))
+          await fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/change-parent.ts" } }))
+        }).pipe(Effect.andThen(Effect.gen(function* () {
+          const state = yield* setupGraphDiagnostics(dir.path, [
+            { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+          ], { criteria: ["stable parent"], diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }] }).pipe(
+            Effect.flatMap((state) => executeTool(state.registry, {
+              sessionID: state.sessionID,
+              ...toolIdentity,
+              call: { type: "tool-call", id: "call-diagnostics-parent-swap", name: "graph_diagnostics_run", input: { targetNodeID: state.targetNodeID } },
+            }).pipe(Effect.as(state))),
+            Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+          )
+          const node = yield* state.db.select().from(GraphNodeTable).where(eq(GraphNodeTable.id, state.targetNodeID)).get().pipe(Effect.orDie)
+          const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
+          expect(node).toMatchObject({ status: "implemented", test_status: "failed" })
+          expect(audit.find((record) => record.tool_name === "graph.diagnostics.run")?.evidence).toMatchObject({ kind: "diagnostics", passed: false })
+        }))),
         ),
       ),
     ),
@@ -1036,6 +1073,16 @@ function setupGraphDiagnostics(directory: string, permissions: PermissionV2.Rule
 
 async function fileExists(file: string) {
   return fs.access(file).then(() => true, () => false)
+}
+
+async function supportsSymlink(directory: string) {
+  const target = path.join(directory, ".symlink-capability-target")
+  const link = path.join(directory, ".symlink-capability-link")
+  await fs.writeFile(target, "test")
+  return fs.symlink(target, link).then(
+    () => fs.rm(link, { force: true }).then(() => true),
+    () => false,
+  ).finally(() => fs.rm(target, { force: true }))
 }
 
 function waitForFile(file: string): Effect.Effect<void> {

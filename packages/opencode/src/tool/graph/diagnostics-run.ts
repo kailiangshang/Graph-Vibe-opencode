@@ -41,6 +41,7 @@ interface NamedCommand {
   args: ReadonlyArray<string>
   command: string
   focused: boolean
+  targets: ReadonlyArray<GraphDiagnostics.Target>
 }
 
 export const GraphDiagnosticsRunTool = Tool.define(
@@ -55,6 +56,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
 
     const runCmd = (cmd: NamedCommand, cwd: string, abort: AbortSignal, timeoutMs: number) =>
       Effect.gen(function* () {
+        if (!(yield* Effect.promise(() => GraphDiagnostics.targetsUnchanged(cmd)))) return changedTarget(cmd)
         const spec = ChildProcess.make(cmd.executable, cmd.args, {
           cwd,
           env: process.env,
@@ -96,7 +98,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
         const truncatedOutput = output.slice(0, MAX_OUTPUT_CHARS)
         const failureReason = diagnosticFailureReason(cmd.command, exit, truncatedOutput)
 
-        return {
+        const result = {
           name: cmd.name,
           command: cmd.command,
           exitCode: exit.code,
@@ -105,6 +107,8 @@ export const GraphDiagnosticsRunTool = Tool.define(
           passed: failureReason === undefined,
           ...(failureReason ? { failureReason } : {}),
         } satisfies CommandResult
+        if (!(yield* Effect.promise(() => GraphDiagnostics.targetsUnchanged(cmd)))) return changedTarget(cmd)
+        return result
       }).pipe(Effect.scoped)
 
     return {
@@ -231,11 +235,13 @@ export const GraphDiagnosticsRunTool = Tool.define(
             metadata: { commands: cmds },
           })
 
-          const results: CommandResult[] = []
+          const executed: CommandResult[] = []
           for (const cmd of cmds) {
             const result = yield* runCmd(cmd, session.directory, ctx.abort, timeoutMs)
-            results.push(result)
+            executed.push(result)
           }
+          const stable = yield* Effect.forEach(cmds, (command) => Effect.promise(() => GraphDiagnostics.targetsUnchanged(command)))
+          const results = executed.map((result, index) => stable[index] ? result : changedTarget(cmds[index]))
 
           const allPassed = results.every((r) => r.passed)
           const verified = allPassed && completeDiagnostics
@@ -355,6 +361,10 @@ function diagnosticFailureReason(command: string, exit: ExitKind, output: string
   if (exit.kind === "abort") return "aborted"
   if (exit.code !== 0) return `exit_code:${exit.code}`
   if (isBunRunUsageOutput(command, output)) return "bun_run_usage"
+}
+
+function changedTarget(command: NamedCommand): CommandResult {
+  return { name: command.name, command: command.command, exitCode: null, output: "Focused verification target changed", timedOut: false, passed: false, failureReason: "verification_target_changed" }
 }
 
 function isBunRunUsageOutput(command: string, output: string) {

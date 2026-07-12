@@ -841,21 +841,20 @@ describe("GraphWorkflowState", () => {
     )
   })
 
-  test("a later artifact application invalidates in-flight verification", async () => {
+  test("an artifact reservation invalidates in-flight verification before writes complete", async () => {
     await run(Effect.gen(function* () {
       const workflow = yield* GraphWorkflowState.Service
       yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
       const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
-      const applied = yield* workflow.artifactApplied({
+      const first = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision })
+      const applied = yield* workflow.completeArtifactApply({
         projectID: PID, sessionID: SID, nodeID: atomicA.id,
+        reservedRevision: first.revision,
         evidence: { kind: "artifact", nodeID: atomicA.id, artifactPaths: ["src/a.ts"] },
       })
       expect(applied.revision).toBe(planned.revision + 1)
       const staleRevision = applied.revision
-      yield* workflow.artifactApplied({
-        projectID: PID, sessionID: SID, nodeID: atomicA.id,
-        evidence: { kind: "artifact", nodeID: atomicA.id, artifactPaths: ["src/a,b.ts"] },
-      })
+      yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: staleRevision })
       const exit = yield* workflow.completeVerification({
         projectID: PID, sessionID: SID, nodeID: atomicA.id, expectedRevision: staleRevision,
         evidence: { kind: "diagnostics", nodeID: atomicA.id, criteria: [], artifactPaths: ["src/a.ts"], projectChecksOnly: true, complete: true, passed: true, commands: [] },
@@ -863,6 +862,23 @@ describe("GraphWorkflowState", () => {
       expect(Exit.isFailure(exit)).toBe(true)
       const storage = yield* GraphStorage.Service
       expect(yield* storage.node.get(atomicA.id)).toMatchObject({ status: "implemented", testStatus: "pending" })
+    }))
+  })
+
+  test("artifact reservations reject concurrent old revisions before completion", async () => {
+    await run(Effect.gen(function* () {
+      const workflow = yield* GraphWorkflowState.Service
+      yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+      const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+      const reserved = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision })
+      const conflict = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision }).pipe(Effect.exit)
+      expect(Exit.isFailure(conflict)).toBe(true)
+      yield* workflow.failArtifactApply({ projectID: PID, sessionID: SID, nodeID: atomicA.id, reservedRevision: reserved.revision,
+        evidence: { kind: "artifact", nodeID: atomicA.id, artifactPaths: ["src/a.ts"] }, error: "interrupted before write" })
+      const storage = yield* GraphStorage.Service
+      expect(yield* storage.node.get(atomicA.id)).toMatchObject({ status: "pending", testStatus: "none" })
+      const audit = yield* GraphAudit.Service
+      expect((yield* audit.tool.list({ projectID: PID, nodeID: atomicA.id })).at(-1)).toMatchObject({ status: "failed", error: "interrupted before write" })
     }))
   })
 

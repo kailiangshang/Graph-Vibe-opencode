@@ -28,6 +28,13 @@ const run = <A, E>(effect: Effect.Effect<A, E, Database.Service | GraphStorage.S
   Effect.runPromise(Effect.gen(function* () { yield* seed; return yield* effect }).pipe(Effect.provide(auditLayer), Effect.scoped))
 
 describe("GraphAudit", () => {
+  test("bounds aggregate artifact path evidence deterministically", () => {
+    const paths = Array.from({ length: 40 }, (_, index) => `src/${String(index).padStart(2, "0")}-${"x".repeat(1_000)}.ts`)
+    const evidence = GraphAudit.sanitizeEvidence({ kind: "artifact", nodeID: "node", artifactPaths: paths })
+    expect(JSON.stringify(evidence.artifactPaths).length).toBeLessThanOrEqual(16_384)
+    expect(evidence.artifactPaths).toEqual(paths.slice(0, evidence.artifactPaths.length))
+    expect(evidence.artifactPaths.length).toBeLessThan(paths.length)
+  })
   test("records and lists tool runs by session", async () => {
     await run(Effect.gen(function* () {
       const audit = yield* GraphAudit.Service

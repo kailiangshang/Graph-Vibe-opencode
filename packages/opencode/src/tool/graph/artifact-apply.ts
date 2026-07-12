@@ -134,7 +134,7 @@ export const GraphArtifactApplyTool = Tool.define(
                 })
 
               yield* progress("preparing")
-              const gate = yield* build.evaluate({
+              const evaluation = yield* build.evaluateWithRevision({
                 projectID: session.projectID,
                 sessionID: session.sessionID,
                 targetNodeID: params.targetNodeID,
@@ -142,6 +142,7 @@ export const GraphArtifactApplyTool = Tool.define(
                 executor: "manual",
               })
 
+              const gate = evaluation.gate
               if (!gate.allowed) {
                 const cp = yield* domain.currentPlan({ sessionID: session.sessionID })
                 const buildable = buildableNodes(cp.nodes, cp.edges).map((n) => n.name)
@@ -227,7 +228,8 @@ export const GraphArtifactApplyTool = Tool.define(
                   ...draftMetadata(source.draftID),
                 },
               })
-
+              const reservation = yield* build.beginArtifactApply({ sessionID: session.sessionID, expectedRevision: evaluation.workflowRevision })
+              const artifactEvidence = { kind: "artifact" as const, nodeID: params.targetNodeID, artifactPaths: files }
               yield* Effect.forEach(existing, (item, index) =>
                 Effect.gen(function* () {
                   const content = plan.files[item.relative]
@@ -248,13 +250,17 @@ export const GraphArtifactApplyTool = Tool.define(
                     currentFile: item.relative,
                   })
                 }),
-              )
+              ).pipe(Effect.onError((cause) => build.failArtifactApply({
+                projectID: session.projectID, sessionID: session.sessionID, nodeID: params.targetNodeID,
+                reservedRevision: reservation.revision, evidence: artifactEvidence, error: String(cause),
+              }).pipe(Effect.orDie)))
               yield* progress("updating_graph", { bytesPlanned, bytesWritten: bytesPlanned })
-              yield* build.artifactApplied({
+              yield* build.completeArtifactApply({
                 projectID: session.projectID,
                 sessionID: session.sessionID,
                 nodeID: params.targetNodeID,
-                evidence: { kind: "artifact", nodeID: params.targetNodeID, artifactPaths: files },
+                reservedRevision: reservation.revision,
+                evidence: artifactEvidence,
                 inputSummary: summarizePaths(paths),
                 outputSummary: `applied:${paths.length}`,
               })
