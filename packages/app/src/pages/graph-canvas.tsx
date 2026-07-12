@@ -19,11 +19,21 @@ export function canvasNodeState(
   current: boolean,
   selected = false,
 ) {
-  if (current) return { state: "current", icon: "→", shape: "double-circle", label: "Current" }
-  if (node.testStatus === "failed") return { state: "failed", icon: "!", shape: "square", label: "Failed" }
-  if (node.status === "verified") return { state: "verified", icon: "✓", shape: "circle", label: "Verified" }
-  if (node.checkpoint) return { state: "checkpoint", icon: "Ⅱ", shape: "diamond", label: "Checkpoint" }
-  if (node.buildable === false) return { state: "blocked", icon: "×", shape: "diamond", label: "Blocked" }
+  const flags = [current ? "Current" : undefined, selected ? "Selected" : undefined]
+  if (node.testStatus === "failed")
+    return { state: "failed", icon: "!", shape: "square", label: [...flags, "Failed"].filter(Boolean).join(" · ") }
+  if (node.status === "verified")
+    return { state: "verified", icon: "✓", shape: "circle", label: [...flags, "Verified"].filter(Boolean).join(" · ") }
+  if (node.checkpoint)
+    return {
+      state: "checkpoint",
+      icon: "Ⅱ",
+      shape: "diamond",
+      label: [...flags, "Checkpoint"].filter(Boolean).join(" · "),
+    }
+  if (node.buildable === false)
+    return { state: "blocked", icon: "×", shape: "diamond", label: [...flags, "Blocked"].filter(Boolean).join(" · ") }
+  if (current) return { state: "current", icon: "→", shape: "double-circle", label: flags.filter(Boolean).join(" · ") }
   if (selected) return { state: "selected", icon: "◆", shape: "hexagon", label: "Selected" }
   return { state: "pending", icon: "○", shape: "circle", label: "Pending" }
 }
@@ -70,6 +80,7 @@ export function GraphCanvas(props: {
   onSelectNode: (id: string | null) => void
   onCenterNode?: (id: string) => void
   centerNodeID?: string | null
+  centerRequestToken?: number
 }) {
   let canvas: HTMLCanvasElement | undefined
   let container: HTMLDivElement | undefined
@@ -264,6 +275,7 @@ export function GraphCanvas(props: {
     if (typeof window !== "undefined") start()
   })
   createEffect(() => {
+    props.centerRequestToken
     if (props.centerNodeID) center(props.centerNodeID)
   })
   onMount(() => {
@@ -289,6 +301,7 @@ export function GraphCanvas(props: {
         ref={(element) => (canvas = element)}
         class="h-full w-full touch-none"
         aria-label={GRAPH_CANVAS_LABEL}
+        data-center-request={props.centerNodeID ? `${props.centerNodeID}:${props.centerRequestToken ?? 0}` : undefined}
         onPointerDown={(event) => {
           if (hit(event)) return
           panStart = { x: event.clientX, y: event.clientY }

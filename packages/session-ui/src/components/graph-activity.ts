@@ -21,6 +21,8 @@ export function graphPlanCard(input: Record<string, unknown>, workflow?: Workflo
       mode: title(workflow.mode),
       currentTask: workflow.currentTask?.name ?? "No current task",
       nextStop: nextStop(workflow.mode, workflow.checkpoint),
+      moduleCount: workflow.modules.length,
+      taskCount: workflow.modules.reduce((count, module) => count + module.tasks.length, 0),
       modules: workflow.modules,
     }
   }
@@ -50,6 +52,8 @@ export function graphPlanCard(input: Record<string, unknown>, workflow?: Workflo
     mode: "Not selected",
     currentTask: tasks[0]?.name,
     nextStop: "After execution mode is selected",
+    moduleCount: grouped.length,
+    taskCount: tasks.length,
     modules: [...grouped, ...(ungrouped.length ? [{ id: null, name: "Ungrouped", tasks: ungrouped }] : [])],
   }
 }

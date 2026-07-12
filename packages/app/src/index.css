@@ -50,13 +50,13 @@
   color: var(--text-strong);
 }
 .graph-control {
-  min-width: 36px;
-  min-height: 36px;
+  min-width: 44px;
+  min-height: 44px;
   border-radius: 7px;
   padding: 0 9px;
 }
 .graph-action {
-  min-height: 40px;
+  min-height: 44px;
   border-radius: 7px;
   padding: 0 14px;
   font-size: 13px;
@@ -126,6 +126,13 @@
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .graph-glass {
+    background: var(--graph-glass-solid);
+    backdrop-filter: none;
   }
 }
 

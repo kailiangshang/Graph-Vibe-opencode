@@ -7,6 +7,7 @@ import {
   formatPlanAdmission,
   graphToolActivity,
   graphToolError,
+  graphToolSuccessDetails,
   GRAPH_MODES,
   continueWorkflow,
   pauseWorkflow,
@@ -14,6 +15,7 @@ import {
   startGraphPrompt,
   summarizeCurrentPlan,
   workflowActions,
+  workflowActionFailure,
 } from "../src/graph/workflow"
 
 describe("Graph Workflow", () => {
@@ -174,6 +176,8 @@ describe("Graph collaboration status", () => {
       mode: "Not selected",
       currentTask: "Build rail",
       nextStop: "After execution mode is selected",
+      moduleCount: 1,
+      taskCount: 1,
       modules: [{ name: "UI", tasks: ["Build rail · Rail is visible"] }],
     })
 
@@ -181,6 +185,8 @@ describe("Graph collaboration status", () => {
       mode: "Module",
       currentTask: "Wire controls",
       nextStop: "Now, at the pending checkpoint",
+      moduleCount: 1,
+      taskCount: 2,
       modules: [
         {
           name: "Interaction",
@@ -203,6 +209,16 @@ describe("Graph collaboration status", () => {
       ].join(" "),
     ).not.toContain("graph_")
     expect(graphToolError("graph_artifact_apply failed after graph_build_gate")).not.toContain("graph_")
+    expect(
+      graphToolSuccessDetails(
+        "graph_artifact_apply",
+        { nodeName: "Build rail", artifactID: "artifact_raw" },
+        '{"tool":"graph_artifact_apply","artifactID":"artifact_raw"}',
+      ),
+    ).toBe("Task changes applied · Build rail")
+    expect(graphToolSuccessDetails("graph_future_operation", {}, "graph_future_operation protocol_raw")).toBe(
+      "Graph workflow activity completed",
+    )
   })
 
   test("formats durable mode, current task, evidence, checkpoint, and next action", () => {
@@ -260,6 +276,73 @@ describe("Graph collaboration status", () => {
     })
   })
 
+  test("does not refresh for invalid-state failures", async () => {
+    let reads = 0
+    const result = await continueWorkflow(
+      {
+        graph: {
+          workflow: async () => ({ data: { revision: ++reads } }),
+          workflowApprove: async () => ({ error: { _tag: "BadRequest" } }),
+        },
+      },
+      { session: "ses_1" },
+    )
+    expect(result).toEqual({
+      ok: false,
+      kind: "invalid-action",
+      message: "Continue is unavailable for the current workflow state. Review the checkpoint and available actions.",
+    })
+    expect(reads).toBe(1)
+  })
+
+  test("classifies workflow action failures with specific recovery copy", () => {
+    expect(workflowActionFailure("mode", { _tag: "BadRequest" })).toEqual({
+      kind: "active-workflow",
+      message: "Execution mode cannot change while work is active. Pause the workflow first.",
+    })
+    expect(workflowActionFailure("pause", { _tag: "BadRequest" })).toMatchObject({ kind: "apply-rejected" })
+    expect(workflowActionFailure("continue", new TypeError("fetch failed"))).toMatchObject({ kind: "network" })
+    expect(workflowActionFailure("continue", new Error("socket closed"))).toMatchObject({ kind: "network" })
+    expect(workflowActionFailure("continue", { _tag: "Unexpected" })).toMatchObject({ kind: "rejected" })
+  })
+
+  test("rejects an empty mutation envelope instead of reporting success", async () => {
+    const result = await continueWorkflow(
+      {
+        graph: {
+          workflow: async () => ({ data: { revision: 1 } }),
+          workflowApprove: async () => ({}),
+        },
+      },
+      { session: "ses_1" },
+    )
+    expect(result).toMatchObject({ ok: false, kind: "rejected" })
+  })
+
+  test("reports a network failure without refreshing or attempting the action", async () => {
+    let actions = 0
+    const result = await continueWorkflow(
+      {
+        graph: {
+          workflow: async () => {
+            throw new TypeError("fetch failed")
+          },
+          workflowApprove: async () => {
+            actions++
+            return { data: { revision: 2 } }
+          },
+        },
+      },
+      { session: "ses_1" },
+    )
+    expect(result).toEqual({
+      ok: false,
+      kind: "network",
+      message: "The workflow service could not be reached. Check the connection and retry this action.",
+    })
+    expect(actions).toBe(0)
+  })
+
   test("only exposes actions valid for durable workflow state", () => {
     expect(
       workflowActions({ mode: "module", phase: "checkpoint", checkpoint: { status: "pending", kind: "module" } }),
@@ -304,7 +387,7 @@ describe("Graph collaboration status", () => {
       {
         graph: {
           workflow: async () => ({ data: { revision: 4 } }),
-          workflowMode: async () => ({}),
+          workflowMode: async () => ({ error: { _tag: "GraphWorkflowRevisionConflict" } }),
         },
       },
       { session: "ses", mode: "module" },
@@ -312,7 +395,8 @@ describe("Graph collaboration status", () => {
     )
     expect(failed).toEqual({
       ok: false,
-      message: "Execution mode could not be saved because the workflow changed. Review status and retry /graph-start.",
+      kind: "revision-conflict",
+      message: "The workflow changed in another client. Status was refreshed; review it and explicitly retry.",
     })
     expect(prompt).toEqual([])
 

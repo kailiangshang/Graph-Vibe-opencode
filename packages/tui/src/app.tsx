@@ -98,6 +98,7 @@ import {
   persistGraphStartMode,
   startGraphPrompt,
   type Workflow,
+  workflowActionFailure,
 } from "./graph/workflow"
 
 registerOpencodeSpinner()
@@ -571,6 +572,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (workspace?.type !== "worktree" || !workspace.directory) return
     return workspace
   })
+  let activeGraphStatus: string | undefined
   const showGraphStatus = (sessionID: string, workflow: Workflow, conflict?: string) => {
     const action = async (kind: "continue" | "pause") => {
       const result =
@@ -591,15 +593,29 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           : result.message,
       })
     }
-    dialog.replace(() => (
-      <DialogGraphStatus
-        workflow={workflow}
-        conflict={conflict}
-        onContinue={() => action("continue")}
-        onPause={() => action("pause")}
-      />
-    ))
+    dialog.replace(
+      () => (
+        <DialogGraphStatus
+          workflow={workflow}
+          conflict={conflict}
+          onContinue={() => action("continue")}
+          onPause={() => action("pause")}
+        />
+      ),
+      () => {
+        if (activeGraphStatus === sessionID) activeGraphStatus = undefined
+      },
+    )
+    activeGraphStatus = sessionID
   }
+  const stopGraphStatusUpdates = event.on("graph.plan.updated", async (_event, metadata) => {
+    const sessionID = activeGraphStatus
+    if (!sessionID || metadata.directory !== sdk.directory) return
+    const response = await sdk.client.graph.workflow({ session: sessionID, directory: sdk.directory })
+    if (!response.data || activeGraphStatus !== sessionID) return
+    showGraphStatus(sessionID, response.data)
+  })
+  onCleanup(stopGraphStatusUpdates)
   const appCommands = createMemo(() =>
     [
       {
@@ -721,11 +737,17 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
                         directory: sdk.directory,
                         graphWorkflowModePayload: { mode, expectedRevision: current.data.revision },
                       })
-                      if (response.error)
-                        return toast.show({
-                          variant: "warning",
-                          message: "The workflow changed. Status was refreshed; choose the mode again.",
+                      if (response.error) {
+                        const failure = workflowActionFailure("mode", response.error)
+                        if (failure.kind !== "revision-conflict")
+                          return toast.show({ variant: "warning", message: failure.message })
+                        const refreshed = await sdk.client.graph.workflow({
+                          session: route.data.sessionID,
+                          directory: sdk.directory,
                         })
+                        if (refreshed.data) showGraphStatus(route.data.sessionID, refreshed.data, failure.message)
+                        return
+                      }
                       toast.show({ variant: "info", message: `Execution mode changed to ${mode}.` })
                     }}
                   />

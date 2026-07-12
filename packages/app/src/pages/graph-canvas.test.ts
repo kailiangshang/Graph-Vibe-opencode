@@ -54,6 +54,12 @@ describe("GraphCanvas model", () => {
       shape: "square",
       label: "Failed",
     })
+    expect(canvasNodeState({ status: "implemented", testStatus: "failed", buildable: true }, true, true)).toEqual({
+      state: "failed",
+      icon: "!",
+      shape: "square",
+      label: "Current · Selected · Failed",
+    })
     expect(canvasNodeState({ status: "verified", testStatus: "passed", buildable: false }, false, false)).toEqual({
       state: "verified",
       icon: "✓",

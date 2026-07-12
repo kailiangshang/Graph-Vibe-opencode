@@ -28,6 +28,49 @@ export type LevelFilter = "all" | "L1" | "L2"
 export const CURRENT_PLAN_EMPTY_MESSAGE =
   "No Current Plan nodes yet. Describe your goal in Graph Vibe to create a plan."
 
+export function workflowMutationFailure(
+  action: "mode" | "continue" | "pause",
+  error: unknown,
+): { kind: string; refresh: boolean; message: string } {
+  const tag = error && typeof error === "object" && "_tag" in error ? error._tag : undefined
+  if (tag === "GraphWorkflowRevisionConflict")
+    return {
+      kind: "revision-conflict",
+      refresh: true,
+      message: "The workflow changed in another client. Status was refreshed; review it and explicitly retry.",
+    }
+  if (error instanceof Error)
+    return {
+      kind: "network",
+      refresh: false,
+      message: "The workflow service could not be reached. Check the connection and retry this action.",
+    }
+  if (tag === "BadRequest" && action === "mode")
+    return {
+      kind: "active-workflow",
+      refresh: false,
+      message: "Execution mode cannot change while work is active. Pause the workflow first.",
+    }
+  if (tag === "BadRequest" && action === "continue")
+    return {
+      kind: "invalid-action",
+      refresh: false,
+      message: "Continue is unavailable for the current workflow state. Review the checkpoint and available actions.",
+    }
+  if (tag === "BadRequest")
+    return {
+      kind: "apply-rejected",
+      refresh: false,
+      message:
+        "Pause was not accepted at the current mutation boundary. Wait for the active change to finish, then retry.",
+    }
+  return {
+    kind: "rejected",
+    refresh: false,
+    message: "The workflow action was rejected. Review the current state before retrying.",
+  }
+}
+
 export function groupWorkflowTasks<T extends { id: string; moduleID: string | null }>(
   tasks: T[],
   modules: Array<{ id: string; name: string }>,

@@ -61,6 +61,12 @@ export function workflowAnnouncement(workflow: {
   return `${mode}${current} ${workflow.progress.verified} of ${workflow.progress.total} tasks verified, ${workflow.progress.percent} percent.`
 }
 
+export function workflowPhaseStep(phase: string) {
+  if (phase === "planning") return "Plan"
+  if (phase === "building") return "Build"
+  return "Verify"
+}
+
 export function rollupWorkflowStatus(tasks: ReadonlyArray<{ status: string; testStatus: string }>) {
   if (tasks.some((task) => task.testStatus === "failed")) return "failed"
   if (tasks.length > 0 && tasks.every((task) => task.status === "verified")) return "verified"
@@ -110,6 +116,82 @@ type CockpitWorkflow = {
   }>
 }
 
+export function enrichWorkflowNodes(input: {
+  graph: GraphView
+  workflow: Pick<CockpitWorkflow, "currentTask" | "checkpoint" | "tasks" | "modules">
+  selectedNodeID: string | null
+}) {
+  return input.graph.nodes.map((item) => {
+    const task = input.workflow.tasks.find((candidate) => candidate.id === item.id)
+    const module = input.workflow.modules.find((candidate) => candidate.id === item.id)
+    const blockers = input.graph.edges.filter(
+      (edge) =>
+        edge.targetID === item.id &&
+        edge.relation === "blocks" &&
+        input.graph.nodes.find((node) => node.id === edge.sourceID)?.status !== "verified",
+    )
+    const status =
+      task?.status ??
+      module?.status ??
+      (module
+        ? rollupWorkflowStatus(module.tasks)
+        : item.type === "prd"
+          ? rollupWorkflowStatus(input.workflow.tasks)
+          : item.status)
+    const testStatus =
+      task?.testStatus ?? (status === "failed" ? "failed" : status === "verified" ? "passed" : item.testStatus)
+    const scopedTasks = module?.tasks ?? (item.type === "prd" ? input.workflow.tasks : [])
+    const buildable =
+      task?.buildable ??
+      (scopedTasks.length ? scopedTasks.some((candidate) => candidate.buildable) : blockers.length === 0)
+    const current = task?.current ?? input.workflow.currentTask?.id === item.id
+    const selected = input.selectedNodeID === item.id
+    const failed = testStatus === "failed"
+    const verified = status === "verified"
+    const checkpoint =
+      input.workflow.checkpoint.scopeNodeID === item.id && input.workflow.checkpoint.status === "pending"
+    const blocked = !buildable
+    const state = failed
+      ? "failed"
+      : verified
+        ? "verified"
+        : checkpoint
+          ? "checkpoint"
+          : blocked
+            ? "blocked"
+            : current
+              ? "current"
+              : selected
+                ? "selected"
+                : "pending"
+    return {
+      ...item,
+      status,
+      testStatus,
+      buildable,
+      blockerCount: blockers.length,
+      current,
+      selected,
+      failed,
+      verified,
+      checkpoint,
+      blocked,
+      state,
+      label:
+        [
+          current ? "Current" : undefined,
+          selected ? "Selected" : undefined,
+          failed ? "Failed" : undefined,
+          verified ? "Verified" : undefined,
+          checkpoint ? "Checkpoint" : undefined,
+          blocked ? "Blocked" : undefined,
+        ]
+          .filter(Boolean)
+          .join(" · ") || "Pending",
+    }
+  })
+}
+
 export function GraphCockpit(props: {
   workflow: CockpitWorkflow
   graph: GraphView
@@ -118,11 +200,19 @@ export function GraphCockpit(props: {
   onContinue?: () => void
   onPause?: () => void
   onModeChange?: (mode: "atomic" | "module" | "autopilot") => void
+  onBackToSession?: () => void
+  onViewChanges?: () => void
+  onCenterNode?: (id: string) => void
+  onCenterRequest?: (id: string, token: number) => void
+  projectName?: string
+  sessionTitle?: string
+  actionError?: string
   pendingAction?: "mode" | "continue" | "pause"
 }) {
   const [local, setLocal] = createStore({
     mobileTab: "tasks" as "tasks" | "graph" | "details",
     centerNodeID: null as string | null,
+    centerRequestToken: 0,
   })
   const selectedTask = () =>
     props.workflow.tasks.find((task) => task.id === props.selectedNodeID) ??
@@ -137,39 +227,20 @@ export function GraphCockpit(props: {
   const evidence = () => selectedTask()?.latestEvidence
   const actions = () => cockpitActions(props.workflow, props.pendingAction)
   const state = () => cockpitViewState({ workflow: props.workflow })
-  const canvas = () => ({
-    ...props.graph,
-    nodes: props.graph.nodes.map((item) => {
-      const task = props.workflow.tasks.find((candidate) => candidate.id === item.id)
-      const module = props.workflow.modules.find((candidate) => candidate.id === item.id)
-      const blockers = props.graph.edges.filter(
-        (edge) =>
-          edge.targetID === item.id &&
-          edge.relation === "blocks" &&
-          props.graph.nodes.find((node) => node.id === edge.sourceID)?.status !== "verified",
-      )
-      const status =
-        task?.status ??
-        module?.status ??
-        (module
-          ? rollupWorkflowStatus(module.tasks)
-          : item.type === "prd"
-            ? rollupWorkflowStatus(props.workflow.tasks)
-            : item.status)
-      const scopedTasks = module?.tasks ?? (item.type === "prd" ? props.workflow.tasks : [])
-      return {
-        ...item,
-        status,
-        testStatus:
-          task?.testStatus ?? (status === "failed" ? "failed" : status === "verified" ? "passed" : item.testStatus),
-        buildable:
-          task?.buildable ??
-          (scopedTasks.length ? scopedTasks.some((candidate) => candidate.buildable) : blockers.length === 0),
-        blockerCount: blockers.length,
-        checkpoint: props.workflow.checkpoint.scopeNodeID === item.id && props.workflow.checkpoint.status === "pending",
-      }
-    }),
-  })
+  const nodes = () =>
+    enrichWorkflowNodes({ graph: props.graph, workflow: props.workflow, selectedNodeID: selectedID() })
+  const canvas = () => ({ ...props.graph, nodes: nodes() })
+  const nodeState = (id: string) => nodes().find((item) => item.id === id)
+  let centerRequestToken = 0
+  const requestCenter = (id: string, reveal: boolean) => {
+    const token = ++centerRequestToken
+    setLocal({
+      centerNodeID: id,
+      centerRequestToken: token,
+      mobileTab: reveal ? "graph" : local.mobileTab,
+    })
+    props.onCenterRequest?.(id, token)
+  }
   const activateTab = (tab: (typeof MOBILE_TABS)[number]) => {
     setLocal("mobileTab", tab)
     document.getElementById(`graph-tab-${tab}`)?.focus()
@@ -178,9 +249,18 @@ export function GraphCockpit(props: {
   return (
     <section class="graph-cockpit flex h-full min-h-0 flex-col text-text-strong" aria-label="Graph workflow cockpit">
       <header class="graph-glass flex min-h-16 flex-wrap items-center gap-3 border-b px-4 py-2">
+        <button class="graph-action secondary" aria-label="Back to session" onClick={props.onBackToSession}>
+          ← Session
+        </button>
         <div class="mr-auto min-w-48">
           <div class="text-xs font-medium uppercase tracking-[0.16em] text-text-weak">Workflow control</div>
           <div class="font-semibold">{props.workflow.currentTask?.name ?? "No current task"}</div>
+          <div class="text-xs text-text-weak">
+            {[props.projectName, props.sessionTitle].filter(Boolean).join(" · ")}
+          </div>
+        </div>
+        <div class="rounded-full border border-border-weak-base px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em]">
+          {workflowPhaseStep(props.workflow.phase)} phase
         </div>
         <label class="flex items-center gap-2 text-sm">
           <span class="text-text-weak">Mode</span>
@@ -202,6 +282,9 @@ export function GraphCockpit(props: {
             <option value="autopilot">Autopilot</option>
           </select>
         </label>
+        <Show when={!actions().mode && props.workflow.phase !== "complete" && props.workflow.phase !== "failed"}>
+          <span class="max-w-40 text-xs text-text-weak">Pause the workflow before changing execution mode.</span>
+        </Show>
         <div class="min-w-36" aria-label={`${props.workflow.progress.percent}% complete`}>
           <div class="mb-1 flex justify-between text-xs text-text-weak">
             <span>
@@ -224,6 +307,12 @@ export function GraphCockpit(props: {
           </button>
         </Show>
       </header>
+
+      <Show when={props.actionError}>
+        <div class="graph-state-strip graph-glass border-b px-4 py-2 text-sm text-icon-critical-base" role="alert">
+          {props.actionError}
+        </div>
+      </Show>
 
       <Show when={state() !== "ready"}>
         <div class="graph-state-strip graph-glass border-b px-4 py-2 text-sm" role="status">
@@ -285,33 +374,34 @@ export function GraphCockpit(props: {
                     <div class="flex items-stretch">
                       <button
                         class="graph-task mb-1 flex min-h-11 min-w-0 flex-1 items-start gap-2 rounded-lg px-2 py-2 text-left"
-                        classList={{ current: task.current, selected: task.id === selectedID() }}
+                        classList={{ current: !!nodeState(task.id)?.current, selected: !!nodeState(task.id)?.selected }}
                         aria-current={task.current ? "step" : undefined}
-                        onClick={() => props.onSelectNode(task.id)}
+                        onClick={() => {
+                          props.onSelectNode(task.id)
+                          if (!window.matchMedia("(max-width: 767px)").matches) requestCenter(task.id, false)
+                        }}
                       >
                         <span aria-hidden="true" class="mt-0.5 w-5 text-center">
-                          {task.current
-                            ? "→"
-                            : task.status === "verified"
+                          {nodeState(task.id)?.failed
+                            ? "!"
+                            : nodeState(task.id)?.verified
                               ? "✓"
-                              : task.testStatus === "failed"
-                                ? "!"
-                                : "○"}
+                              : nodeState(task.id)?.current
+                                ? "→"
+                                : nodeState(task.id)?.blocked
+                                  ? "×"
+                                  : "○"}
                         </span>
                         <span class="min-w-0">
                           <span class="block truncate text-sm font-medium">{task.name}</span>
-                          <span class="text-xs text-text-weak">
-                            {task.current ? "Current · " : ""}
-                            {task.status}
-                          </span>
+                          <span class="text-xs text-text-weak">{nodeState(task.id)?.label}</span>
                         </span>
                       </button>
                       <button
                         class="graph-locate min-h-11 px-2 text-xs text-text-weak"
                         aria-label={`Locate ${task.name} in graph`}
                         onClick={() => {
-                          setLocal("centerNodeID", task.id)
-                          setLocal("mobileTab", "graph")
+                          requestCenter(task.id, true)
                           props.onSelectNode(task.id)
                         }}
                       >
@@ -340,6 +430,8 @@ export function GraphCockpit(props: {
             currentNodeID={props.workflow.currentTask?.id ?? null}
             onSelectNode={(id) => props.onSelectNode(id ?? props.workflow.currentTask?.id ?? null)}
             centerNodeID={local.centerNodeID}
+            centerRequestToken={local.centerRequestToken}
+            onCenterNode={props.onCenterNode}
           />
         </main>
 
@@ -364,8 +456,7 @@ export function GraphCockpit(props: {
                     </div>
                     <h2 class="mt-1 text-lg font-semibold">{selectedNode().name}</h2>
                     <div class="mt-2 inline-flex rounded-full border border-border-weak-base px-2 py-0.5 text-xs">
-                      {selectedTask()?.current ? "Current · " : ""}
-                      {selectedNode().status}
+                      {nodeState(selectedNode().id)?.label ?? selectedNode().status}
                     </div>
                   </div>
                   <InspectorSection title="Objective">
@@ -429,6 +520,13 @@ export function GraphCockpit(props: {
                   </InspectorSection>
                 </div>
                 <footer class="graph-glass sticky bottom-0 flex gap-2 border-t p-3">
+                  <button
+                    class="graph-action secondary flex-1"
+                    aria-label={`View changes for ${selectedTask()?.name ?? selectedNode().name}`}
+                    onClick={props.onViewChanges}
+                  >
+                    View Changes
+                  </button>
                   <Show when={selectedID() !== props.workflow.currentTask?.id}>
                     <button
                       class="graph-action secondary flex-1"
@@ -444,6 +542,15 @@ export function GraphCockpit(props: {
                       onClick={props.onContinue}
                     >
                       Continue
+                    </button>
+                  </Show>
+                  <Show when={actions().pause}>
+                    <button
+                      class="graph-action secondary flex-1"
+                      disabled={actions().pausePending}
+                      onClick={props.onPause}
+                    >
+                      Pause
                     </button>
                   </Show>
                 </footer>

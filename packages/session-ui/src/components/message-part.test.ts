@@ -72,7 +72,11 @@ describe("graphActivityInfo", () => {
       ],
       edges: [{ sourceID: "module", targetID: "task", relation: "contains" }],
     })
-    expect(bridge).toMatchObject({ modules: [{ name: "Interface", tasks: [{ name: "Build rail" }] }] })
+    expect(bridge).toMatchObject({
+      moduleCount: 1,
+      taskCount: 1,
+      modules: [{ name: "Interface", tasks: [{ name: "Build rail" }] }],
+    })
 
     const durable = graphPlanCard(
       {},
@@ -90,6 +94,12 @@ describe("graphActivityInfo", () => {
         ],
       },
     )
-    expect(durable).toMatchObject({ mode: "Module", currentTask: "Build rail", nextStop: "After the current module" })
+    expect(durable).toMatchObject({
+      mode: "Module",
+      currentTask: "Build rail",
+      nextStop: "After the current module",
+      moduleCount: 1,
+      taskCount: 1,
+    })
   })
 })

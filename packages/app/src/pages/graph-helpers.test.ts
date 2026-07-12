@@ -8,6 +8,7 @@ import {
   groupWorkflowTasks,
   normalizeWorkflow,
   reconcileSelection,
+  workflowMutationFailure,
 } from "./graph-helpers"
 
 describe("countByStatus", () => {
@@ -193,5 +194,24 @@ describe("filterByLevel", () => {
 
   test("returns empty for undefined data", () => {
     expect(filterByLevel(undefined, "all")).toEqual({ nodes: [], edges: [] })
+  })
+})
+
+describe("workflowMutationFailure", () => {
+  test("distinguishes stale revisions from active, invalid, rejected, and network failures", () => {
+    expect(workflowMutationFailure("mode", { _tag: "GraphWorkflowRevisionConflict" })).toMatchObject({
+      kind: "revision-conflict",
+      refresh: true,
+    })
+    expect(workflowMutationFailure("mode", { _tag: "BadRequest" })).toEqual({
+      kind: "active-workflow",
+      refresh: false,
+      message: "Execution mode cannot change while work is active. Pause the workflow first.",
+    })
+    expect(workflowMutationFailure("continue", { _tag: "BadRequest" })).toMatchObject({ kind: "invalid-action" })
+    expect(workflowMutationFailure("pause", { _tag: "BadRequest" })).toMatchObject({ kind: "apply-rejected" })
+    expect(workflowMutationFailure("continue", new TypeError("fetch failed"))).toMatchObject({ kind: "network" })
+    expect(workflowMutationFailure("continue", new Error("socket closed"))).toMatchObject({ kind: "network" })
+    expect(workflowMutationFailure("continue", { _tag: "Unexpected" })).toMatchObject({ kind: "rejected" })
   })
 })
