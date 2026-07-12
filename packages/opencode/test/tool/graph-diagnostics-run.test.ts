@@ -1,5 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import path from "node:path"
+import { mkdir, symlink } from "node:fs/promises"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -188,6 +189,152 @@ describe("graph_diagnostics_run", () => {
       expect(node.status).toBe("verified")
       const workflow = yield* GraphWorkflowState.Service
       expect((yield* workflow.get(sessionID))?.currentNodeID).toBeNull()
+    }),
+  )
+
+  it.instance("blocks a missing focused path before permission or command execution", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Focused",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["focused behavior passes"],
+          diagnostics: [{ name: "test", paths: ["test/missing.test.ts"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "true" } })))
+
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context(permissionRequests))
+
+      expect(JSON.parse(result.output)).toMatchObject({ ran: false, verified: false, reason: "verification_path_missing" })
+      expect(permissionRequests).toEqual([])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("implemented")
+    }),
+  )
+
+  it.instance("runs focused paths before complete diagnostics and advances only when both pass", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "test"), { recursive: true })
+        await Bun.write(path.join(test.directory, "test/focused.test.ts"), 'import { expect, test } from "bun:test"\ntest("focused", () => expect(true).toBe(true))\n')
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun test" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Focused pass",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["focused behavior passes"],
+          diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context(permissionRequests))
+      const records = yield* (yield* GraphAudit.Service).tool.list({ projectID, nodeID: targetNodeID })
+      const evidence = records.find((record) => record.toolName === "graph.diagnostics.run")?.evidence
+
+      expect(JSON.parse(result.output)).toMatchObject({ ran: true, complete: true, verified: true })
+      expect(permissionRequests[0]?.patterns).toEqual(["bun run test -- test/focused.test.ts", "bun run test"])
+      expect(evidence).toMatchObject({ complete: true, passed: true, projectChecksOnly: false })
+      expect(evidence?.commands.map((command) => command.command)).toEqual([
+        "bun run test -- test/focused.test.ts",
+        "bun run test",
+      ])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("verified")
+    }),
+  )
+
+  it.instance("blocks a symlink escape before permission or command execution", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "test"), { recursive: true })
+        await symlink("/etc/hosts", path.join(test.directory, "test/escape.test.ts"))
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "true" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Symlink escape",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["focused behavior passes"],
+          diagnostics: [{ name: "test", paths: ["test/escape.test.ts"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context(permissionRequests))
+
+      expect(JSON.parse(result.output)).toMatchObject({ ran: false, reason: "verification_path_escape" })
+      expect(permissionRequests).toEqual([])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("implemented")
+    }),
+  )
+
+  it.instance("does not verify when a focused check fails even if the complete project check passes", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "scripts"), { recursive: true })
+        await mkdir(path.join(test.directory, "test"), { recursive: true })
+        await Bun.write(path.join(test.directory, "test/focused.test.ts"), "// focused sentinel\n")
+        await Bun.write(
+          path.join(test.directory, "scripts/check.ts"),
+          'process.exit(process.argv.includes("test/focused.test.ts") ? 1 : 0)\n',
+        )
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/check.ts" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Focused failure",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["focused behavior passes"],
+          diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context([]))
+      const parsed = JSON.parse(result.output)
+
+      expect(parsed).toMatchObject({ ran: true, passed: false, complete: true, verified: false })
+      expect(parsed.results.map((item: { passed: boolean }) => item.passed)).toEqual([false, true])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("implemented")
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(sessionID))?.currentNodeID).toBe(targetNodeID)
     }),
   )
 

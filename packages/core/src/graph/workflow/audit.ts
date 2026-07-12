@@ -141,11 +141,11 @@ export const layer = Layer.effect(
           node_id: input.nodeID ?? null,
           tool_name: input.toolName,
           tool_type: input.toolType,
-          input_summary: input.inputSummary ?? null,
-          output_summary: input.outputSummary ?? null,
+          input_summary: input.inputSummary?.slice(0, 1_024) ?? null,
+          output_summary: input.outputSummary?.slice(0, 1_024) ?? null,
           status: input.status,
-          error: input.error ?? null,
-          evidence: input.evidence ?? null,
+          error: input.error?.slice(0, 1_024) ?? null,
+          evidence: input.evidence ? boundedEvidence(input.evidence) : null,
         })
         .run()
         .pipe(Effect.orDie)
@@ -213,3 +213,18 @@ export const layer = Layer.effect(
 export const node = LayerNode.make({ service: Service, layer, deps: [Database.node] })
 
 export const defaultLayer = layer.pipe(Layer.provide(Database.layerFromPath(Database.path())))
+
+function boundedEvidence(evidence: VerificationEvidence): VerificationEvidence {
+  return {
+    ...evidence,
+    nodeID: evidence.nodeID.slice(0, 1_024),
+    criteria: evidence.criteria.slice(0, 64).map((criterion) => criterion.slice(0, 1_024)),
+    artifactPaths: evidence.artifactPaths.slice(0, 256),
+    commands: evidence.commands.slice(0, 32).map((command) => ({
+      ...command,
+      name: command.name.slice(0, 128),
+      command: command.command.slice(0, 2_048),
+      ...(command.excerpt === undefined ? {} : { excerpt: command.excerpt.slice(0, 8_192) }),
+    })),
+  }
+}

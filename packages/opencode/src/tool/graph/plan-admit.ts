@@ -19,6 +19,7 @@ export const PlanNode = Schema.Struct({
   category: Schema.String.pipe(Schema.optional),
   desc: Schema.String.pipe(Schema.optional),
   content: Graph.NodeContent.pipe(Schema.optional),
+  verification: Graph.VerificationSpec.pipe(Schema.optional),
   codeHash: Schema.String.pipe(Schema.optional),
   confidence: Schema.Number.pipe(Schema.optional),
 })
@@ -155,6 +156,7 @@ function planNodeInput(node: typeof PlanNode.Type): GraphPlan.PlanNodeCreate {
     ...(node.category === undefined ? {} : { category: node.category }),
     ...(node.desc === undefined ? {} : { desc: node.desc }),
     ...(node.content === undefined ? {} : { content: node.content }),
+    ...(node.verification === undefined ? {} : { verification: node.verification }),
     ...(node.codeHash === undefined ? {} : { codeHash: node.codeHash }),
     ...(node.confidence === undefined ? {} : { confidence: node.confidence }),
   }

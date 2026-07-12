@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm"
 import { DateTime, Effect, Equal, Fiber, Hash, Schema } from "effect"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { define } from "@opencode-ai/plugin/v2/effect"
+import type { VerificationSpec } from "@opencode-ai/schema/graph"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -126,6 +127,7 @@ describe("LocationServiceMap", () => {
                       type: "atomic",
                       name: "Plan status bypass",
                       level: "L2",
+                      verification: { criteria: ["observable result"], diagnostics: [{ name: "test" }] },
                       status: "verified",
                       testStatus: "passed",
                     },
@@ -361,8 +363,106 @@ describe("LocationServiceMap", () => {
                 expect(audit.find((record) => record.tool_name === "graph.diagnostics.run")?.evidence).toMatchObject({
                   kind: "diagnostics",
                   nodeID: state.targetNodeID,
+                  projectChecksOnly: true,
                   complete: true,
                   passed: true,
+                })
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("runs focused paths before complete diagnostics in the current adapter", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(async () => {
+            await fs.mkdir(path.join(dir.path, "test"), { recursive: true })
+            await fs.writeFile(path.join(dir.path, "test/focused.test.ts"), 'import { expect, test } from "bun:test"\ntest("focused", () => expect(true).toBe(true))\n')
+            await fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { test: "bun test" } }))
+          }).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const verification = {
+                  criteria: ["focused behavior passes"],
+                  diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }],
+                } as const
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ], verification).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-focused",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+                )
+                const node = yield* state.db.select().from(GraphNodeTable).where(eq(GraphNodeTable.id, state.targetNodeID)).get().pipe(Effect.orDie)
+                const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
+                const evidence = audit.find((record) => record.tool_name === "graph.diagnostics.run")?.evidence
+                expect(node).toMatchObject({ status: "verified", test_status: "passed" })
+                expect(evidence).toMatchObject({ projectChecksOnly: false, complete: true, passed: true })
+                expect(evidence?.commands.map((command) => command.command)).toEqual([
+                  "bun run test -- test/focused.test.ts",
+                  "bun run test",
+                ])
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("blocks a missing focused path before current-adapter command execution", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(() => fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { test: "true" } }))).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ], {
+                  criteria: ["focused behavior passes"],
+                  diagnostics: [{ name: "test", paths: ["test/missing.test.ts"] }],
+                }).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-missing-focused",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+                )
+                const node = yield* state.db.select().from(GraphNodeTable).where(eq(GraphNodeTable.id, state.targetNodeID)).get().pipe(Effect.orDie)
+                const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
+                expect(node?.status).toBe("implemented")
+                expect(audit.find((record) => record.tool_name === "graph.diagnostics.run")).toMatchObject({
+                  status: "blocked",
+                  output_summary: "verification_path_missing",
                 })
               }),
             ),
@@ -767,7 +867,7 @@ function withGraphMode<A, E, R>(effect: Effect.Effect<A, E, R>) {
   )
 }
 
-function setupGraphDiagnostics(directory: string, permissions: PermissionV2.Ruleset) {
+function setupGraphDiagnostics(directory: string, permissions: PermissionV2.Ruleset, verification?: VerificationSpec) {
   return Effect.gen(function* () {
     const state = yield* setupGraphSession(directory)
     yield* (yield* AgentV2.Service).transform((editor) =>
@@ -787,6 +887,7 @@ function setupGraphDiagnostics(directory: string, permissions: PermissionV2.Rule
         level: "L2",
         status: "implemented",
         test_status: "pending",
+        verification,
         confidence: 1,
       })
       .run()

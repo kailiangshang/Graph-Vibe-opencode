@@ -126,6 +126,7 @@ export function projectWorkflow(
       throw new Error(`ambiguous module membership for ${node.id}: ${modules.join(",")}`)
     }
     const module = modules.length === 1 ? graph.nodes.find((item) => item.id === modules[0]) : undefined
+    const evidence = latest.get(node.id)?.evidence
     return {
       id: node.id,
       name: node.name,
@@ -137,7 +138,7 @@ export function projectWorkflow(
       buildable: isBuildable(graph, node.id),
       current: state?.currentNodeID === node.id,
       verification: node.verification,
-      latestEvidence: latest.get(node.id)?.evidence ?? null,
+      latestEvidence: evidence ? { ...evidence, projectChecksOnly: node.verification === null } : null,
     }
   })
   const rollups = graph.nodes

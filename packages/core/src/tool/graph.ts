@@ -18,6 +18,7 @@ import { GraphArtifact } from "../graph/workflow/artifact"
 import { GraphArtifactDraft } from "../graph/workflow/artifact-draft"
 import { GraphAudit } from "../graph/workflow/audit"
 import { GraphBuild } from "../graph/workflow/build"
+import { GraphDiagnostics } from "../graph/workflow/diagnostics"
 import type { GateResult } from "../graph/workflow/gate"
 import { GraphPlan } from "../graph/workflow/plan"
 import { GraphWorkflowState } from "../graph/workflow/state"
@@ -168,8 +169,11 @@ type CommandResult = {
 }
 
 type NamedCommand = {
-  readonly name: string
+  readonly name: Graph.DiagnosticName
+  readonly executable: "bun"
+  readonly args: ReadonlyArray<string>
   readonly command: string
+  readonly focused: boolean
 }
 
 type ApplySource = {
@@ -516,12 +520,41 @@ const layer = Layer.effectDiscard(
                   },
                 )
               }
-              const detected = yield* Effect.promise(() => detectDiagnosticsCommands(session.directory))
-              const filter = input.filter
-              const commands = filter ? detected.filter((command) => command.name.includes(filter)) : detected
-              const completeDiagnostics = commands.length === detected.length
-              if (commands.length === 0 && filter) {
-                return toolOutput("Diagnostics skipped", { gate: summarizeGate(gate), ran: false, passed: false, results: [] }, { ran: false, reason: `No commands matched filter: ${filter}` })
+              const target = yield* storage.node.get(input.targetNodeID)
+              const resolution = yield* Effect.promise(() => GraphDiagnostics.resolve({
+                directory: session.directory,
+                verification: target.verification,
+                filter: input.filter,
+              }))
+              if (!resolution.ok) {
+                const evidence: Graph.VerificationEvidence = {
+                  kind: "diagnostics",
+                  nodeID: input.targetNodeID,
+                  criteria: target.verification?.criteria ?? [],
+                  artifactPaths: [],
+                  projectChecksOnly: target.verification === null,
+                  complete: false,
+                  passed: false,
+                  commands: [],
+                }
+                yield* audit.tool.record({
+                  projectID: session.projectID,
+                  sessionID: session.sessionID,
+                  nodeID: input.targetNodeID,
+                  toolName: "graph.diagnostics.run",
+                  toolType: "diagnostics",
+                  status: "blocked",
+                  outputSummary: resolution.reason,
+                  evidence,
+                })
+                return toolOutput("Diagnostics blocked", {
+                  gate: summarizeGate(gate), ran: false, passed: false, complete: false, verified: false, results: [], ...resolution,
+                }, { ran: false, passed: false, complete: false, verified: false, ...resolution })
+              }
+              const commands = resolution.commands
+              const completeDiagnostics = resolution.complete
+              if (commands.length === 0 && input.filter) {
+                return toolOutput("Diagnostics skipped", { gate: summarizeGate(gate), ran: false, passed: false, results: [] }, { ran: false, reason: `No commands matched filter: ${input.filter}` })
               }
               yield* permission.assert({
                 action: "graph.diagnostics_run",
@@ -540,7 +573,6 @@ const layer = Layer.effectDiscard(
                   testStatus: "failed",
                 })
               }
-              const target = yield* storage.node.get(input.targetNodeID)
               const artifactPaths = (yield* audit.tool.list({
                 projectID: session.projectID,
                 sessionID: session.sessionID,
@@ -553,6 +585,7 @@ const layer = Layer.effectDiscard(
                 nodeID: input.targetNodeID,
                 criteria: target.verification?.criteria ?? [],
                 artifactPaths,
+                projectChecksOnly: resolution.projectChecksOnly,
                 complete: completeDiagnostics,
                 passed: verified,
                 commands: results.map((result) => ({
@@ -1150,8 +1183,7 @@ function allowedEdgeMatrix() {
 function runDiagnostic(processes: AppProcess.Interface, command: NamedCommand, directory: string, timeoutMs: number) {
   return processes
     .run(
-      ChildProcess.make(command.command, [], {
-        shell: process.env.SHELL ?? "/bin/sh",
+      ChildProcess.make(command.executable, command.args, {
         cwd: directory,
         env: process.env,
         stdin: "ignore",
@@ -1197,19 +1229,6 @@ function diagnosticFailureReason(command: string, exitCode: number, timedOut: bo
 
 function isBunRunUsageOutput(command: string, output: string) {
   return /\bbun\b/.test(command) && /\brun\b/.test(command) && output.includes("Usage: bun run [flags] <file or script>")
-}
-
-async function detectDiagnosticsCommands(directory: string): Promise<NamedCommand[]> {
-  const pkg = await Bun.file(path.join(directory, "package.json"))
-    .json()
-    .catch(() => ({ scripts: {} }))
-  const scripts = (pkg as { scripts?: Record<string, string> }).scripts ?? {}
-  const commands = [
-    ...(scripts.test ? [{ name: "test", command: "bun run test" }] : []),
-    ...(scripts.typecheck ? [{ name: "typecheck", command: "bun run typecheck" }] : []),
-    ...(scripts.lint ? [{ name: "lint", command: "bun run lint" }] : []),
-  ]
-  return commands.length > 0 ? commands : [{ name: "test", command: "bun test" }]
 }
 
 function toToolFailure<A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, ToolFailure> {

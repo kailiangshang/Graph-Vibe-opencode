@@ -36,6 +36,12 @@ describe("Graph collaboration schemas", () => {
         diagnostics: [],
       }),
     ).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(Graph.VerificationSpec)({
+        criteria: ["observable result"],
+        diagnostics: [{ name: "build" }],
+      }),
+    ).toThrow()
   })
 
   test("accepts only safe relative diagnostic paths", () => {
@@ -64,6 +70,7 @@ describe("Graph collaboration schemas", () => {
       nodeID: "node",
       criteria: ["works"],
       artifactPaths: ["src/a.ts"],
+      projectChecksOnly: false,
       complete: true,
       passed: true,
       commands: [{ name: "test", command: "bun test", exitCode: 0, timedOut: false, passed: true, excerpt: "ok" }],
@@ -721,6 +728,7 @@ describe("GraphWorkflowState", () => {
             nodeID: atomicA.id,
             criteria: ["works"],
             artifactPaths: ["src/a.ts"],
+            projectChecksOnly: false,
             complete: true,
             passed: true,
             commands: [{ name: "test", command: "bun test", exitCode: 0, timedOut: false, passed: true, excerpt: "ok" }],
@@ -763,6 +771,7 @@ describe("GraphWorkflowState", () => {
             nodeID: atomicA.id,
             criteria: ["works"],
             artifactPaths: [],
+            projectChecksOnly: false,
             complete: true,
             passed: true,
             commands: [{ name: "test", command: "bun test", exitCode: 0, timedOut: false, passed: true, excerpt: "ok" }],
@@ -817,6 +826,7 @@ describe("GraphWorkflowState", () => {
             nodeID: atomicA.id,
             criteria: [],
             artifactPaths: [],
+            projectChecksOnly: false,
             complete: true,
             passed: true,
             commands: [],

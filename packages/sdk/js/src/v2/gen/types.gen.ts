@@ -2376,7 +2376,27 @@ export type GraphToolRun = {
   id: string
   toolName: string
   toolType: string
+  inputSummary: string | null
+  outputSummary: string | null
   status: string
+  error: string | null
+  evidence: {
+    kind: "diagnostics"
+    nodeID: string
+    criteria: Array<string>
+    artifactPaths: Array<string>
+    projectChecksOnly: boolean
+    complete: boolean
+    passed: boolean
+    commands: Array<{
+      name: string
+      command: string
+      exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | null
+      timedOut: boolean
+      passed: boolean
+      excerpt?: string
+    }>
+  } | null
   timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
@@ -2430,6 +2450,13 @@ export type GraphPlanNodePayload = {
   content?: {
     [key: string]: unknown
   }
+  verification?: {
+    criteria: Array<string>
+    diagnostics: Array<{
+      name: "test" | "typecheck" | "lint"
+      paths?: Array<string>
+    }>
+  }
   codeHash?: string
   testStatus?: "none" | "pending" | "passed" | "failed"
   confidence?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -2477,6 +2504,7 @@ export type GraphWorkflowTask = {
     nodeID: string
     criteria: Array<string>
     artifactPaths: Array<string>
+    projectChecksOnly: boolean
     complete: boolean
     passed: boolean
     commands: Array<{

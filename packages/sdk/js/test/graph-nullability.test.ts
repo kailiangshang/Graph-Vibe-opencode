@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { Graph } from "../src/v2/gen/sdk.gen"
-import type { GraphNode, GraphVersion, GraphWorkflow, GraphWorkflowTask } from "../src/v2/gen/types.gen"
+import type { GraphNode, GraphToolRun, GraphVersion, GraphWorkflow, GraphWorkflowTask } from "../src/v2/gen/types.gen"
 
 test("preserves nullable Graph response fields", () => {
   const node = {
@@ -20,11 +20,18 @@ test("preserves nullable Graph response fields", () => {
   const version = {
     message: null,
   } satisfies Pick<GraphVersion, "message">
+  const toolRun = {
+    inputSummary: null,
+    outputSummary: null,
+    error: null,
+    evidence: null,
+  } satisfies Pick<GraphToolRun, "inputSummary" | "outputSummary" | "error" | "evidence">
   const evidence = {
     kind: "diagnostics",
     nodeID: "node_test",
     criteria: [],
     artifactPaths: [],
+    projectChecksOnly: false,
     complete: false,
     passed: false,
     commands: [
@@ -52,6 +59,7 @@ test("preserves nullable Graph response fields", () => {
   expect(Object.values(node)).toEqual([null, null, null, null, null, null])
   expect(Object.values(task)).toEqual([null, null, null, null])
   expect(version.message).toBeNull()
+  expect(Object.values(toolRun)).toEqual([null, null, null, null])
   expect(evidence.commands[0].exitCode).toBeNull()
   expect(workflow).toEqual({
     mode: null,

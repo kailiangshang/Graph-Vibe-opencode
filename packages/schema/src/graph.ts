@@ -95,6 +95,7 @@ export const VerificationEvidence = Schema.Struct({
   nodeID: Schema.String,
   criteria: Schema.Array(boundedString(1_024)).check(Schema.isMaxLength(64)),
   artifactPaths: Schema.Array(RelativePath).check(Schema.isMaxLength(256)),
+  projectChecksOnly: Schema.Boolean,
   complete: Schema.Boolean,
   passed: Schema.Boolean,
   commands: Schema.Array(
