@@ -69,7 +69,7 @@ export const RelativePath = Schema.String.check(
       }
       if (value.includes("\\")) return false
       const segments = value.split("/")
-      return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..")
+      return !segments[0]?.startsWith("-") && segments.every((segment) => segment !== "" && segment !== "." && segment !== "..")
     },
     { expected: "a normalized relative path without empty, current, or parent segments" },
   ),

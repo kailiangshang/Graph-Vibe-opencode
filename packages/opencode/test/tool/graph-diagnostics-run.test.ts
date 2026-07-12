@@ -253,10 +253,10 @@ describe("graph_diagnostics_run", () => {
       const evidence = records.find((record) => record.toolName === "graph.diagnostics.run")?.evidence
 
       expect(JSON.parse(result.output)).toMatchObject({ ran: true, complete: true, verified: true })
-      expect(permissionRequests[0]?.patterns).toEqual(["bun run test -- test/focused.test.ts", "bun run test"])
+      expect(permissionRequests[0]?.patterns).toEqual(["bun run test -- ./test/focused.test.ts", "bun run test"])
       expect(evidence).toMatchObject({ complete: true, passed: true, projectChecksOnly: false })
       expect(evidence?.commands.map((command) => command.command)).toEqual([
-        "bun run test -- test/focused.test.ts",
+        "bun run test -- ./test/focused.test.ts",
         "bun run test",
       ])
       expect((yield* storage.node.get(targetNodeID)).status).toBe("verified")
@@ -297,6 +297,75 @@ describe("graph_diagnostics_run", () => {
     }),
   )
 
+  it.instance("blocks option-like focused paths before permission or command execution", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await Bun.write(path.join(test.directory, "--watch"), "sentinel\n")
+        await Bun.write(
+          path.join(test.directory, "package.json"),
+          JSON.stringify({ scripts: { test: 'bun -e \'await Bun.write("executed", "1")\'' } }),
+        )
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Option path",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["option-like paths never execute"],
+          diagnostics: [{ name: "test", paths: ["--watch"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context(permissionRequests))
+
+      expect(JSON.parse(result.output)).toMatchObject({ ran: false, reason: "verification_path_option" })
+      expect(permissionRequests).toEqual([])
+      expect(yield* Effect.promise(() => Bun.file(path.join(test.directory, "executed")).exists())).toBe(false)
+    }),
+  )
+
+  it.instance("uses bun test for persisted no-spec Bun projects without recognized scripts", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await Bun.write(path.join(test.directory, "fallback.test.ts"), 'import { expect, test } from "bun:test"\ntest("fallback", () => expect(true).toBe(true))\n')
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ name: "fallback" }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Legacy fallback",
+        level: "L2",
+        status: "implemented",
+      })
+      yield* authorize(targetNodeID)
+
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context([]))
+      const records = yield* (yield* GraphAudit.Service).tool.list({ projectID, nodeID: targetNodeID })
+      const evidence = records.find((record) => record.toolName === "graph.diagnostics.run")?.evidence
+
+      expect(JSON.parse(result.output)).toMatchObject({ ran: true, complete: true, verified: true })
+      expect(evidence).toMatchObject({ projectChecksOnly: true, complete: true, passed: true })
+      expect(evidence?.commands.map((command) => command.command)).toEqual(["bun test"])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("verified")
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(sessionID))?.currentNodeID).toBeNull()
+    }),
+  )
+
   it.instance("does not verify when a focused check fails even if the complete project check passes", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
@@ -307,7 +376,7 @@ describe("graph_diagnostics_run", () => {
         await Bun.write(path.join(test.directory, "test/focused.test.ts"), "// focused sentinel\n")
         await Bun.write(
           path.join(test.directory, "scripts/check.ts"),
-          'process.exit(process.argv.includes("test/focused.test.ts") ? 1 : 0)\n',
+          'process.exit(process.argv.includes("./test/focused.test.ts") ? 1 : 0)\n',
         )
         await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/check.ts" } }))
       })

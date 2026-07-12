@@ -205,6 +205,28 @@ describe("GraphPlan.admit", () => {
     }))
   })
 
+  test("rejects option-like verification paths at admission", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const exit = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [{
+          id: A,
+          type: "atomic",
+          name: "Task",
+          level: "L2",
+          verification: { criteria: ["observable result"], diagnostics: [{ name: "test", paths: ["--watch"] }] },
+        }],
+        edges: [],
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const storage = yield* GraphStorage.Service
+      expect((yield* storage.currentPlan({ sessionID: SID })).nodes).toEqual([])
+    }))
+  })
+
   test("does not persist partial CurrentPlan when edge validation fails", async () => {
     await run(Effect.gen(function* () {
       const plan = yield* GraphPlan.Service

@@ -416,7 +416,7 @@ describe("LocationServiceMap", () => {
                 expect(node).toMatchObject({ status: "verified", test_status: "passed" })
                 expect(evidence).toMatchObject({ projectChecksOnly: false, complete: true, passed: true })
                 expect(evidence?.commands.map((command) => command.command)).toEqual([
-                  "bun run test -- test/focused.test.ts",
+                  "bun run test -- ./test/focused.test.ts",
                   "bun run test",
                 ])
               }),
@@ -464,6 +464,102 @@ describe("LocationServiceMap", () => {
                   status: "blocked",
                   output_summary: "verification_path_missing",
                 })
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("blocks option-like focused paths before current-adapter command execution", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(async () => {
+            await fs.writeFile(path.join(dir.path, "--watch"), "sentinel\n")
+            await fs.writeFile(
+              path.join(dir.path, "package.json"),
+              JSON.stringify({ scripts: { test: 'bun -e \'await Bun.write("executed", "1")\'' } }),
+            )
+          }).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ], {
+                  criteria: ["option-like paths never execute"],
+                  diagnostics: [{ name: "test", paths: ["--watch"] }],
+                }).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-option-focused",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+                )
+                const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
+                expect(yield* Effect.promise(() => fileExists(path.join(dir.path, "executed")))).toBe(false)
+                expect(audit.find((record) => record.tool_name === "graph.diagnostics.run")).toMatchObject({
+                  status: "blocked",
+                  output_summary: "verification_path_option",
+                })
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("uses bun test for current persisted no-spec projects without recognized scripts", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(async () => {
+            await fs.writeFile(path.join(dir.path, "fallback.test.ts"), 'import { expect, test } from "bun:test"\ntest("fallback", () => expect(true).toBe(true))\n')
+            await fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ name: "fallback" }))
+          }).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ]).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-fallback",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+                )
+                const node = yield* state.db.select().from(GraphNodeTable).where(eq(GraphNodeTable.id, state.targetNodeID)).get().pipe(Effect.orDie)
+                const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
+                const evidence = audit.find((record) => record.tool_name === "graph.diagnostics.run")?.evidence
+                const workflow = yield* state.db.select().from(GraphWorkflowStateTable).where(eq(GraphWorkflowStateTable.session_id, state.sessionID)).get().pipe(Effect.orDie)
+                expect(node).toMatchObject({ status: "verified", test_status: "passed" })
+                expect(evidence).toMatchObject({ projectChecksOnly: true, complete: true, passed: true })
+                expect(evidence?.commands.map((command) => command.command)).toEqual(["bun test"])
+                expect(workflow?.current_node_id).toBeNull()
               }),
             ),
           ),
