@@ -155,6 +155,7 @@ const graphWorkflowTaskTypesPatched = patchGeneratedType(graphToolRunTypesPatche
 const graphTypesPatched = patchGeneratedType(graphWorkflowTaskTypesPatched, "GraphWorkflow", (body) =>
   patchNullableScalarFields(body, [
     ["  mode", '"atomic" | "module" | "autopilot"'],
+    ["  activeOperationKind", '"artifact_apply"'],
     ["    kind", '"atomic" | "module" | "decision" | "failure" | "pause"'],
     ["    scopeNodeID", "string"],
     ["    scopeName", "string"],
@@ -204,6 +205,7 @@ function patchNullableObjectFields(body: string, fields: ReadonlyArray<string>) 
 function patchNullableUnionField(body: string, field: string, nextField: string) {
   const pattern = new RegExp(`^${field}:\\n[\\s\\S]*?(?=^${nextField}:)`, "m")
   const matches = [...body.matchAll(new RegExp(pattern.source, "gm"))]
-  if (matches.length !== 1) throw new Error(`Graph nullability patch expected exactly one generated union field: ${field.trim()}`)
+  if (matches.length !== 1)
+    throw new Error(`Graph nullability patch expected exactly one generated union field: ${field.trim()}`)
   return body.replace(pattern, (value) => `${value.trimEnd()} | null\n`)
 }

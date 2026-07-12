@@ -1,4 +1,12 @@
-import type { GraphNode, GraphToolRun, GraphVersion, GraphWorkflow, GraphWorkflowTask } from "../../src/v2/gen/types.gen.js"
+import type {
+  GraphNode,
+  GraphToolRun,
+  GraphVersion,
+  GraphWorkflow,
+  GraphWorkflowActiveOperation,
+  GraphWorkflowModeError,
+  GraphWorkflowTask,
+} from "../../src/v2/gen/types.gen.js"
 import type { Graph } from "../../src/v2/gen/sdk.gen.js"
 
 const node = {
@@ -49,6 +57,7 @@ const evidence = {
 
 const workflow = {
   mode: null,
+  activeOperationKind: null,
   checkpoint: {
     status: "none",
     kind: null,
@@ -57,7 +66,15 @@ const workflow = {
     reason: null,
   },
   currentTask: null,
-} satisfies Pick<GraphWorkflow, "mode" | "checkpoint" | "currentTask">
+} satisfies Pick<GraphWorkflow, "mode" | "activeOperationKind" | "checkpoint" | "currentTask">
+
+const activeOperation = {
+  _tag: "GraphWorkflowActiveOperation",
+  operationKind: "artifact_apply",
+  message: "Pause or wait",
+} satisfies GraphWorkflowActiveOperation
+
+const modeError: GraphWorkflowModeError = activeOperation
 
 declare const graph: Graph
 graph.workflow
@@ -71,3 +88,4 @@ void version
 void toolRun
 void evidence
 void workflow
+void modeError

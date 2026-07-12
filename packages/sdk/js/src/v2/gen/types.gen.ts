@@ -2544,6 +2544,7 @@ export type GraphWorkflowRollup = {
 export type GraphWorkflow = {
   mode: "atomic" | "module" | "autopilot" | null
   revision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  activeOperationKind: "artifact_apply" | null
   phase: "planning" | "building" | "verifying" | "checkpoint" | "complete" | "failed"
   checkpoint: {
     status: "none" | "pending" | "approved"
@@ -2573,6 +2574,12 @@ export type GraphWorkflowRevisionConflict = {
   _tag: "GraphWorkflowRevisionConflict"
   expectedRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   actualRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  message: string
+}
+
+export type GraphWorkflowActiveOperation = {
+  _tag: "GraphWorkflowActiveOperation"
+  operationKind: "artifact_apply"
   message: string
 }
 
@@ -8809,9 +8816,9 @@ export type GraphWorkflowModeErrors = {
    */
   404: NotFoundError
   /**
-   * GraphWorkflowRevisionConflict
+   * GraphWorkflowRevisionConflict | GraphWorkflowActiveOperation
    */
-  409: GraphWorkflowRevisionConflict
+  409: GraphWorkflowRevisionConflict | GraphWorkflowActiveOperation
 }
 
 export type GraphWorkflowModeError = GraphWorkflowModeErrors[keyof GraphWorkflowModeErrors]

@@ -1,6 +1,14 @@
 import { expect, test } from "bun:test"
 import { Graph } from "../src/v2/gen/sdk.gen"
-import type { GraphNode, GraphToolRun, GraphVersion, GraphWorkflow, GraphWorkflowTask } from "../src/v2/gen/types.gen"
+import type {
+  GraphNode,
+  GraphToolRun,
+  GraphVersion,
+  GraphWorkflow,
+  GraphWorkflowActiveOperation,
+  GraphWorkflowModeError,
+  GraphWorkflowTask,
+} from "../src/v2/gen/types.gen"
 
 test("preserves nullable Graph response fields", () => {
   const node = {
@@ -46,6 +54,7 @@ test("preserves nullable Graph response fields", () => {
   } satisfies NonNullable<GraphWorkflowTask["latestEvidence"]>
   const workflow = {
     mode: null,
+    activeOperationKind: null,
     checkpoint: {
       status: "none",
       kind: null,
@@ -54,7 +63,13 @@ test("preserves nullable Graph response fields", () => {
       reason: null,
     },
     currentTask: null,
-  } satisfies Pick<GraphWorkflow, "mode" | "checkpoint" | "currentTask">
+  } satisfies Pick<GraphWorkflow, "mode" | "activeOperationKind" | "checkpoint" | "currentTask">
+  const activeOperation = {
+    _tag: "GraphWorkflowActiveOperation",
+    operationKind: "artifact_apply",
+    message: "Pause or wait",
+  } satisfies GraphWorkflowActiveOperation
+  const modeError: GraphWorkflowModeError = activeOperation
 
   expect(Object.values(node)).toEqual([null, null, null, null, null, null])
   expect(Object.values(task)).toEqual([null, null, null, null])
@@ -63,6 +78,7 @@ test("preserves nullable Graph response fields", () => {
   expect(evidence.commands[0].exitCode).toBeNull()
   expect(workflow).toEqual({
     mode: null,
+    activeOperationKind: null,
     checkpoint: {
       status: "none",
       kind: null,
@@ -72,6 +88,7 @@ test("preserves nullable Graph response fields", () => {
     },
     currentTask: null,
   })
+  expect(modeError._tag).toBe("GraphWorkflowActiveOperation")
 })
 
 test("keeps generated Graph workflow methods", () => {
