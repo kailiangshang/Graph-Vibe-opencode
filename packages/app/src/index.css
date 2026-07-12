@@ -136,6 +136,11 @@
   }
 }
 
+.graph-page[data-reduced-transparency="true"] .graph-glass {
+  background: var(--graph-glass-solid);
+  backdrop-filter: none;
+}
+
 @media (prefers-reduced-transparency: reduce) {
   .graph-glass {
     background: var(--graph-glass-solid);

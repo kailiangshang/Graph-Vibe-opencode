@@ -25,19 +25,45 @@ export function formatPlanAdmission(input: Record<string, unknown>, workflow?: W
             : workflow.mode === "autopilot"
               ? "At a decision, failure, or pause"
               : "After execution mode is selected"
+    const tasks = (workflow.tasks ?? workflow.modules.flatMap((module) => module.tasks)).filter(
+      (task, index, all) => all.findIndex((candidate) => candidate.id === task.id) === index,
+    )
+    const assigned = new Set<string>()
+    const modules = workflow.modules.map((module) => {
+      const selected = tasks.filter(
+        (task) =>
+          !assigned.has(task.id) &&
+          (task.moduleID === module.id ||
+            module.taskIDs?.includes(task.id) ||
+            module.tasks.some((item) => item.id === task.id)),
+      )
+      selected.forEach((task) => assigned.add(task.id))
+      return {
+        name: module.name,
+        tasks: selected.map((task) => [task.name, task.verification?.criteria.join("; ")].filter(Boolean).join(" · ")),
+      }
+    })
+    const ungrouped = tasks.filter((task) => !assigned.has(task.id))
     return {
       goal,
       mode,
       currentTask: workflow.currentTask?.name ?? "",
       nextStop,
       moduleCount: workflow.modules.length,
-      taskCount: workflow.modules.reduce((count, module) => count + module.tasks.length, 0),
-      modules: workflow.modules.map((module) => ({
-        name: module.name,
-        tasks: module.tasks.map((task) =>
-          [task.name, task.verification?.criteria.join("; ")].filter(Boolean).join(" · "),
-        ),
-      })),
+      taskCount: tasks.length,
+      modules: [
+        ...modules,
+        ...(ungrouped.length
+          ? [
+              {
+                name: "Ungrouped",
+                tasks: ungrouped.map((task) =>
+                  [task.name, task.verification?.criteria.join("; ")].filter(Boolean).join(" · "),
+                ),
+              },
+            ]
+          : []),
+      ],
     }
   }
   const tasks = nodes
@@ -92,6 +118,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function workflowActions(_workflow: {
   mode?: string | null
   phase: string
+  activeOperationKind?: string | null
   checkpoint: { status: string; kind?: string | null }
 }) {
   const complete = _workflow.phase === "complete"
@@ -99,6 +126,7 @@ export function workflowActions(_workflow: {
   return {
     continue: !!_workflow.mode && pending,
     pause: !!_workflow.mode && !complete && !pending && _workflow.phase !== "failed",
+    mode: !complete && _workflow.phase !== "failed" && !_workflow.activeOperationKind,
   }
 }
 
@@ -112,6 +140,11 @@ export function workflowActionFailure(action: "mode" | "continue" | "pause", err
     return {
       kind: "network" as const,
       message: "The workflow service could not be reached. Check the connection and retry this action.",
+    }
+  if (isRecord(error) && error._tag === "GraphWorkflowActiveOperation")
+    return {
+      kind: "active-workflow" as const,
+      message: "Workflow changes are active. Pause or wait for them to finish before changing execution mode.",
     }
   if (isRecord(error) && error._tag === "BadRequest" && action === "mode")
     return {
@@ -256,21 +289,33 @@ export type Workflow = {
   mode: "atomic" | "module" | "autopilot" | null
   revision: number | string
   phase: string
+  activeOperationKind?: "artifact_apply" | null
   checkpoint: { status: string; kind?: string | null; reason?: string | null }
   currentTask: { id: string; name: string; moduleName?: string | null; current: boolean } | null
   progress: { total: number | string; verified: number | string; failed: number | string; percent: number | string }
   modules: ReadonlyArray<{
     id: string
     name: string
+    taskIDs?: readonly string[]
     tasks: ReadonlyArray<{
       id: string
       name: string
+      moduleID?: string | null
       status: string
       testStatus: string
       current: boolean
       verification?: { criteria: readonly string[] } | null
       latestEvidence?: { passed: boolean; commands: ReadonlyArray<{ name: string; passed: boolean }> } | null
     }>
+  }>
+  tasks?: ReadonlyArray<{
+    id: string
+    name: string
+    moduleID?: string | null
+    status: string
+    testStatus: string
+    current: boolean
+    verification?: { criteria: readonly string[] } | null
   }>
 }
 

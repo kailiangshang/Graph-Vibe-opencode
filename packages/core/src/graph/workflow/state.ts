@@ -47,7 +47,7 @@ export class ArtifactApplyOwnershipConflict extends Schema.TaggedErrorClass<Arti
 
 export class ActiveWorkflowError extends Schema.TaggedErrorClass<ActiveWorkflowError>()(
   "GraphWorkflowState.ActiveWorkflowError",
-  { sessionID: Schema.String },
+  { sessionID: Schema.String, activeOperationKind: Schema.Literal("artifact_apply") },
 ) {}
 
 export class ModuleScopeError extends Schema.TaggedErrorClass<ModuleScopeError>()(
@@ -219,13 +219,11 @@ export const layer = Layer.effect(
             if (revision !== input.expectedRevision) {
               return yield* new RevisionConflict({ expectedRevision: input.expectedRevision, actualRevision: revision })
             }
-            if (
-              current &&
-              current.mode !== null &&
-              current.currentNodeID !== null &&
-              current.checkpointStatus !== "pending"
-            ) {
-              return yield* new ActiveWorkflowError({ sessionID: input.sessionID })
+            if (current?.activeOperationID && current.activeOperationKind) {
+              return yield* new ActiveWorkflowError({
+                sessionID: input.sessionID,
+                activeOperationKind: current.activeOperationKind,
+              })
             }
             const graph = current?.currentNodeID
               ? yield* storage.currentPlan({ sessionID: input.sessionID })

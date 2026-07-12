@@ -98,6 +98,15 @@ export class GraphWorkflowRevisionConflict extends Schema.TaggedErrorClass<Graph
   { httpApiStatus: 409 },
 ) {}
 
+export class GraphWorkflowActiveOperation extends Schema.TaggedErrorClass<GraphWorkflowActiveOperation>()(
+  "GraphWorkflowActiveOperation",
+  {
+    operationKind: Schema.Literal("artifact_apply"),
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+
 const AdmitResultResponse = Schema.Struct({
   nodesCreated: Schema.Number,
   edgesCreated: Schema.Number,
@@ -196,6 +205,7 @@ const WorkflowModuleResponse = Schema.Struct({
 const WorkflowResponse = Schema.Struct({
   mode: Schema.NullOr(Graph.ExecutionMode),
   revision: Schema.Number,
+  activeOperationKind: Schema.NullOr(Schema.Literal("artifact_apply")),
   phase: Schema.Literals(["planning", "building", "verifying", "checkpoint", "complete", "failed"]),
   checkpoint: Schema.Struct({
     status: Graph.CheckpointStatus,
@@ -410,7 +420,12 @@ export const GraphApi = HttpApi.make("graph")
           query: SessionRequiredQuery,
           payload: WorkflowModePayload,
           success: described(WorkflowResponse, "Updated session workflow projection"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, GraphWorkflowRevisionConflict],
+          error: [
+            HttpApiError.BadRequest,
+            ApiNotFoundError,
+            GraphWorkflowRevisionConflict,
+            GraphWorkflowActiveOperation,
+          ],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.workflowMode",

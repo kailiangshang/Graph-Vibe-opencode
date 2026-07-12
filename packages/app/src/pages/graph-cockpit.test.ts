@@ -64,7 +64,7 @@ describe("Graph cockpit view state", () => {
     ).toEqual({
       continue: false,
       pause: true,
-      mode: false,
+      mode: true,
       continuePending: false,
       pausePending: true,
     })
@@ -77,6 +77,25 @@ describe("Graph cockpit view state", () => {
       continue: false,
       pause: false,
     })
+    expect(
+      cockpitActions({
+        mode: "atomic",
+        phase: "building",
+        activeOperationKind: null,
+        checkpoint: { status: "approved" },
+      }),
+    ).toMatchObject({ mode: true })
+    expect(
+      cockpitActions({
+        mode: "atomic",
+        phase: "building",
+        activeOperationKind: "artifact_apply",
+        checkpoint: { status: "approved" },
+      }),
+    ).toMatchObject({ mode: false })
+    expect(
+      cockpitActions({ mode: "atomic", phase: "checkpoint", checkpoint: { status: "pending", kind: "module" } }),
+    ).toMatchObject({ mode: true, continue: true })
   })
 
   test("announces current task, mode, and progress without internal names", () => {

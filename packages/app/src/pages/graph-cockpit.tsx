@@ -7,14 +7,19 @@ export const COCKPIT_REGIONS = ["Task rail", "Workflow graph", "Task details"] a
 export const MOBILE_TABS = ["tasks", "graph", "details"] as const
 
 export function cockpitActions(
-  workflow: { mode?: string | null; phase: string; checkpoint: { status: string; kind?: string | null } },
+  workflow: {
+    mode?: string | null
+    phase: string
+    activeOperationKind?: string | null
+    checkpoint: { status: string; kind?: string | null }
+  },
   pending?: "mode" | "continue" | "pause",
 ) {
   const checkpoint = workflow.checkpoint.status === "pending"
   return {
     continue: !!workflow.mode && checkpoint,
     pause: !!workflow.mode && !checkpoint && workflow.phase !== "complete" && workflow.phase !== "failed",
-    mode: workflow.phase === "planning" || checkpoint,
+    mode: workflow.phase !== "complete" && workflow.phase !== "failed" && !workflow.activeOperationKind,
     continuePending: pending === "continue",
     pausePending: pending === "pause",
   }
@@ -23,6 +28,7 @@ export function cockpitActions(
 type MinimalWorkflow = {
   mode?: string | null
   phase: string
+  activeOperationKind?: string | null
   tasks: readonly unknown[]
   checkpoint: { status: string; kind?: string | null }
 }
@@ -98,6 +104,7 @@ type CockpitWorkflow = {
   mode: "atomic" | "module" | "autopilot" | null
   revision: number
   phase: string
+  activeOperationKind?: "artifact_apply" | null
   checkpoint: {
     status: string
     kind?: string | null
@@ -283,7 +290,9 @@ export function GraphCockpit(props: {
           </select>
         </label>
         <Show when={!actions().mode && props.workflow.phase !== "complete" && props.workflow.phase !== "failed"}>
-          <span class="max-w-40 text-xs text-text-weak">Pause the workflow before changing execution mode.</span>
+          <span class="max-w-40 text-xs text-text-weak">
+            Pause or wait for active workflow changes before changing execution mode.
+          </span>
         </Show>
         <div class="min-w-36" aria-label={`${props.workflow.progress.percent}% complete`}>
           <div class="mb-1 flex justify-between text-xs text-text-weak">

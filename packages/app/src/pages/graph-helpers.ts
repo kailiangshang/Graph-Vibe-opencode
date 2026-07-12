@@ -28,6 +28,10 @@ export type LevelFilter = "all" | "L1" | "L2"
 export const CURRENT_PLAN_EMPTY_MESSAGE =
   "No Current Plan nodes yet. Describe your goal in Graph Vibe to create a plan."
 
+export function prefersReducedTransparency(matchMedia: (query: string) => { matches: boolean }) {
+  return matchMedia("(prefers-reduced-transparency: reduce)").matches
+}
+
 export function workflowMutationFailure(
   action: "mode" | "continue" | "pause",
   error: unknown,
@@ -44,6 +48,12 @@ export function workflowMutationFailure(
       kind: "network",
       refresh: false,
       message: "The workflow service could not be reached. Check the connection and retry this action.",
+    }
+  if (tag === "GraphWorkflowActiveOperation")
+    return {
+      kind: "active-workflow",
+      refresh: false,
+      message: "Workflow changes are active. Pause or wait for them to finish before changing execution mode.",
     }
   if (tag === "BadRequest" && action === "mode")
     return {

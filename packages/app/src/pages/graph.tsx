@@ -11,6 +11,7 @@ import {
   type GraphView,
   normalizeWorkflow,
   reconcileSelection,
+  prefersReducedTransparency,
   workflowMutationFailure,
 } from "./graph-helpers"
 import { useSessionLayout } from "./session/session-layout"
@@ -148,7 +149,12 @@ export default function GraphPage() {
     })
 
   return (
-    <div class="graph-page h-full min-h-0 bg-background-base">
+    <div
+      class="graph-page h-full min-h-0 bg-background-base"
+      data-reduced-transparency={
+        typeof window !== "undefined" ? prefersReducedTransparency(window.matchMedia.bind(window)) : false
+      }
+    >
       <Show when={viewState() === "loading"}>
         <GraphState title="Calibrating workflow" detail="Loading tasks, authority, and verification evidence.">
           <Spinner />

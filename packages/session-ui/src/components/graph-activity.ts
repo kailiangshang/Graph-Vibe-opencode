@@ -5,25 +5,45 @@ export function graphActivityError(error: string) {
   return error.replace(/\bgraph_[a-z0-9_]+\b/gi, "Graph workflow activity")
 }
 
-type PlanTask = { id: string; name: string; verification?: { criteria?: readonly string[] } | null }
+type PlanTask = {
+  id: string
+  name: string
+  moduleID?: string | null
+  verification?: { criteria?: readonly string[] } | null
+}
 export type WorkflowProjection = {
   mode?: string | null
   phase?: string
   currentTask?: { id: string; name: string; moduleName?: string | null } | null
   checkpoint?: { status: string; kind?: string | null }
-  modules?: Array<{ id: string; name: string; tasks: PlanTask[] }>
+  modules?: Array<{ id: string; name: string; taskIDs?: readonly string[]; tasks: PlanTask[] }>
+  tasks?: PlanTask[]
 }
 
 export function graphPlanCard(input: Record<string, unknown>, workflow?: WorkflowProjection) {
   if (workflow?.modules) {
+    const tasks = uniqueTasks(workflow.tasks ?? workflow.modules.flatMap((module) => module.tasks))
+    const assigned = new Set<string>()
+    const modules = workflow.modules.map((module) => {
+      const selected = tasks.filter(
+        (task) =>
+          !assigned.has(task.id) &&
+          (task.moduleID === module.id ||
+            module.taskIDs?.includes(task.id) ||
+            module.tasks.some((item) => item.id === task.id)),
+      )
+      selected.forEach((task) => assigned.add(task.id))
+      return { ...module, tasks: selected }
+    })
+    const ungrouped = tasks.filter((task) => !assigned.has(task.id))
     return {
       goal: goal(input),
       mode: title(workflow.mode),
       currentTask: workflow.currentTask?.name ?? "No current task",
       nextStop: nextStop(workflow.mode, workflow.checkpoint),
       moduleCount: workflow.modules.length,
-      taskCount: workflow.modules.reduce((count, module) => count + module.tasks.length, 0),
-      modules: workflow.modules,
+      taskCount: tasks.length,
+      modules: [...modules, ...(ungrouped.length ? [{ id: null, name: "Ungrouped", tasks: ungrouped }] : [])],
     }
   }
   const nodes = Array.isArray(input.nodes) ? input.nodes.filter(record) : []
@@ -56,6 +76,10 @@ export function graphPlanCard(input: Record<string, unknown>, workflow?: Workflo
     taskCount: tasks.length,
     modules: [...grouped, ...(ungrouped.length ? [{ id: null, name: "Ungrouped", tasks: ungrouped }] : [])],
   }
+}
+
+function uniqueTasks(tasks: readonly PlanTask[]) {
+  return tasks.filter((task, index) => tasks.findIndex((candidate) => candidate.id === task.id) === index)
 }
 
 export function graphActivityInfo(

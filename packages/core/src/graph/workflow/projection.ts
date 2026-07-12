@@ -51,6 +51,7 @@ export interface WorkflowModule extends WorkflowRollup {
 export interface Projection {
   readonly mode: State["mode"]
   readonly revision: number
+  readonly activeOperationKind: State["activeOperationKind"]
   readonly phase: "planning" | "building" | "verifying" | "checkpoint" | "complete" | "failed"
   readonly checkpoint: {
     readonly status: State["checkpointStatus"]
@@ -171,6 +172,7 @@ export function projectWorkflow(
   return {
     mode: state?.mode ?? null,
     revision: state?.revision ?? 0,
+    activeOperationKind: state?.activeOperationKind ?? null,
     phase: phase(state, progress, currentTask),
     checkpoint: {
       status: state?.checkpointStatus ?? "none",

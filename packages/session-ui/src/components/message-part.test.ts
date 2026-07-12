@@ -102,4 +102,48 @@ describe("graphActivityInfo", () => {
       taskCount: 1,
     })
   })
+
+  test("groups every top-level workflow task once without counting Ungrouped as a module", () => {
+    const mixed = graphPlanCard(
+      {},
+      {
+        mode: "module",
+        checkpoint: { status: "approved" },
+        currentTask: null,
+        tasks: [
+          { id: "task-a", name: "Module task", moduleID: "module-a" },
+          { id: "task-b", name: "Loose task", moduleID: null },
+          { id: "task-b", name: "Loose task duplicate", moduleID: null },
+        ],
+        modules: [
+          { id: "module-a", name: "First module", taskIDs: ["task-a"], tasks: [{ id: "task-a", name: "Module task" }] },
+          { id: "module-b", name: "Second module", taskIDs: [], tasks: [] },
+        ],
+      },
+    )
+    expect(mixed).toMatchObject({ moduleCount: 2, taskCount: 2 })
+    expect(mixed.modules.map((module) => [module.name, module.tasks.map((task) => task.id)])).toEqual([
+      ["First module", ["task-a"]],
+      ["Second module", []],
+      ["Ungrouped", ["task-b"]],
+    ])
+
+    const ungrouped = graphPlanCard(
+      {},
+      {
+        mode: null,
+        checkpoint: { status: "none" },
+        currentTask: null,
+        tasks: [
+          { id: "task-a", name: "First", moduleID: null },
+          { id: "task-b", name: "Second", moduleID: null },
+        ],
+        modules: [],
+      },
+    )
+    expect(ungrouped).toMatchObject({ moduleCount: 0, taskCount: 2 })
+    expect(ungrouped.modules.map((module) => [module.name, module.tasks.map((task) => task.id)])).toEqual([
+      ["Ungrouped", ["task-a", "task-b"]],
+    ])
+  })
 })
