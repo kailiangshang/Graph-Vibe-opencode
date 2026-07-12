@@ -32,11 +32,25 @@ const workflow = {
   modules: [{ id: "module", name: "UI", progress: { verified: 0, total: 1 }, tasks: [task] }],
 }
 
-test("renders valid checkpoint actions and dispatches task selection and locate", () => {
+test("renders valid checkpoint actions and dispatches task selection and locate", async () => {
+  const matchMedia = window.matchMedia
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener() {},
+    removeListener() {},
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia
   const root = document.createElement("div")
   document.body.append(root)
   const selected: Array<string | null> = []
+  const centerRequests: string[] = []
   let continued = 0
+  let returned = 0
+  let viewed = 0
   const dispose = render(
     () =>
       createComponent(GraphCockpit, {
@@ -59,6 +73,11 @@ test("renders valid checkpoint actions and dispatches task selection and locate"
         selectedNodeID: null,
         onSelectNode: (id) => selected.push(id),
         onContinue: () => continued++,
+        projectName: "Graph Vibe",
+        sessionTitle: "Cockpit polish",
+        onBackToSession: () => returned++,
+        onViewChanges: () => viewed++,
+        onCenterRequest: (id, token) => centerRequests.push(`${id}:${token}`),
       }),
     root,
   )
@@ -69,16 +88,31 @@ test("renders valid checkpoint actions and dispatches task selection and locate"
     ["graph-tab-details", "graph-panel-details"],
   ])
   expect(root.textContent).toContain("Continue")
+  expect(root.textContent).toContain("Graph Vibe")
+  expect(root.textContent).toContain("Cockpit polish")
+  expect(root.textContent).toContain("Verify phase")
   expect(root.textContent).not.toContain("Pause")
 
   root.querySelector<HTMLButtonElement>(".graph-action.primary")!.click()
   expect(continued).toBe(1)
   root.querySelector<HTMLButtonElement>(".graph-task")!.click()
+  await Bun.sleep(1)
   expect(selected.at(-1)).toBe("task")
+  expect(centerRequests).toEqual(["task:1"])
   root.querySelector<HTMLButtonElement>(".graph-locate")!.click()
+  await Bun.sleep(1)
   expect(selected).toEqual(["task", "task"])
+  expect(centerRequests).toEqual(["task:1", "task:2"])
+  root.querySelector<HTMLButtonElement>(".graph-locate")!.click()
+  await Bun.sleep(1)
+  expect(centerRequests).toEqual(["task:1", "task:2", "task:3"])
+  root.querySelector<HTMLButtonElement>('[aria-label="Back to session"]')!.click()
+  root.querySelector<HTMLButtonElement>('[aria-label="View changes for Build rail"]')!.click()
+  expect(returned).toBe(1)
+  expect(viewed).toBe(1)
   dispose()
   root.remove()
+  window.matchMedia = matchMedia
 })
 
 test("renders Pause only for an active authorized workflow", () => {
@@ -97,11 +131,188 @@ test("renders Pause only for an active authorized workflow", () => {
     root,
   )
   expect(root.textContent).toContain("Pause")
+  expect(root.textContent).toContain("Pause the workflow before changing execution mode")
   expect(root.textContent).not.toContain("Continue")
-  root.querySelector<HTMLButtonElement>(".graph-action.secondary")!.click()
+  ;[...root.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Pause")!.click()
   expect(paused).toBe(1)
+  const inspectorPause = [...root.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Pause",
+  )
+  expect(inspectorPause).toBeDefined()
   dispose()
   root.remove()
+})
+
+test("renders no-mode, paused, failed, complete, and action-error states with valid actions", () => {
+  const cases = [
+    {
+      name: "Execution mode required",
+      value: { ...workflow, mode: null, phase: "planning", checkpoint: { status: "none", kind: null } },
+      hasContinue: false,
+      hasPause: false,
+    },
+    {
+      name: "Workflow paused",
+      value: { ...workflow, phase: "checkpoint", checkpoint: { status: "pending", kind: "pause" } },
+      hasContinue: true,
+      hasPause: false,
+    },
+    {
+      name: "Workflow failed",
+      value: { ...workflow, phase: "failed", checkpoint: { status: "none", kind: null } },
+      hasContinue: false,
+      hasPause: false,
+    },
+    {
+      name: "Workflow complete",
+      value: { ...workflow, phase: "complete", checkpoint: { status: "none", kind: null } },
+      hasContinue: false,
+      hasPause: false,
+    },
+  ] as const
+  cases.forEach((item) => {
+    const root = document.createElement("div")
+    document.body.append(root)
+    const dispose = render(
+      () =>
+        createComponent(GraphCockpit, {
+          workflow: item.value,
+          graph: graphWithTask(),
+          selectedNodeID: "task",
+          onSelectNode: () => {},
+        }),
+      root,
+    )
+    expect(root.textContent).toContain(item.name)
+    expect([...root.querySelectorAll("button")].some((button) => button.textContent === "Continue")).toBe(
+      item.hasContinue,
+    )
+    expect([...root.querySelectorAll("button")].some((button) => button.textContent === "Pause")).toBe(item.hasPause)
+    dispose()
+    root.remove()
+  })
+
+  const root = document.createElement("div")
+  document.body.append(root)
+  const dispose = render(
+    () =>
+      createComponent(GraphCockpit, {
+        workflow,
+        graph: graphWithTask(),
+        selectedNodeID: "task",
+        onSelectNode: () => {},
+        actionError: "The workflow service could not be reached. Check the connection and retry this action.",
+      }),
+    root,
+  )
+  expect(root.querySelector('[role="alert"]')?.textContent).toContain("could not be reached")
+  dispose()
+  root.remove()
+})
+
+test("mobile task activation retains Tasks and Locate recenters the same task", async () => {
+  const matchMedia = window.matchMedia
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes("max-width"),
+    media: query,
+    onchange: null,
+    addListener() {},
+    removeListener() {},
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia
+  const root = document.createElement("div")
+  document.body.append(root)
+  const centerRequests: string[] = []
+  const dispose = render(
+    () =>
+      createComponent(GraphCockpit, {
+        workflow,
+        graph: graphWithTask(),
+        selectedNodeID: null,
+        onSelectNode: () => {},
+        onCenterRequest: (id, token) => centerRequests.push(`${id}:${token}`),
+      }),
+    root,
+  )
+  root.querySelector<HTMLButtonElement>(".graph-task")!.click()
+  await Bun.sleep(1)
+  expect(centerRequests).toEqual([])
+  root.querySelector<HTMLButtonElement>(".graph-locate")!.click()
+  await Bun.sleep(1)
+  root.querySelector<HTMLButtonElement>(".graph-locate")!.click()
+  await Bun.sleep(1)
+  expect(centerRequests).toEqual(["task:1", "task:2"])
+  dispose()
+  root.remove()
+  window.matchMedia = matchMedia
+})
+
+test("keeps a long desktop task rail scrollable and preserves failed-current indicators across surfaces", () => {
+  const failed = { ...task, status: "implemented", testStatus: "failed", buildable: false }
+  const tasks = Array.from({ length: 30 }, (_, index) => ({
+    ...failed,
+    id: `task-${index}`,
+    name: `Overflow task ${index + 1}`,
+    current: index === 0,
+  }))
+  const root = document.createElement("div")
+  root.className = "dark"
+  document.body.append(root)
+  const dispose = render(
+    () =>
+      createComponent(GraphCockpit, {
+        workflow: {
+          ...workflow,
+          currentTask: { id: "task-0", name: "Overflow task 1", moduleName: "UI" },
+          tasks,
+          modules: [{ id: "module", name: "UI", progress: { verified: 0, total: 30 }, tasks }],
+        },
+        graph: {
+          nodes: tasks.map((item) => ({ ...graphWithTask().nodes[0], id: item.id, name: item.name })),
+          edges: [],
+        },
+        selectedNodeID: "task-0",
+        onSelectNode: () => {},
+      }),
+    root,
+  )
+  expect(root.querySelector(".graph-rail")?.classList.contains("overflow-y-auto")).toBe(true)
+  expect(root.querySelectorAll(".graph-task")).toHaveLength(30)
+  expect(root.textContent?.match(/Current · Selected · Failed · Blocked/g)?.length).toBeGreaterThanOrEqual(2)
+  expect(root.closest(".dark")).not.toBeNull()
+  dispose()
+  root.remove()
+})
+
+test("renders the cockpit under both light and dark theme roots", () => {
+  for (const theme of ["light", "dark"]) {
+    const root = document.createElement("div")
+    root.className = theme
+    document.body.append(root)
+    const dispose = render(
+      () =>
+        createComponent(GraphCockpit, {
+          workflow,
+          graph: graphWithTask(),
+          selectedNodeID: "task",
+          onSelectNode: () => {},
+        }),
+      root,
+    )
+    expect(root.querySelector('[aria-label="Graph workflow cockpit"]')).not.toBeNull()
+    expect(root.classList.contains(theme)).toBe(true)
+    dispose()
+    root.remove()
+  }
+})
+
+test("ships reduced-motion and reduced-transparency visual contracts", async () => {
+  const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text()
+  expect(css).toContain("@media (prefers-reduced-motion: reduce)")
+  expect(css).toContain("@media (prefers-reduced-transparency: reduce)")
+  expect(css).toContain("backdrop-filter: none")
 })
 
 test("canvas selects any node, double-click centers it, and empty selection returns to the caller", () => {
@@ -238,4 +449,22 @@ function pointer(type: string, clientX: number, clientY: number) {
   const event = new Event(type, { bubbles: true })
   Object.assign(event, { clientX, clientY, pointerId: 1 })
   return event
+}
+
+function graphWithTask() {
+  return {
+    nodes: [
+      {
+        id: "task",
+        name: "Build rail",
+        type: "atomic",
+        level: "L2",
+        status: "pending",
+        testStatus: "none",
+        priority: null,
+        sessionID: "ses",
+      },
+    ],
+    edges: [],
+  }
 }

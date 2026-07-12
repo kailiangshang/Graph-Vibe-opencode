@@ -79,7 +79,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
-import { formatPlanAdmission, graphToolActivity, graphToolError } from "../../graph/workflow"
+import { formatPlanAdmission, graphToolActivity, graphToolError, graphToolSuccessDetails } from "../../graph/workflow"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
@@ -1794,7 +1794,11 @@ function GenericTool(props: ToolProps) {
   const { theme } = useTheme()
   const ctx = use()
   const sdk = useSDK()
-  const output = createMemo(() => props.output?.trim() ?? "")
+  const output = createMemo(() => {
+    const value = props.output?.trim() ?? ""
+    if (!props.tool.startsWith("graph_") || props.part.state.status !== "completed") return value
+    return graphToolSuccessDetails(props.tool, props.input, value)
+  })
   const [expanded, setExpanded] = createSignal(false)
   const maxLines = 3
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6))
@@ -1849,6 +1853,10 @@ function GenericTool(props: ToolProps) {
           <box gap={1}>
             <text fg={theme.text}>Goal: {card().goal}</text>
             <text fg={theme.textMuted}>Mode: {card().mode}</text>
+            <text fg={theme.textMuted}>
+              {card().moduleCount} {card().moduleCount === 1 ? "module" : "modules"} · {card().taskCount} atomic{" "}
+              {card().taskCount === 1 ? "task" : "tasks"}
+            </text>
             <text fg={theme.text}>Current task: {card().currentTask || "Pending admission"}</text>
             <text fg={theme.textMuted}>Next stop: {card().nextStop}</text>
             <For each={card().modules}>

@@ -10,6 +10,12 @@ export function GraphPlanCard(props: { card: ReturnType<typeof graphPlanCard> })
       </div>
       <div class="flex flex-wrap gap-3 text-12-regular text-text-base">
         <span>Mode: {props.card.mode}</span>
+        <span>
+          {props.card.moduleCount} {props.card.moduleCount === 1 ? "module" : "modules"}
+        </span>
+        <span>
+          {props.card.taskCount} atomic {props.card.taskCount === 1 ? "task" : "tasks"}
+        </span>
         <span>Current task: {props.card.currentTask ?? "Pending admission"}</span>
         <span>Next stop: {props.card.nextStop}</span>
       </div>

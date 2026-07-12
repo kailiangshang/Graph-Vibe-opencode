@@ -20,12 +20,13 @@ test("Graph Vibe registers Graph commands and renders onboarding", async () => {
   process.env.OPENCODE_ENABLE_GRAPH_MODE = "1"
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
   const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  void mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventSource()
   const calls = createFetch((url) => {
     if (url.pathname === "/config/providers")
       return json({ providers: [{ id: "test", name: "Test", models: {} }], default: {} })
     if (url.pathname === "/provider") return json([])
+    return undefined
   })
   let api: TuiPluginApi | undefined
   let started!: () => void
@@ -106,7 +107,7 @@ test("OpenCode does not register Graph commands", async () => {
   delete process.env.OPENCODE_ENABLE_GRAPH_MODE
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
   const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  void mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventSource()
   let api: TuiPluginApi | undefined
   let started!: () => void
@@ -136,6 +137,98 @@ test("OpenCode does not register Graph commands", async () => {
 
     await ready
     expect(api?.keymap.getCommands().some((command) => command.name.startsWith("graph."))).toBe(false)
+    api?.keymap.dispatchCommand("app.exit")
+    await task
+  } finally {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    mock.restore()
+  }
+})
+
+test("an open Graph status dialog replaces its projection after graph.plan.updated", async () => {
+  process.env.OPENCODE_CLIENT = "graph-vibe"
+  process.env.OPENCODE_ENABLE_GRAPH_MODE = "1"
+  const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
+  const core = await import("@opentui/core")
+  void mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  const events = createEventSource()
+  const session = {
+    id: "ses_graph",
+    slug: "ses_graph",
+    projectID: "proj_test",
+    directory,
+    title: "Graph status refresh",
+    version: "dev",
+    time: { created: 1, updated: 1 },
+  }
+  let currentTask = "Initial task"
+  let api: TuiPluginApi | undefined
+  let started!: () => void
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const workflow = () => ({
+    mode: "module",
+    revision: currentTask === "Initial task" ? 1 : 2,
+    phase: "building",
+    checkpoint: { status: "approved", kind: null, reason: null },
+    currentTask: { id: "task", name: currentTask, moduleName: "Interface", current: true },
+    progress: { total: 1, verified: 0, failed: 0, percent: 0 },
+    modules: [
+      {
+        id: "module",
+        name: "Interface",
+        tasks: [{ id: "task", name: currentTask, status: "pending", testStatus: "none", current: true }],
+      },
+    ],
+  })
+  const calls = createFetch((url) => {
+    if (url.pathname === "/config/providers")
+      return json({ providers: [{ id: "test", name: "Test", models: {} }], default: {} })
+    if (url.pathname === "/provider") return json([])
+    if (url.pathname === "/session") return json([session])
+    if (url.pathname === "/session/ses_graph") return json(session)
+    if (url.pathname === "/graph/workflow") return json(workflow())
+    return undefined
+  }, events)
+
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        url: "http://127.0.0.1:4096",
+        webUrl: "http://localhost:4444",
+        directory,
+        config: createTuiResolvedConfig({ plugin_enabled: {} }),
+        fetch: calls.fetch,
+        events: events.source,
+        args: { sessionID: session.id },
+        pluginHost: {
+          async start(input) {
+            api = input.api
+            started()
+          },
+          async dispose() {},
+        },
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+    )
+    await ready
+    await Bun.sleep(25)
+    api?.keymap.dispatchCommand("graph.status")
+    await Bun.sleep(25)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("Initial task")
+
+    currentTask = "Advanced task"
+    events.emit({
+      directory,
+      payload: { id: "evt_graph", type: "graph.plan.updated", properties: { projectID: "proj_test" } },
+    })
+    await Bun.sleep(25)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("Advanced task")
+    expect(setup.captureCharFrame()).not.toContain("Initial task")
+
     api?.keymap.dispatchCommand("app.exit")
     await task
   } finally {

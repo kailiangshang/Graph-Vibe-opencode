@@ -30,6 +30,8 @@ export function formatPlanAdmission(input: Record<string, unknown>, workflow?: W
       mode,
       currentTask: workflow.currentTask?.name ?? "",
       nextStop,
+      moduleCount: workflow.modules.length,
+      taskCount: workflow.modules.reduce((count, module) => count + module.tasks.length, 0),
       modules: workflow.modules.map((module) => ({
         name: module.name,
         tasks: module.tasks.map((task) =>
@@ -68,6 +70,8 @@ export function formatPlanAdmission(input: Record<string, unknown>, workflow?: W
     mode: "Not selected",
     currentTask: typeof tasks[0]?.name === "string" ? tasks[0].name : "",
     nextStop: "After execution mode is selected",
+    moduleCount: modules.length,
+    taskCount: tasks.length,
     modules: grouped.map((module) => ({
       name: module.name,
       tasks: module.tasks.map((task) => {
@@ -98,6 +102,39 @@ export function workflowActions(_workflow: {
   }
 }
 
+export function workflowActionFailure(action: "mode" | "continue" | "pause", error: unknown) {
+  if (isRevisionConflict(error))
+    return {
+      kind: "revision-conflict" as const,
+      message: "The workflow changed in another client. Status was refreshed; review it and explicitly retry.",
+    }
+  if (error instanceof Error)
+    return {
+      kind: "network" as const,
+      message: "The workflow service could not be reached. Check the connection and retry this action.",
+    }
+  if (isRecord(error) && error._tag === "BadRequest" && action === "mode")
+    return {
+      kind: "active-workflow" as const,
+      message: "Execution mode cannot change while work is active. Pause the workflow first.",
+    }
+  if (isRecord(error) && error._tag === "BadRequest" && action === "continue")
+    return {
+      kind: "invalid-action" as const,
+      message: "Continue is unavailable for the current workflow state. Review the checkpoint and available actions.",
+    }
+  if (isRecord(error) && error._tag === "BadRequest")
+    return {
+      kind: "apply-rejected" as const,
+      message:
+        "Pause was not accepted at the current mutation boundary. Wait for the active change to finish, then retry.",
+    }
+  return {
+    kind: "rejected" as const,
+    message: "The workflow action was rejected. Review the current state before retrying.",
+  }
+}
+
 type StartModeClient = {
   graph: {
     workflow(input: {
@@ -117,22 +154,28 @@ export async function persistGraphStartMode(
   input: { session: string; directory?: string; mode: "atomic" | "module" | "autopilot" },
   start: () => void,
 ) {
-  const current = await client.graph.workflow({ session: input.session, directory: input.directory })
-  if (!current.data || !client.graph.workflowMode)
+  const current = await client.graph
+    .workflow({ session: input.session, directory: input.directory })
+    .catch((error) => ({ error }))
+  if (current.error instanceof Error) return { ok: false as const, ...workflowActionFailure("mode", current.error) }
+  if (!("data" in current) || !current.data || !client.graph.workflowMode)
     return {
       ok: false as const,
       message: "No durable workflow exists for this session. Create or select a session, then retry /graph-start.",
     }
-  const changed = await client.graph.workflowMode({
-    session: input.session,
-    directory: input.directory,
-    graphWorkflowModePayload: { mode: input.mode, expectedRevision: Number(current.data.revision) },
-  })
-  if (changed.error || !changed.data)
-    return {
-      ok: false as const,
-      message: "Execution mode could not be saved because the workflow changed. Review status and retry /graph-start.",
-    }
+  const changed = await client.graph
+    .workflowMode({
+      session: input.session,
+      directory: input.directory,
+      graphWorkflowModePayload: { mode: input.mode, expectedRevision: Number(current.data.revision) },
+    })
+    .catch((error) => ({ error }))
+  if (changed.error || !("data" in changed) || !changed.data) {
+    const failure = workflowActionFailure("mode", changed.error)
+    if (failure.kind === "revision-conflict")
+      await client.graph.workflow({ session: input.session, directory: input.directory })
+    return { ok: false as const, kind: failure.kind, message: failure.message }
+  }
   start()
   return { ok: true as const }
 }
@@ -157,14 +200,19 @@ export async function continueWorkflow<T extends { revision: number | string }>(
   client: WorkflowClient<T>,
   input: { session: string; directory?: string },
 ) {
-  const current = await client.graph.workflow(input)
-  if (!current.data || !client.graph.workflowApprove)
+  const current = await client.graph.workflow(input).catch((error) => ({ error }))
+  if (current.error instanceof Error) return { ok: false as const, ...workflowActionFailure("continue", current.error) }
+  if (!("data" in current) || !current.data || !client.graph.workflowApprove)
     return { ok: false as const, message: "Unable to load current workflow status." }
-  const response = await client.graph.workflowApprove({
-    ...input,
-    graphWorkflowApprovePayload: { expectedRevision: Number(current.data.revision) },
-  })
-  if (!response.error) return { ok: true as const, workflow: response.data }
+  const response = await client.graph
+    .workflowApprove({
+      ...input,
+      graphWorkflowApprovePayload: { expectedRevision: Number(current.data.revision) },
+    })
+    .catch((error) => ({ error }))
+  if (!response.error && "data" in response && response.data) return { ok: true as const, workflow: response.data }
+  const failure = workflowActionFailure("continue", response.error)
+  if (failure.kind !== "revision-conflict") return { ok: false as const, ...failure }
   const refreshed = await client.graph.workflow(input)
   return {
     ok: false as const,
@@ -178,14 +226,19 @@ export async function pauseWorkflow<T extends { revision: number | string }>(
   client: WorkflowClient<T>,
   input: { session: string; directory?: string },
 ) {
-  const current = await client.graph.workflow(input)
-  if (!current.data || !client.graph.workflowPause)
+  const current = await client.graph.workflow(input).catch((error) => ({ error }))
+  if (current.error instanceof Error) return { ok: false as const, ...workflowActionFailure("pause", current.error) }
+  if (!("data" in current) || !current.data || !client.graph.workflowPause)
     return { ok: false as const, message: "Unable to load current workflow status." }
-  const response = await client.graph.workflowPause({
-    ...input,
-    graphWorkflowPausePayload: { expectedRevision: Number(current.data.revision) },
-  })
-  if (!response.error) return { ok: true as const, workflow: response.data }
+  const response = await client.graph
+    .workflowPause({
+      ...input,
+      graphWorkflowPausePayload: { expectedRevision: Number(current.data.revision) },
+    })
+    .catch((error) => ({ error }))
+  if (!response.error && "data" in response && response.data) return { ok: true as const, workflow: response.data }
+  const failure = workflowActionFailure("pause", response.error)
+  if (failure.kind !== "revision-conflict") return { ok: false as const, ...failure }
   const refreshed = await client.graph.workflow(input)
   return {
     ok: false as const,
@@ -193,6 +246,10 @@ export async function pauseWorkflow<T extends { revision: number | string }>(
     workflow: refreshed.data,
     message: "The plan changed before it could be paused. Status was refreshed; review it and Pause again.",
   }
+}
+
+function isRevisionConflict(error: unknown) {
+  return isRecord(error) && error._tag === "GraphWorkflowRevisionConflict"
 }
 
 export type Workflow = {
@@ -239,6 +296,29 @@ export function graphToolActivity(tool: string, status?: string): string | undef
 
 export function graphToolError(error: string) {
   return error.replace(/\bgraph_[a-z0-9_]+\b/gi, "Graph workflow activity")
+}
+
+export function graphToolSuccessDetails(tool: string, input: Record<string, unknown>, _output: string) {
+  const task = [input.nodeName, input.taskName, input.targetName].find(
+    (value): value is string => typeof value === "string" && !!value,
+  )
+  const detail =
+    tool === "graph_plan_admit"
+      ? "Work plan prepared"
+      : tool === "graph_build_gate"
+        ? "Task readiness checked"
+        : tool === "graph_artifact_apply"
+          ? "Task changes applied"
+          : tool === "graph_diagnostics_run"
+            ? "Task verification completed"
+            : tool === "graph_workflow_pause"
+              ? "Workflow pause recorded"
+              : tool === "graph_promote"
+                ? "Workflow completion recorded"
+                : tool.startsWith("graph_artifact_")
+                  ? "Task changes prepared"
+                  : "Graph workflow activity completed"
+  return [detail, task].filter(Boolean).join(" · ")
 }
 
 export function formatWorkflowStatus(workflow: Workflow) {

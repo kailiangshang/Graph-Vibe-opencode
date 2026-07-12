@@ -4,6 +4,8 @@ import {
   MOBILE_TABS,
   cockpitActions,
   cockpitViewState,
+  enrichWorkflowNodes,
+  workflowPhaseStep,
   rollupWorkflowStatus,
   workflowAnnouncement,
 } from "./graph-cockpit"
@@ -88,6 +90,13 @@ describe("Graph cockpit view state", () => {
     expect(text).not.toContain("graph_")
   })
 
+  test("maps durable workflow phases to the Plan, Build, Verify product phases", () => {
+    expect(workflowPhaseStep("planning")).toBe("Plan")
+    expect(workflowPhaseStep("building")).toBe("Build")
+    expect(workflowPhaseStep("checkpoint")).toBe("Verify")
+    expect(workflowPhaseStep("complete")).toBe("Verify")
+  })
+
   test("renders task, graph, and details instruments with synchronized selection", () => {
     expect(COCKPIT_REGIONS).toEqual(["Task rail", "Workflow graph", "Task details"])
     expect(MOBILE_TABS).toEqual(["tasks", "graph", "details"])
@@ -104,5 +113,52 @@ describe("Graph cockpit view state", () => {
         { status: "verified", testStatus: "passed" },
       ]),
     ).toBe("verified")
+  })
+
+  test("enriches one shared node state without hiding failure on the current task", () => {
+    const result = enrichWorkflowNodes({
+      graph: {
+        nodes: [
+          {
+            id: "task",
+            name: "Build rail",
+            type: "atomic",
+            level: "L2",
+            status: "pending",
+            testStatus: "none",
+            priority: null,
+            sessionID: "ses",
+          },
+        ],
+        edges: [],
+      },
+      workflow: {
+        currentTask: { id: "task", name: "Build rail" },
+        checkpoint: { status: "approved" },
+        tasks: [
+          {
+            id: "task",
+            name: "Build rail",
+            status: "implemented",
+            testStatus: "failed",
+            current: true,
+            buildable: false,
+            verification: null,
+            latestEvidence: null,
+          },
+        ],
+        modules: [],
+      },
+      selectedNodeID: "task",
+    })
+    expect(result[0]).toMatchObject({
+      current: true,
+      selected: true,
+      failed: true,
+      blocked: true,
+      verified: false,
+      state: "failed",
+      label: "Current · Selected · Failed · Blocked",
+    })
   })
 })

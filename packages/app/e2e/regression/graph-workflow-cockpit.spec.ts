@@ -17,6 +17,9 @@ for (const route of ["source", "embedded"] as const) {
     )
 
     await expect(page.getByRole("region", { name: "Graph workflow cockpit" })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Plan" })).toHaveAttribute("aria-pressed", "true")
+    await expect(page.getByRole("button", { name: "Main" })).toHaveAttribute("aria-pressed", "false")
+    await expect(page.getByRole("button", { name: "Back to session" })).toBeVisible()
     await expect(page.getByRole("heading", { name: "Interface" })).toBeVisible()
     await expect(page.getByRole("button", { name: "Build rail" })).toHaveAttribute("aria-current", "step")
     await expect(page.getByRole("button", { name: "Continue" }).first()).toBeVisible()
@@ -36,6 +39,11 @@ for (const route of ["source", "embedded"] as const) {
     await expect(page.getByRole("tab", { name: "Graph" })).toHaveAttribute("aria-selected", "true")
     for (const tab of await page.getByRole("tab").all()) {
       expect((await tab.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+    }
+    for (const action of await page
+      .locator(".graph-cockpit button:visible, .graph-source-switch button:visible")
+      .all()) {
+      expect((await action.boundingBox())?.height).toBeGreaterThanOrEqual(44)
     }
   })
 }
