@@ -104,6 +104,8 @@ describe("staged artifact end-to-end dogfood", () => {
       const permissionRequests: PermissionRequest[] = []
       const metadataUpdates: MetadataUpdate[] = []
       const ctx = context(permissionRequests, metadataUpdates)
+      const plan = yield* GraphPlan.Service
+      yield* plan.workflow.setMode({ projectID, sessionID, mode: "atomic", expectedRevision: 0 })
 
       // ── Plan: admit a 3-node hierarchy with @N index references ──
       const planAdmitInfo = yield* GraphPlanAdmitTool
@@ -113,7 +115,15 @@ describe("staged artifact end-to-end dogfood", () => {
           nodes: [
             { type: "prd", name: "Staged Artifact PRD", level: "L1", desc: "Product requirements" },
             { type: "composite", name: "Module Group", level: "L1" },
-            { type: "atomic", name: "Hello World Module", level: "L2" },
+            {
+              type: "atomic",
+              name: "Hello World Module",
+              level: "L2",
+              verification: {
+                criteria: ["hello and world modules are written with their focused tests"],
+                diagnostics: [{ name: "test", paths: ["src/hello.test.ts", "src/world.test.ts"] }],
+              },
+            },
           ],
           edges: [
             { sourceID: "@0" as GraphStorage.NodeID, targetID: "@1" as GraphStorage.NodeID, relation: "contains" },
