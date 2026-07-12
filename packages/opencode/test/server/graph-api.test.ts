@@ -1,6 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
-import { Config, Effect, Layer } from "effect"
+import { Config, Effect, Fiber, Layer } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -22,6 +22,7 @@ import { HttpApiApp } from "@/server/routes/instance/httpapi/server"
 import { testEffect } from "../lib/effect"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { waitGlobalBusEvent } from "./global-bus"
 
 const noopBootstrapLayer = Layer.succeed(
   InstanceBootstrapService.Service,
@@ -100,6 +101,73 @@ interface GraphViewResponse {
 const verification = { criteria: ["observable result"], diagnostics: [{ name: "test" }] }
 
 describe("graph HttpApi", () => {
+  it.instance("publishes plan invalidation after workflow mode mutation", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      yield* sendJson(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { nodes: [{ type: "atomic", name: "Event task", level: "L2", verification }], edges: [] },
+      )
+      const before = yield* requestJson<{ revision: number }>(
+        `/graph/workflow?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+      )
+      const event = yield* waitGlobalBusEvent({
+        predicate: (item) => item.payload.type === "graph.plan.updated",
+      }).pipe(Effect.forkScoped({ startImmediately: true }))
+      const selected = yield* sendJson<{ revision: number }>(
+        "PATCH",
+        `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { mode: "atomic", expectedRevision: before.revision },
+      )
+      expect(selected.status).toBe(200)
+      expect((yield* Fiber.join(event)).payload.type).toBe("graph.plan.updated")
+    }),
+  )
+  it.instance("publishes plan invalidation after workflow pause and approval", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      yield* sendJson(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { nodes: [{ type: "atomic", name: "Checkpoint task", level: "L2", verification }], edges: [] },
+      )
+      const initial = yield* requestJson<{ revision: number }>(
+        `/graph/workflow?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+      )
+      const selected = yield* sendJson<{ revision: number }>(
+        "PATCH",
+        `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { mode: "atomic", expectedRevision: initial.revision },
+      )
+
+      const pauseEvent = yield* waitGlobalBusEvent({
+        predicate: (item) => item.payload.type === "graph.plan.updated",
+      }).pipe(Effect.forkScoped({ startImmediately: true }))
+      const paused = yield* sendJson<{ revision: number }>(
+        "PATCH",
+        `/graph/workflow/pause?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { expectedRevision: selected.json?.revision ?? -1, reason: "Review changes" },
+      )
+      expect(paused.status).toBe(200)
+      expect((yield* Fiber.join(pauseEvent)).payload.type).toBe("graph.plan.updated")
+
+      const approvalEvent = yield* waitGlobalBusEvent({
+        predicate: (item) => item.payload.type === "graph.plan.updated",
+      }).pipe(Effect.forkScoped({ startImmediately: true }))
+      const approved = yield* sendJson(
+        "PATCH",
+        `/graph/workflow/approve?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { expectedRevision: paused.json?.revision ?? -1 },
+      )
+      expect(approved.status).toBe(200)
+      expect((yield* Fiber.join(approvalEvent)).payload.type).toBe("graph.plan.updated")
+    }),
+  )
   it.instance("returns main graph for the project", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
@@ -282,14 +350,16 @@ describe("graph HttpApi", () => {
           projectChecksOnly: true,
           complete: false,
           passed: false,
-          commands: [{
-            name: "test",
-            command: "bun run test",
-            exitCode: 1,
-            timedOut: false,
-            passed: false,
-            excerpt: `sk-supersecret123 access_token=token-secret-value ${"x".repeat(20_000)}`,
-          }],
+          commands: [
+            {
+              name: "test",
+              command: "bun run test",
+              exitCode: 1,
+              timedOut: false,
+              passed: false,
+              excerpt: `sk-supersecret123 access_token=token-secret-value ${"x".repeat(20_000)}`,
+            },
+          ],
         },
       })
 
@@ -355,7 +425,16 @@ describe("graph HttpApi", () => {
         "POST",
         `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
         {
-          nodes: [{ type: "atomic", name: "Plan Status", level: "L2", verification, status: "verified", testStatus: "passed" }],
+          nodes: [
+            {
+              type: "atomic",
+              name: "Plan Status",
+              level: "L2",
+              verification,
+              status: "verified",
+              testStatus: "passed",
+            },
+          ],
           edges: [],
         },
       )

@@ -52,8 +52,9 @@ export default function GraphPage() {
 
   createEffect(() => {
     const workflow = workflowQuery.data
-    if (!workflow) return
-    setState("selectedNodeID", reconcileSelection(state.selectedNodeID, workflow.tasks, workflow.currentTask?.id))
+    const graph = graphQuery.data
+    if (!workflow || !graph) return
+    setState("selectedNodeID", reconcileSelection(state.selectedNodeID, graph.nodes, workflow.currentTask?.id))
   })
 
   const refresh = async () => {
@@ -81,22 +82,39 @@ export default function GraphPage() {
     },
   }))
 
-  const checkpointMutation = createMutation(() => ({
-    mutationFn: async (action: "continue" | "pause") => {
+  const continueMutation = createMutation(() => ({
+    mutationFn: async () => {
       const workflow = workflowQuery.data
       if (!workflow) throw new Error("Workflow is not loaded")
-      const response =
-        action === "continue"
-          ? await sdk().client.graph.workflowApprove({
-              session: params.id!,
-              directory: directory(),
-              graphWorkflowApprovePayload: { expectedRevision: workflow.revision },
-            })
-          : await sdk().client.graph.workflowPause({
-              session: params.id!,
-              directory: directory(),
-              graphWorkflowPausePayload: { expectedRevision: workflow.revision },
-            })
+      const response = await sdk().client.graph.workflowApprove({
+        session: params.id!,
+        directory: directory(),
+        graphWorkflowApprovePayload: { expectedRevision: workflow.revision },
+      })
+      if (response.error) throw response.error
+    },
+    onSuccess: async () => {
+      setState("conflict", "")
+      await refresh()
+    },
+    onError: async () => {
+      setState(
+        "conflict",
+        "The plan changed before this action completed. Status was refreshed; review it and try again.",
+      )
+      await refresh()
+    },
+  }))
+
+  const pauseMutation = createMutation(() => ({
+    mutationFn: async () => {
+      const workflow = workflowQuery.data
+      if (!workflow) throw new Error("Workflow is not loaded")
+      const response = await sdk().client.graph.workflowPause({
+        session: params.id!,
+        directory: directory(),
+        graphWorkflowPausePayload: { expectedRevision: workflow.revision },
+      })
       if (response.error) throw response.error
     },
     onSuccess: async () => {
@@ -162,14 +180,14 @@ export default function GraphPage() {
           <div class="flex h-full min-h-0 flex-col">
             <div class="graph-source-switch absolute right-4 top-2 z-20 flex rounded-md border border-border-weak-base bg-background-base/90 p-0.5">
               <button
-                class="min-h-9 rounded px-3 text-xs"
+                class="min-h-11 rounded px-3 text-xs"
                 classList={{ "bg-surface-raised-base": state.source === "currentPlan" }}
                 onClick={() => setState("source", "currentPlan")}
               >
                 Plan
               </button>
               <button
-                class="min-h-9 rounded px-3 text-xs"
+                class="min-h-11 rounded px-3 text-xs"
                 classList={{ "bg-surface-raised-base": state.source === "main" }}
                 onClick={() => setState("source", "main")}
               >
@@ -182,9 +200,17 @@ export default function GraphPage() {
               selectedNodeID={state.selectedNodeID}
               onSelectNode={(id) => setState("selectedNodeID", id)}
               onModeChange={(mode) => modeMutation.mutate(mode)}
-              onContinue={() => checkpointMutation.mutate("continue")}
-              onPause={() => checkpointMutation.mutate("pause")}
-              actionPending={modeMutation.isPending || checkpointMutation.isPending}
+              onContinue={() => continueMutation.mutate()}
+              onPause={() => pauseMutation.mutate()}
+              pendingAction={
+                modeMutation.isPending
+                  ? "mode"
+                  : continueMutation.isPending
+                    ? "continue"
+                    : pauseMutation.isPending
+                      ? "pause"
+                      : undefined
+              }
             />
           </div>
         )}

@@ -63,7 +63,9 @@ import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
 import { readPartText } from "./message-part-text"
 import { SessionProgressIndicatorV2 } from "../v2/components/session-progress-indicator-v2"
-import { graphActivityInfo } from "./graph-activity"
+import { graphActivityError, graphActivityInfo } from "./graph-activity"
+import { graphPlanCard } from "./graph-activity"
+import { GraphPlanCard } from "./graph-plan-card"
 
 async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -1531,8 +1533,11 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
               return (
                 <ToolErrorCard
                   tool={part().tool}
-                  error={error()}
-                  title={part().tool === "websearch" ? webSearchProviderLabel(partMetadata().provider) : undefined}
+                  error={part().tool.startsWith("graph_") ? graphActivityError(error()) : error()}
+                  title={
+                    graphActivityInfo(part().tool, input(), "error")?.title ??
+                    (part().tool === "websearch" ? webSearchProviderLabel(partMetadata().provider) : undefined)
+                  }
                   defaultOpen={props.defaultOpen}
                   open={controlledOpen()}
                   onOpenChange={props.onToolOpenChange ? handleToolOpenChange : undefined}
@@ -1566,6 +1571,36 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
     </Show>
   )
 }
+
+function GraphActivityTool(props: ToolProps) {
+  const data = useData()
+  const activity = () => graphActivityInfo(props.tool, props.input, props.status)
+  const plan = () =>
+    props.tool === "graph_plan_admit"
+      ? graphPlanCard(props.input, props.sessionID ? data.store.graph_workflow?.[props.sessionID] : undefined)
+      : undefined
+  return (
+    <BasicTool
+      icon="checklist"
+      status={props.status}
+      trigger={{ title: activity()?.title ?? "Graph workflow activity", subtitle: activity()?.summary }}
+      defaultOpen={props.tool === "graph_plan_admit"}
+    >
+      <Show when={plan()}>{(card) => <GraphPlanCard card={card()} />}</Show>
+    </BasicTool>
+  )
+}
+
+for (const name of [
+  "graph_plan_admit",
+  "graph_build_gate",
+  "graph_artifact_begin",
+  "graph_artifact_chunk",
+  "graph_artifact_seal",
+  "graph_artifact_apply",
+  "graph_diagnostics_run",
+])
+  ToolRegistry.register({ name, render: GraphActivityTool })
 
 export function MessageDivider(props: { label: string }) {
   return (

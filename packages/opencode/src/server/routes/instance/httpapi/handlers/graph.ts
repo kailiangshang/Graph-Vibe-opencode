@@ -269,6 +269,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
           Effect.catchTag("GraphWorkflowState.ActiveWorkflowError", () => Effect.fail(new HttpApiError.BadRequest({}))),
           Effect.catchTag("GraphWorkflowState.ModuleScopeError", () => Effect.fail(new HttpApiError.BadRequest({}))),
         )
+      yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
       return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
     })
 
@@ -296,6 +297,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
             Effect.fail(new HttpApiError.BadRequest({})),
           ),
         )
+      yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
       return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
     })
 
@@ -321,6 +323,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
             ),
           ),
         )
+      yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
       return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
     })
 

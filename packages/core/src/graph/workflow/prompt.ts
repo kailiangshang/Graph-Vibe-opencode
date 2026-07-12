@@ -1,4 +1,4 @@
-export const GRAPH_WORKFLOW_PROMPT = `Graph Workflow Collaboration
+export const GRAPH_WORKFLOW_PROMPT = `Graph Workflow Mode: Collaboration
 
 The graph and durable workflow projection are the source of truth for implementation intent, current work, execution cadence, checkpoints, and verification. Follow this contract strictly.
 

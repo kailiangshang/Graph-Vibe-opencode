@@ -28,6 +28,15 @@ export type LevelFilter = "all" | "L1" | "L2"
 export const CURRENT_PLAN_EMPTY_MESSAGE =
   "No Current Plan nodes yet. Describe your goal in Graph Vibe to create a plan."
 
+export function groupWorkflowTasks<T extends { id: string; moduleID: string | null }>(
+  tasks: T[],
+  modules: Array<{ id: string; name: string }>,
+) {
+  const groups = modules.map((module) => ({ ...module, tasks: tasks.filter((task) => task.moduleID === module.id) }))
+  const ungrouped = tasks.filter((task) => !task.moduleID || !modules.some((module) => module.id === task.moduleID))
+  return [...groups, ...(ungrouped.length ? [{ id: null, name: "Ungrouped", tasks: ungrouped }] : [])]
+}
+
 export function deterministicPosition(_graphID: string, _nodeID: string, _count: number) {
   const value = `${_graphID}:${_nodeID}`
     .split("")
@@ -79,7 +88,16 @@ type WorkflowInput = {
 
 export function normalizeWorkflow(workflow: WorkflowInput) {
   const tasks = workflow.tasks
-    .map((task) => ({ ...task, order: Number(task.order) }))
+    .filter((task, index, all) => all.findIndex((candidate) => candidate.id === task.id) === index)
+    .map((task) => {
+      const module = workflow.modules.find((candidate) => candidate.taskIDs.includes(task.id))
+      return {
+        ...task,
+        order: Number(task.order),
+        moduleID: task.moduleID ?? module?.id ?? null,
+        moduleName: task.moduleName ?? module?.name ?? null,
+      }
+    })
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))
   const currentTask =
     tasks.find((task) => task.id === workflow.currentTask?.id) ?? tasks.find((task) => task.current) ?? null
@@ -94,8 +112,8 @@ export function normalizeWorkflow(workflow: WorkflowInput) {
     },
     tasks,
     currentTask,
-    modules: workflow.modules.map((module) => {
-      const items = tasks.filter((task) => task.moduleID === module.id)
+    modules: groupWorkflowTasks(tasks, workflow.modules).map((module) => {
+      const items = module.tasks
       return {
         ...module,
         tasks: items,

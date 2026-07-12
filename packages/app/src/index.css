@@ -112,6 +112,11 @@
   .graph-cockpit > header {
     padding-right: 92px;
   }
+  .graph-action,
+  .graph-control,
+  .graph-field {
+    min-height: 44px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

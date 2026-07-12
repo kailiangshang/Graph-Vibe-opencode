@@ -4,11 +4,16 @@ import {
   graphWebAvailable,
   graphWebUrl,
   formatWorkflowStatus,
+  formatPlanAdmission,
+  graphToolActivity,
+  graphToolError,
   GRAPH_MODES,
   continueWorkflow,
   pauseWorkflow,
+  persistGraphStartMode,
   startGraphPrompt,
   summarizeCurrentPlan,
+  workflowActions,
 } from "../src/graph/workflow"
 
 describe("Graph Workflow", () => {
@@ -154,6 +159,52 @@ describe("Graph collaboration status", () => {
     ])
   })
 
+  test("formats plan admission as a complete user-facing task card", () => {
+    expect(
+      formatPlanAdmission({
+        nodes: [
+          { id: "goal", type: "prd", name: "Ship cockpit", desc: "Make workflow visible" },
+          { id: "module", type: "composite", name: "UI" },
+          { id: "task", type: "atomic", name: "Build rail", verification: { criteria: ["Rail is visible"] } },
+        ],
+        edges: [{ sourceID: "module", targetID: "task", relation: "contains" }],
+      }),
+    ).toEqual({
+      goal: "Make workflow visible",
+      mode: "Not selected",
+      currentTask: "Build rail",
+      nextStop: "After execution mode is selected",
+      modules: [{ name: "UI", tasks: ["Build rail · Rail is visible"] }],
+    })
+
+    expect(formatPlanAdmission({}, workflow)).toMatchObject({
+      mode: "Module",
+      currentTask: "Wire controls",
+      nextStop: "Now, at the pending checkpoint",
+      modules: [
+        {
+          name: "Interaction",
+          tasks: ["Add state", "Wire controls"],
+        },
+      ],
+    })
+  })
+
+  test("maps graph activity and errors without exposing internal identifiers", () => {
+    expect(graphToolActivity("graph_artifact_apply")).toBe("Applying task changes")
+    expect(graphToolActivity("graph_diagnostics_run", "error")).toBe("Task verification failed")
+    expect(graphToolActivity("graph_future_operation", "error")).toBe("Graph workflow activity failed")
+    expect(graphToolActivity("graph_future_operation")).toBe("Graph workflow activity")
+    expect(
+      [
+        graphToolActivity("graph_artifact_apply"),
+        graphToolActivity("graph_diagnostics_run", "error"),
+        graphToolActivity("graph_future_operation"),
+      ].join(" "),
+    ).not.toContain("graph_")
+    expect(graphToolError("graph_artifact_apply failed after graph_build_gate")).not.toContain("graph_")
+  })
+
   test("formats durable mode, current task, evidence, checkpoint, and next action", () => {
     expect(formatWorkflowStatus(workflow)).toEqual({
       mode: "Module",
@@ -207,5 +258,80 @@ describe("Graph collaboration status", () => {
       workflow: { revision: 2 },
       message: "The plan changed before approval. Status was refreshed; review it and Continue again.",
     })
+  })
+
+  test("only exposes actions valid for durable workflow state", () => {
+    expect(
+      workflowActions({ mode: "module", phase: "checkpoint", checkpoint: { status: "pending", kind: "module" } }),
+    ).toEqual({
+      continue: true,
+      pause: false,
+    })
+    expect(
+      workflowActions({ mode: "module", phase: "building", checkpoint: { status: "approved", kind: "module" } }),
+    ).toEqual({
+      continue: false,
+      pause: true,
+    })
+    expect(workflowActions({ mode: "module", phase: "complete", checkpoint: { status: "none", kind: null } })).toEqual({
+      continue: false,
+      pause: false,
+    })
+    expect(workflowActions({ mode: null, phase: "planning", checkpoint: { status: "none", kind: null } })).toEqual({
+      continue: false,
+      pause: false,
+    })
+    expect(workflowActions({ mode: null, phase: "checkpoint", checkpoint: { status: "pending" } })).toEqual({
+      continue: false,
+      pause: false,
+    })
+  })
+
+  test("persists start mode before prompting and aborts without durable workflow", async () => {
+    const prompt: string[] = []
+    const missing = await persistGraphStartMode(
+      { graph: { workflow: async () => ({ error: "missing" }) } },
+      { session: "ses", mode: "module" },
+      () => prompt.push("started"),
+    )
+    expect(missing).toEqual({
+      ok: false,
+      message: "No durable workflow exists for this session. Create or select a session, then retry /graph-start.",
+    })
+    expect(prompt).toEqual([])
+
+    const failed = await persistGraphStartMode(
+      {
+        graph: {
+          workflow: async () => ({ data: { revision: 4 } }),
+          workflowMode: async () => ({}),
+        },
+      },
+      { session: "ses", mode: "module" },
+      () => prompt.push("started"),
+    )
+    expect(failed).toEqual({
+      ok: false,
+      message: "Execution mode could not be saved because the workflow changed. Review status and retry /graph-start.",
+    })
+    expect(prompt).toEqual([])
+
+    const revisions: number[] = []
+    const result = await persistGraphStartMode(
+      {
+        graph: {
+          workflow: async () => ({ data: { revision: 4 } }),
+          workflowMode: async (input: { graphWorkflowModePayload: { expectedRevision: number } }) => {
+            revisions.push(input.graphWorkflowModePayload.expectedRevision)
+            return { data: { revision: 5 } }
+          },
+        },
+      },
+      { session: "ses", mode: "module" },
+      () => prompt.push("started"),
+    )
+    expect(result).toEqual({ ok: true })
+    expect(revisions).toEqual([4])
+    expect(prompt).toEqual(["started"])
   })
 })

@@ -3,6 +3,7 @@ import {
   createContext,
   createEffect,
   createMemo,
+  createResource,
   createSignal,
   For,
   Match,
@@ -78,7 +79,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
-import { graphToolActivity } from "../../graph/workflow"
+import { formatPlanAdmission, graphToolActivity, graphToolError } from "../../graph/workflow"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
@@ -1792,6 +1793,7 @@ type ToolProps = {
 function GenericTool(props: ToolProps) {
   const { theme } = useTheme()
   const ctx = use()
+  const sdk = useSDK()
   const output = createMemo(() => props.output?.trim() ?? "")
   const [expanded, setExpanded] = createSignal(false)
   const maxLines = 3
@@ -1802,28 +1804,71 @@ function GenericTool(props: ToolProps) {
     return collapsed().output
   })
 
-  const graphActivity = createMemo(() => graphToolActivity(props.tool))
+  const graphActivity = createMemo(() => graphToolActivity(props.tool, props.part.state.status))
+  const [workflow] = createResource(
+    () => (props.tool === "graph_plan_admit" && props.part.sessionID ? props.part.sessionID : undefined),
+    async (session) => {
+      const response = await sdk.client.graph.workflow({ session, directory: sdk.directory })
+      return response.data
+    },
+  )
+  const plan = createMemo(() =>
+    props.tool === "graph_plan_admit" && props.part.state.status === "completed"
+      ? formatPlanAdmission(props.input, workflow())
+      : undefined,
+  )
   return (
     <Show
-      when={props.output && ctx.showGenericToolOutput()}
+      when={plan()}
       fallback={
-        <InlineTool icon="⚙" pending="Writing command..." complete={true} part={props.part}>
-          {graphActivity() ?? props.tool} {graphActivity() ? "" : input(props.input)}
-        </InlineTool>
+        <Show
+          when={props.output && ctx.showGenericToolOutput()}
+          fallback={
+            <InlineTool icon="⚙" pending="Working..." complete={true} part={props.part}>
+              {graphActivity() ?? props.tool} {graphActivity() ? "" : input(props.input)}
+            </InlineTool>
+          }
+        >
+          <BlockTool
+            title={`# ${graphActivity() ?? props.tool}${graphActivity() ? "" : ` ${input(props.input)}`}`}
+            part={props.part}
+            onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
+          >
+            <box gap={1}>
+              <text fg={theme.text}>{limited()}</text>
+              <Show when={collapsed().overflow}>
+                <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>
+              </Show>
+            </box>
+          </BlockTool>
+        </Show>
       }
     >
-      <BlockTool
-        title={`# ${graphActivity() ?? props.tool}${graphActivity() ? "" : ` ${input(props.input)}`}`}
-        part={props.part}
-        onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
-      >
-        <box gap={1}>
-          <text fg={theme.text}>{limited()}</text>
-          <Show when={collapsed().overflow}>
-            <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>
-          </Show>
-        </box>
-      </BlockTool>
+      {(card) => (
+        <BlockTool title="# Work plan" part={props.part}>
+          <box gap={1}>
+            <text fg={theme.text}>Goal: {card().goal}</text>
+            <text fg={theme.textMuted}>Mode: {card().mode}</text>
+            <text fg={theme.text}>Current task: {card().currentTask || "Pending admission"}</text>
+            <text fg={theme.textMuted}>Next stop: {card().nextStop}</text>
+            <For each={card().modules}>
+              {(module) => (
+                <box>
+                  <text fg={theme.text}>{module.name}</text>
+                  <For each={module.tasks}>
+                    {(task, index) => (
+                      <text fg={theme.textMuted}>
+                        {" "}
+                        {index() + 1}. {task}
+                      </text>
+                    )}
+                  </For>
+                </box>
+              )}
+            </For>
+          </box>
+        </BlockTool>
+      )}
     </Show>
   )
 }
@@ -1854,7 +1899,10 @@ function InlineTool(props: {
     return callID === props.part.callID
   })
 
-  const error = createMemo(() => (props.part.state.status === "error" ? props.part.state.error : undefined))
+  const error = createMemo(() => {
+    if (props.part.state.status !== "error") return undefined
+    return props.part.tool.startsWith("graph_") ? graphToolError(props.part.state.error) : props.part.state.error
+  })
 
   const denied = createMemo(
     () =>
