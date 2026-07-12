@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { CURRENT_PLAN_EMPTY_MESSAGE, type GraphView, countByStatus, filterByLevel } from "./graph-helpers"
+import {
+  CURRENT_PLAN_EMPTY_MESSAGE,
+  type GraphView,
+  countByStatus,
+  deterministicPosition,
+  filterByLevel,
+  normalizeWorkflow,
+  reconcileSelection,
+} from "./graph-helpers"
 
 describe("countByStatus", () => {
   test("keeps internal tool names out of beginner guidance", () => {
@@ -21,6 +29,81 @@ describe("countByStatus", () => {
 
   test("returns empty object for empty array", () => {
     expect(countByStatus([])).toEqual({})
+  })
+})
+
+describe("workflow cockpit helpers", () => {
+  const workflow = {
+    mode: "module" as const,
+    revision: 4,
+    phase: "building" as const,
+    checkpoint: {
+      status: "approved" as const,
+      kind: "module" as const,
+      scopeNodeID: "m1",
+      scopeName: "UI",
+      reason: null,
+    },
+    currentTask: null,
+    progress: { total: 2, verified: 1, failed: 0, percent: 50 },
+    modules: [
+      {
+        id: "m1",
+        name: "UI",
+        type: "composite" as const,
+        status: "implemented" as const,
+        taskIDs: ["b", "a"],
+        tasks: [],
+      },
+    ],
+    tasks: [
+      {
+        id: "b",
+        name: "Second",
+        order: 2,
+        moduleID: "m1",
+        moduleName: "UI",
+        status: "pending",
+        testStatus: "none",
+        buildable: false,
+        current: false,
+        verification: null,
+        latestEvidence: null,
+      },
+      {
+        id: "a",
+        name: "First",
+        order: 1,
+        moduleID: "m1",
+        moduleName: "UI",
+        status: "verified",
+        testStatus: "passed",
+        buildable: false,
+        current: true,
+        verification: { criteria: ["Visible result"], diagnostics: [{ name: "test" as const }] },
+        latestEvidence: null,
+      },
+    ],
+  }
+
+  test("normalizes stable module and task ordering and repairs current task", () => {
+    const view = normalizeWorkflow(workflow)
+    expect(view.tasks.map((task) => task.id)).toEqual(["a", "b"])
+    expect(view.modules[0]?.tasks.map((task) => task.id)).toEqual(["a", "b"])
+    expect(view.currentTask?.id).toBe("a")
+    expect(view.modules[0]?.progress).toEqual({ verified: 1, total: 2 })
+  })
+
+  test("falls back from removed selection to durable current task then first task", () => {
+    const view = normalizeWorkflow(workflow)
+    expect(reconcileSelection("removed", view.tasks, view.currentTask?.id)).toBe("a")
+    expect(reconcileSelection(null, view.tasks, null)).toBe("a")
+    expect(reconcileSelection(null, [], null)).toBeNull()
+  })
+
+  test("uses graph identity for deterministic initial positions", () => {
+    expect(deterministicPosition("session-1", "task-a", 3)).toEqual(deterministicPosition("session-1", "task-a", 3))
+    expect(deterministicPosition("session-1", "task-a", 3)).not.toEqual(deterministicPosition("session-2", "task-a", 3))
   })
 })
 
