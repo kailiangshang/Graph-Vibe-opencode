@@ -51,6 +51,7 @@ const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node])),
 )
 const symlinkLive = symlinkAvailable() ? it.live : it.live.skip
+const unixLive = process.platform === "win32" ? it.live.skip : it.live
 
 describe("LocationServiceMap", () => {
   symlinkLive("invalidates focused execution when the canonical target changes", () =>
@@ -823,6 +824,37 @@ describe("LocationServiceMap", () => {
             expect(yield* Effect.promise(() => fileExists(outputPath))).toBe(false)
           }),
         ),
+      ),
+    ),
+  )
+
+  unixLive("preserves executable mode in the current artifact adapter", () =>
+    withGraphMode(
+      Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
+        Effect.flatMap((dir) => Effect.gen(function* () {
+          const destination = path.join(dir.path, "bin/run.sh")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.dirname(destination), { recursive: true })
+            await fs.writeFile(destination, "#!/bin/sh\nexit 0\n")
+            await fs.chmod(destination, 0o755)
+          })
+          yield* setupGraphDiagnostics(dir.path, [
+            { action: "graph.artifact_write", resource: "*", effect: "allow" },
+          ]).pipe(
+            Effect.flatMap((state) => executeTool(state.registry, {
+              sessionID: state.sessionID,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-artifact-mode",
+                name: "graph_artifact_apply",
+                input: { targetNodeID: state.targetNodeID, artifact: { mode: "full", path: "bin/run.sh", code: "#!/bin/sh\necho replaced\n", test: "test\n" } },
+              },
+            })),
+            Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+          )
+          expect((yield* Effect.promise(() => fs.stat(destination))).mode & 0o777).toBe(0o755)
+        })),
       ),
     ),
   )

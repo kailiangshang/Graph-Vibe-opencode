@@ -174,7 +174,8 @@ export const GraphArtifactApplyTool = Tool.define(
               const existing = yield* Effect.forEach(paths, (item) =>
                 Effect.gen(function* () {
                   const content = yield* fs.readFileStringSafe(item.absolute)
-                  return { ...item, existed: content !== undefined, content: content ?? "" }
+                  const mode = content === undefined ? undefined : (yield* fs.stat(item.absolute)).mode & 0o7777
+                  return { ...item, existed: content !== undefined, content: content ?? "", mode }
                 }),
               )
 
@@ -239,7 +240,7 @@ export const GraphArtifactApplyTool = Tool.define(
                     const temporary = `${item.absolute}.opencode-${hashContent(operationID).slice(0, 16)}-${index}.tmp`
                     yield* Effect.gen(function* () {
                       yield* build.assertArtifactApplyOwner({ sessionID: session.sessionID, reservedRevision: reservation.revision, operationID })
-                      yield* fs.writeWithDirs(temporary, content)
+                      yield* fs.writeWithDirs(temporary, content, item.mode)
                       yield* build.assertArtifactApplyOwner({ sessionID: session.sessionID, reservedRevision: reservation.revision, operationID })
                       yield* fs.rename(temporary, item.absolute)
                     }).pipe(Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore)))

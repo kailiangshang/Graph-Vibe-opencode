@@ -59,6 +59,7 @@ const it = testEffect(
     ],
   ),
 )
+const unixInstance = process.platform === "win32" ? it.instance.skip : it.instance
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -286,6 +287,27 @@ describe("graph_artifact_apply", () => {
       expect(yield* fs.readFileString(path.join(test.directory, "src/ok.ts"))).toBe(code)
       expect(node.status).toBe("implemented")
       expect(node.testStatus).toBe("pending")
+    }),
+  )
+
+  unixInstance("preserves executable mode when replacing an existing artifact", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const destination = path.join(test.directory, "bin/run.sh")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.dirname(destination), { recursive: true })
+        await fs.writeFile(destination, "#!/bin/sh\nexit 0\n")
+        await fs.chmod(destination, 0o755)
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({ projectID, sessionID, type: "atomic", name: "Executable", level: "L2" })
+      yield* authorize(targetNodeID)
+      yield* (yield* init()).execute({
+        targetNodeID,
+        artifact: { mode: "full", path: "bin/run.sh", code: "#!/bin/sh\necho replaced\n", test: "test\n" },
+      }, context())
+      expect((yield* Effect.promise(() => fs.stat(destination))).mode & 0o777).toBe(0o755)
     }),
   )
 
