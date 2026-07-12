@@ -133,7 +133,11 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
           id: t.id,
           toolName: t.toolName,
           toolType: t.toolType,
+          inputSummary: t.inputSummary,
+          outputSummary: t.outputSummary,
           status: t.status,
+          error: t.error,
+          evidence: t.evidence,
           timeCreated: t.timeCreated,
         })),
         generationRuns: generationRuns.map((g) => ({
@@ -367,6 +371,7 @@ function planNodePayload(node: (typeof PlanAdmitPayload.Type)["nodes"][number]):
     ...(node.category === undefined ? {} : { category: node.category }),
     ...(node.desc === undefined ? {} : { desc: node.desc }),
     ...(node.content === undefined ? {} : { content: node.content }),
+    ...(node.verification === undefined ? {} : { verification: node.verification }),
     ...(node.codeHash === undefined ? {} : { codeHash: node.codeHash }),
     ...(node.confidence === undefined ? {} : { confidence: node.confidence }),
   }

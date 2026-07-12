@@ -30,6 +30,7 @@ const projectID = ProjectV2.ID.make("proj_graph_tools")
 const sessionID = SessionID.descending("ses_graph_tools")
 const firstNodeID = GraphStorage.NodeID.create()
 const secondNodeID = GraphStorage.NodeID.create()
+const verification = { criteria: ["observable result"], diagnostics: [{ name: "test" }] } as const
 
 const it = testEffect(
   LayerNode.compile(LayerNode.group([
@@ -106,6 +107,11 @@ describe("graph tools", () => {
       const tool = yield* Tool.init(info)
       expect(fromTool(tool)).not.toHaveProperty("properties.nodes.items.properties.status")
       expect(fromTool(tool)).not.toHaveProperty("properties.nodes.items.properties.testStatus")
+      expect(fromTool(tool)).toHaveProperty("properties.nodes.items.properties.verification")
+      expect(fromTool(tool)).toHaveProperty(
+        "properties.nodes.items.properties.verification.properties.diagnostics.items.properties.name.enum",
+        ["test", "typecheck", "lint"],
+      )
     }),
   )
 
@@ -118,8 +124,8 @@ describe("graph tools", () => {
       const result = yield* tool.execute(
         {
           nodes: [
-            { id: firstNodeID, type: "atomic", name: "First", level: "L2" },
-            { id: secondNodeID, type: "atomic", name: "Second", level: "L2" },
+            { id: firstNodeID, type: "atomic", name: "First", level: "L2", verification },
+            { id: secondNodeID, type: "atomic", name: "Second", level: "L2", verification },
           ],
           edges: [{ sourceID: firstNodeID, targetID: secondNodeID, relation: "blocks" }],
         },
@@ -132,6 +138,7 @@ describe("graph tools", () => {
       expect(JSON.parse(result.output)).toMatchObject({ nodesCreated: 2, edgesCreated: 1, dryRun: false })
       expect(currentPlan.nodes.map((node) => node.projectID)).toEqual([projectID, projectID])
       expect(currentPlan.nodes.map((node) => node.sessionID)).toEqual([sessionID, sessionID])
+      expect(currentPlan.nodes.map((node) => node.verification)).toEqual([verification, verification])
       expect(currentPlan.edges.map((edge) => edge.sessionID)).toEqual([sessionID])
     }),
   )
@@ -148,6 +155,7 @@ describe("graph tools", () => {
             type: "atomic" as const,
             name: "Status bypass",
             level: "L2" as const,
+            verification,
             status: "verified",
             testStatus: "passed",
           },
@@ -176,7 +184,7 @@ describe("graph tools", () => {
         {
           nodes: [
             { id: sourceID, type: "prd", name: "Goal", level: "L1" },
-            { id: targetID, type: "atomic", name: "Worker", level: "L2" },
+            { id: targetID, type: "atomic", name: "Worker", level: "L2", verification },
           ],
           edges: [{ sourceID, targetID, relation: "uses" }],
         },
@@ -207,7 +215,7 @@ describe("graph tools", () => {
 
       const result = yield* tool.execute(
         {
-          nodes: [{ type: "atomic", name: "Only", level: "L2" }],
+          nodes: [{ type: "atomic", name: "Only", level: "L2", verification }],
           edges: [
             {
               sourceID: "@0" as GraphStorage.NodeID,

@@ -33,6 +33,7 @@ const PID = "proj_test" as any
 const SID = "ses_test"
 const A = "gnd_plan_a" as GraphStorage.NodeID
 const B = "gnd_plan_b" as GraphStorage.NodeID
+const verification = { criteria: ["observable result"], diagnostics: [{ name: "test" }] } as const
 
 const seed = Effect.gen(function* () {
   const { db } = yield* Database.Service
@@ -56,8 +57,8 @@ describe("GraphPlan.admit", () => {
         sessionID: SID,
         dryRun: true,
         nodes: [
-          { id: A, type: "atomic", name: "A", level: "L2" },
-          { id: B, type: "atomic", name: "B", level: "L2" },
+          { id: A, type: "atomic", name: "A", level: "L2", verification },
+          { id: B, type: "atomic", name: "B", level: "L2", verification },
         ],
         edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
       })
@@ -77,8 +78,8 @@ describe("GraphPlan.admit", () => {
         projectID: PID,
         sessionID: SID,
         nodes: [
-          { id: A, type: "atomic", name: "A", level: "L2" },
-          { id: B, type: "atomic", name: "B", level: "L2" },
+          { id: A, type: "atomic", name: "A", level: "L2", verification },
+          { id: B, type: "atomic", name: "B", level: "L2", verification },
         ],
         edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
       })
@@ -100,8 +101,8 @@ describe("GraphPlan.admit", () => {
         projectID: PID,
         sessionID: SID,
         nodes: [
-          { id: A, type: "atomic", name: "A", level: "L2" },
-          { id: B, type: "atomic", name: "B", level: "L2" },
+          { id: A, type: "atomic", name: "A", level: "L2", verification },
+          { id: B, type: "atomic", name: "B", level: "L2", verification },
         ],
         edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
       })
@@ -124,8 +125,8 @@ describe("GraphPlan.admit", () => {
         projectID: PID,
         sessionID: SID,
         nodes: [
-          { id: A, type: "atomic", name: "A", level: "L2" },
-          { id: B, type: "atomic", name: "B", level: "L2" },
+          { id: A, type: "atomic", name: "A", level: "L2", verification },
+          { id: B, type: "atomic", name: "B", level: "L2", verification },
         ],
         edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
       })
@@ -134,7 +135,7 @@ describe("GraphPlan.admit", () => {
       yield* plan.admit({
         projectID: PID,
         sessionID: SID,
-        nodes: [{ id: "gnd_plan_c" as GraphStorage.NodeID, type: "atomic", name: "C", level: "L2" }],
+        nodes: [{ id: "gnd_plan_c" as GraphStorage.NodeID, type: "atomic", name: "C", level: "L2", verification }],
         edges: [],
       })
 
@@ -143,9 +144,9 @@ describe("GraphPlan.admit", () => {
     }))
   })
 
-  test("persists verification specs only on atomic nodes", async () => {
+  test("persists verification specs on atomic nodes", async () => {
     await run(Effect.gen(function* () {
-      const verification = {
+      const focusedVerification = {
         criteria: ["observable result"],
         diagnostics: [{ name: "test", paths: ["test/result.test.ts"] }],
       } as const
@@ -154,15 +155,53 @@ describe("GraphPlan.admit", () => {
         projectID: PID,
         sessionID: SID,
         nodes: [
-          { id: A, type: "composite", name: "Module", level: "L1", verification },
-          { id: B, type: "atomic", name: "Task", level: "L2", verification },
+          { id: A, type: "composite", name: "Module", level: "L1" },
+          { id: B, type: "atomic", name: "Task", level: "L2", verification: focusedVerification },
         ],
         edges: [{ sourceID: A, targetID: B, relation: "contains" }],
       })
 
       const storage = yield* GraphStorage.Service
       expect((yield* storage.node.get(A)).verification).toBeNull()
-      expect((yield* storage.node.get(B)).verification).toEqual(verification)
+      expect((yield* storage.node.get(B)).verification).toEqual(focusedVerification)
+    }))
+  })
+
+  test("rejects newly admitted atomic nodes without verification", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const exit = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [{ id: A, type: "atomic", name: "Task", level: "L2" }],
+        edges: [],
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const storage = yield* GraphStorage.Service
+      expect((yield* storage.currentPlan({ sessionID: SID })).nodes).toEqual([])
+    }))
+  })
+
+  test("rejects verification specs on non-atomic nodes", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const exit = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [{
+          id: A,
+          type: "composite",
+          name: "Module",
+          level: "L1",
+          verification: { criteria: ["observable result"], diagnostics: [{ name: "test", paths: ["test/result.test.ts"] }] },
+        }],
+        edges: [],
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const storage = yield* GraphStorage.Service
+      expect((yield* storage.currentPlan({ sessionID: SID })).nodes).toEqual([])
     }))
   })
 
@@ -172,7 +211,7 @@ describe("GraphPlan.admit", () => {
       const exit = yield* plan.admit({
         projectID: PID,
         sessionID: SID,
-        nodes: [{ id: A, type: "atomic", name: "A", level: "L2" }],
+        nodes: [{ id: A, type: "atomic", name: "A", level: "L2", verification }],
         edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
       }).pipe(Effect.exit)
 
@@ -191,8 +230,8 @@ describe("GraphPlan.admit", () => {
         projectID: PID,
         sessionID: SID,
         nodes: [
-          { id: A, type: "atomic", name: "A", level: "L2" },
-          { id: B, type: "atomic", name: "B", level: "L2" },
+          { id: A, type: "atomic", name: "A", level: "L2", verification },
+          { id: B, type: "atomic", name: "B", level: "L2", verification },
         ],
         edges: [
           { sourceID: A, targetID: B, relation: "blocks" },
@@ -216,7 +255,7 @@ describe("GraphPlan.admit", () => {
         sessionID: SID,
         nodes: [
           { type: "composite", name: "Parent", level: "L1" },
-          { type: "atomic", name: "Child", level: "L2" },
+          { type: "atomic", name: "Child", level: "L2", verification },
         ],
         edges: [{ sourceID: "@0", targetID: "@1", relation: "contains" }],
       })

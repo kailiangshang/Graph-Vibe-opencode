@@ -3,12 +3,12 @@ import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { buildableNodes } from "@opencode-ai/core/graph/build-order"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
+import { GraphDiagnostics } from "@opencode-ai/core/graph/workflow/diagnostics"
 import { Graph } from "@opencode-ai/schema/graph"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ChildProcess } from "effect/unstable/process"
 import * as Stream from "effect/Stream"
 import { Effect, Schema } from "effect"
-import path from "node:path"
 import { Session } from "@/session/session"
 import { Tool } from "../tool"
 import { formatJson, resolveGraphSession, summarizeGate } from "./util"
@@ -36,8 +36,11 @@ interface CommandResult {
 type ExitKind = { kind: "exit"; code: number } | { kind: "timeout"; code: null } | { kind: "abort"; code: null }
 
 interface NamedCommand {
-  name: string
+  name: Graph.DiagnosticName
+  executable: "bun"
+  args: ReadonlyArray<string>
   command: string
+  focused: boolean
 }
 
 export const GraphDiagnosticsRunTool = Tool.define(
@@ -52,8 +55,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
 
     const runCmd = (cmd: NamedCommand, cwd: string, abort: AbortSignal, timeoutMs: number) =>
       Effect.gen(function* () {
-        const spec = ChildProcess.make(cmd.command, [], {
-          shell: process.env.SHELL ?? "/bin/sh",
+        const spec = ChildProcess.make(cmd.executable, cmd.args, {
           cwd,
           env: process.env,
           stdin: "ignore",
@@ -179,9 +181,41 @@ export const GraphDiagnosticsRunTool = Tool.define(
 
           const timeoutMs = params.timeout ?? DEFAULT_TIMEOUT_MS
 
-          const detected = yield* Effect.promise(() => detectDiagnosticsCommands(session.directory))
-          const cmds = params.filter ? detected.filter((c) => c.name.includes(params.filter!)) : detected
-          const completeDiagnostics = cmds.length === detected.length
+          const target = yield* storage.node.get(params.targetNodeID)
+          const resolution = yield* Effect.promise(() => GraphDiagnostics.resolve({
+            directory: session.directory,
+            verification: target.verification,
+            filter: params.filter,
+          }))
+          if (!resolution.ok) {
+            const evidence: Graph.VerificationEvidence = {
+              kind: "diagnostics",
+              nodeID: params.targetNodeID,
+              criteria: target.verification?.criteria ?? [],
+              artifactPaths: [],
+              projectChecksOnly: target.verification === null,
+              complete: false,
+              passed: false,
+              commands: [],
+            }
+            yield* audit.tool.record({
+              projectID: session.projectID,
+              sessionID: session.sessionID,
+              nodeID: params.targetNodeID,
+              toolName: "graph.diagnostics.run",
+              toolType: "diagnostics",
+              status: "blocked",
+              outputSummary: resolution.reason,
+              evidence,
+            })
+            return {
+              title: "Diagnostics blocked",
+              metadata: { gate: summarizeGate(gate), ran: false, passed: false, complete: false, verified: false, results: [], ...resolution },
+              output: formatJson({ ran: false, passed: false, complete: false, verified: false, ...resolution }),
+            }
+          }
+          const cmds = resolution.commands
+          const completeDiagnostics = resolution.complete
           if (cmds.length === 0 && params.filter) {
             return {
               title: "Diagnostics skipped",
@@ -212,7 +246,6 @@ export const GraphDiagnosticsRunTool = Tool.define(
             })
           }
 
-          const target = yield* storage.node.get(params.targetNodeID)
           const artifactPaths = (yield* audit.tool.list({
             projectID: session.projectID,
             sessionID: session.sessionID,
@@ -225,6 +258,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
             nodeID: params.targetNodeID,
             criteria: target.verification?.criteria ?? [],
             artifactPaths,
+            projectChecksOnly: resolution.projectChecksOnly,
             complete: completeDiagnostics,
             passed: verified,
             commands: results.map((result) => ({
@@ -330,16 +364,4 @@ function isBunRunUsageOutput(command: string, output: string) {
     /\brun\b/.test(command) &&
     output.includes("Usage: bun run [flags] <file or script>")
   )
-}
-
-async function detectDiagnosticsCommands(directory: string): Promise<NamedCommand[]> {
-  const pkg = await Bun.file(path.join(directory, "package.json"))
-    .json()
-    .catch(() => ({ scripts: {} }))
-  const scripts = (pkg as { scripts?: Record<string, string> }).scripts ?? {}
-  const commands: NamedCommand[] = []
-  if (scripts.test) commands.push({ name: "test", command: "bun run test" })
-  if (scripts.typecheck) commands.push({ name: "typecheck", command: "bun run typecheck" })
-  if (scripts.lint) commands.push({ name: "lint", command: "bun run lint" })
-  return commands.length > 0 ? commands : [{ name: "test", command: "bun test" }]
 }

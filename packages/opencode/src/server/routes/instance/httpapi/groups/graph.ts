@@ -50,6 +50,7 @@ const PlanNodePayload = Schema.Struct({
   status: Schema.optional(Graph.NodeStatus),
   desc: Schema.optional(Schema.String),
   content: Schema.optional(Graph.NodeContent),
+  verification: Schema.optional(Graph.VerificationSpec),
   codeHash: Schema.optional(Schema.String),
   testStatus: Schema.optional(Graph.TestStatus),
   confidence: Schema.optional(Schema.Number),
@@ -140,7 +141,11 @@ const ToolRunItem = Schema.Struct({
   id: Schema.String,
   toolName: Schema.String,
   toolType: Schema.String,
+  inputSummary: Schema.NullOr(Schema.String),
+  outputSummary: Schema.NullOr(Schema.String),
   status: Schema.String,
+  error: Schema.NullOr(Schema.String),
+  evidence: Schema.NullOr(Graph.VerificationEvidence),
   timeCreated: Schema.Number,
 }).annotate({ identifier: "GraphToolRun" })
 

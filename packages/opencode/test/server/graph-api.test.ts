@@ -97,6 +97,8 @@ interface GraphViewResponse {
   edges: Array<{ id: string; sourceID: string; targetID: string; relation: string }>
 }
 
+const verification = { criteria: ["observable result"], diagnostics: [{ name: "test" }] }
+
 describe("graph HttpApi", () => {
   it.instance("returns main graph for the project", () =>
     Effect.gen(function* () {
@@ -248,6 +250,70 @@ describe("graph HttpApi", () => {
     }),
   )
 
+  it.instance("returns bounded audit summaries and evidence through audit and workflow", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      const domain = yield* GraphDomain.Service
+      const nodeID = yield* domain.node.create({
+        projectID: session.projectID,
+        sessionID: session.id,
+        type: "atomic",
+        name: "Persisted task",
+        level: "L2",
+      })
+      const audit = yield* GraphAudit.Service
+      yield* audit.tool.record({
+        projectID: session.projectID,
+        sessionID: session.id,
+        nodeID,
+        toolName: "graph.diagnostics.run",
+        toolType: "diagnostics",
+        status: "failed",
+        inputSummary: "i".repeat(4_000),
+        outputSummary: "o".repeat(4_000),
+        error: "e".repeat(4_000),
+        evidence: {
+          kind: "diagnostics",
+          nodeID,
+          criteria: ["observable"],
+          artifactPaths: ["src/a.ts"],
+          projectChecksOnly: true,
+          complete: false,
+          passed: false,
+          commands: [{
+            name: "test",
+            command: "bun run test",
+            exitCode: 1,
+            timedOut: false,
+            passed: false,
+            excerpt: "x".repeat(20_000),
+          }],
+        },
+      })
+
+      const nodeAudit = yield* requestJson<{
+        toolRuns: Array<{
+          inputSummary: string | null
+          outputSummary: string | null
+          error: string | null
+          evidence: { commands: Array<{ excerpt?: string }> } | null
+        }>
+      }>(`/graph/node/${nodeID}/audit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`)
+      const workflow = yield* requestJson<{
+        tasks: Array<{ latestEvidence: { projectChecksOnly: boolean; commands: Array<{ excerpt?: string }> } | null }>
+      }>(`/graph/workflow?directory=${encodeURIComponent(test.directory)}&session=${session.id}`)
+
+      expect(nodeAudit.toolRuns[0]?.inputSummary?.length).toBeLessThanOrEqual(1_024)
+      expect(nodeAudit.toolRuns[0]?.outputSummary?.length).toBeLessThanOrEqual(1_024)
+      expect(nodeAudit.toolRuns[0]?.error?.length).toBeLessThanOrEqual(1_024)
+      expect(nodeAudit.toolRuns[0]?.evidence?.commands[0]?.excerpt?.length).toBeLessThanOrEqual(8_192)
+      expect(workflow.tasks[0]?.latestEvidence?.projectChecksOnly).toBe(true)
+      expect(workflow.tasks[0]?.latestEvidence?.commands[0]?.excerpt?.length).toBeLessThanOrEqual(8_192)
+    }),
+  )
+
   it.instance("admits nodes and edges into the CurrentPlan", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
@@ -260,8 +326,8 @@ describe("graph HttpApi", () => {
         `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
         {
           nodes: [
-            { type: "atomic", name: "Plan A", level: "L2" },
-            { type: "atomic", name: "Plan B", level: "L2" },
+            { type: "atomic", name: "Plan A", level: "L2", verification },
+            { type: "atomic", name: "Plan B", level: "L2", verification },
           ],
           edges: [{ sourceID: "@0", targetID: "@1", relation: "blocks" }],
         },
@@ -285,7 +351,7 @@ describe("graph HttpApi", () => {
         "POST",
         `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
         {
-          nodes: [{ type: "atomic", name: "Plan Status", level: "L2", status: "verified", testStatus: "passed" }],
+          nodes: [{ type: "atomic", name: "Plan Status", level: "L2", verification, status: "verified", testStatus: "passed" }],
           edges: [],
         },
       )
@@ -336,7 +402,7 @@ describe("graph HttpApi", () => {
           nodes: [
             { id: "module-a", type: "composite", name: "Module A", level: "L1" },
             { id: "module-b", type: "composite", name: "Module B", level: "L1" },
-            { id: "task", type: "atomic", name: "Task", level: "L2" },
+            { id: "task", type: "atomic", name: "Task", level: "L2", verification },
           ],
           edges: [
             { sourceID: "module-a", targetID: "task", relation: "contains" },
@@ -358,7 +424,7 @@ describe("graph HttpApi", () => {
         (yield* sendJson(
           "POST",
           `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
-          { nodes: [{ type: "atomic", name: "First Task", level: "L2" }], edges: [] },
+          { nodes: [{ type: "atomic", name: "First Task", level: "L2", verification }], edges: [] },
         )).status,
       ).toBe(200)
 
@@ -409,7 +475,7 @@ describe("graph HttpApi", () => {
       yield* sendJson(
         "POST",
         `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
-        { nodes: [{ type: "atomic", name: "First Task", level: "L2" }], edges: [] },
+        { nodes: [{ type: "atomic", name: "First Task", level: "L2", verification }], edges: [] },
       )
       const workflow = yield* requestJson<{ revision: number }>(
         `/graph/workflow?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
@@ -446,8 +512,8 @@ describe("graph HttpApi", () => {
         `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
         {
           nodes: [
-            { type: "atomic", name: "Atomic A", level: "L2" },
-            { type: "atomic", name: "Atomic B", level: "L2" },
+            { type: "atomic", name: "Atomic A", level: "L2", verification },
+            { type: "atomic", name: "Atomic B", level: "L2", verification },
           ],
           edges: [{ sourceID: "@0", targetID: "@1", relation: "blocks" }],
         },
@@ -472,6 +538,7 @@ describe("graph HttpApi", () => {
           nodeID: before.currentTask.id,
           criteria: [],
           artifactPaths: [],
+          projectChecksOnly: true,
           complete: true,
           passed: true,
           commands: [],
@@ -529,8 +596,8 @@ describe("graph HttpApi", () => {
           nodes: [
             { type: "composite", name: "Module A", level: "L1" },
             { type: "composite", name: "Module B", level: "L1" },
-            { type: "atomic", name: "Task A", level: "L2" },
-            { type: "atomic", name: "Task B", level: "L2" },
+            { type: "atomic", name: "Task A", level: "L2", verification },
+            { type: "atomic", name: "Task B", level: "L2", verification },
           ],
           edges: [
             { sourceID: "@0", targetID: "@2", relation: "contains" },
@@ -559,6 +626,7 @@ describe("graph HttpApi", () => {
           nodeID: before.currentTask.id,
           criteria: [],
           artifactPaths: [],
+          projectChecksOnly: true,
           complete: true,
           passed: true,
           commands: [],
@@ -594,7 +662,7 @@ describe("graph HttpApi", () => {
       yield* sendJson(
         "POST",
         `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
-        { nodes: [{ type: "atomic", name: "Pause Task", level: "L2" }], edges: [] },
+        { nodes: [{ type: "atomic", name: "Pause Task", level: "L2", verification }], edges: [] },
       )
       const before = yield* requestJson<{ revision: number }>(
         `/graph/workflow?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
@@ -636,7 +704,7 @@ describe("graph HttpApi", () => {
       yield* sendJson(
         "POST",
         `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
-        { nodes: [{ type: "atomic", name: "Current Task", level: "L2" }], edges: [] },
+        { nodes: [{ type: "atomic", name: "Current Task", level: "L2", verification }], edges: [] },
       )
       const storage = yield* GraphStorage.Service
       const task = (yield* storage.currentPlan({ sessionID: session.id })).nodes[0]
@@ -658,8 +726,8 @@ describe("graph HttpApi", () => {
         `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
         {
           nodes: [
-            { type: "atomic", name: "Dependency", level: "L2" },
-            { type: "atomic", name: "Target", level: "L2" },
+            { type: "atomic", name: "Dependency", level: "L2", verification },
+            { type: "atomic", name: "Target", level: "L2", verification },
           ],
           edges: [{ sourceID: "@0", targetID: "@1", relation: "blocks" }],
         },
@@ -734,7 +802,7 @@ describe("graph HttpApi", () => {
       yield* sendJson(
         "POST",
         `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
-        { nodes: [{ type: "atomic", name: "Paused Task", level: "L2" }], edges: [] },
+        { nodes: [{ type: "atomic", name: "Paused Task", level: "L2", verification }], edges: [] },
       )
       const workflow = yield* GraphWorkflowState.Service
       const planned = yield* workflow.get(session.id)
@@ -764,7 +832,7 @@ describe("graph HttpApi", () => {
       yield* sendJson(
         "POST",
         `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
-        { nodes: [{ type: "atomic", name: "Done Task", level: "L2" }], edges: [] },
+        { nodes: [{ type: "atomic", name: "Done Task", level: "L2", verification }], edges: [] },
       )
       const storage = yield* GraphStorage.Service
       const task = (yield* storage.currentPlan({ sessionID: session.id })).nodes[0]
@@ -786,6 +854,7 @@ describe("graph HttpApi", () => {
           nodeID: task.id,
           criteria: [],
           artifactPaths: [],
+          projectChecksOnly: true,
           complete: true,
           passed: true,
           commands: [],

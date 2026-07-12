@@ -111,6 +111,14 @@ describe("Graph workflow projection", () => {
     expect(projection.tasks[0]?.latestEvidence?.commands[0]?.excerpt).toBe("latest")
   })
 
+  test("labels evidence for persisted nodes without verification as project checks only", () => {
+    const projection = GraphWorkflowProjection.projectWorkflow(graph, state, [
+      { nodeID: taskA.id, evidence: evidence(taskA.id, "legacy"), timeCreated: 1 },
+    ])
+
+    expect(projection.tasks[0]?.latestEvidence?.projectChecksOnly).toBe(true)
+  })
+
   test("rejects ambiguous nearest composite membership in module mode", () => {
     const ambiguous: GraphView = {
       nodes: [...graph.nodes, node("module-c", { type: "composite", level: "L1" })],
@@ -129,6 +137,7 @@ function evidence(nodeID: NodeID, excerpt: string): VerificationEvidence {
     artifactPaths: ["src/a.ts"],
     complete: true,
     passed: true,
+    projectChecksOnly: false,
     commands: [{ name: "test", command: "bun test", exitCode: 0, timedOut: false, passed: true, excerpt }],
   }
 }

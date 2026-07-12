@@ -130,7 +130,18 @@ const graphNodeTypesPatched = patchGeneratedType(formattedTypes, "GraphNode", (b
 const graphVersionTypesPatched = patchGeneratedType(graphNodeTypesPatched, "GraphVersion", (body) =>
   patchNullableScalarFields(body, [["  message", "string"]]),
 )
-const graphWorkflowTaskTypesPatched = patchGeneratedType(graphVersionTypesPatched, "GraphWorkflowTask", (body) =>
+const graphToolRunTypesPatched = patchGeneratedType(graphVersionTypesPatched, "GraphToolRun", (body) =>
+  patchNullableObjectFields(
+    patchNullableScalarFields(body, [
+      ["  inputSummary", "string"],
+      ["  outputSummary", "string"],
+      ["  error", "string"],
+      ["      exitCode", 'number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"'],
+    ]),
+    ["  evidence"],
+  ),
+)
+const graphWorkflowTaskTypesPatched = patchGeneratedType(graphToolRunTypesPatched, "GraphWorkflowTask", (body) =>
   patchNullableObjectFields(
     patchNullableScalarFields(body, [
       ["  moduleID", "string"],

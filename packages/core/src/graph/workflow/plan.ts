@@ -146,6 +146,20 @@ export const layerFromDatabase = (database: Layer.Layer<Database.Service>) => {
 export const defaultLayer = layerFromDatabase(Database.layerFromPath(Database.path()))
 
 function validatePlan(input: AdmitPlanInput) {
+  const missingVerification = input.nodes.find((node) => node.type === "atomic" && node.verification === undefined)
+  if (missingVerification) {
+    return [{
+      rule: "node.verification_required",
+      message: `atomic node ${missingVerification.name} requires task-specific verification`,
+    }]
+  }
+  const invalidVerification = input.nodes.find((node) => node.type !== "atomic" && node.verification !== undefined)
+  if (invalidVerification) {
+    return [{
+      rule: "node.verification_atomic_only",
+      message: `verification is only valid on atomic nodes: ${invalidVerification.name}`,
+    }]
+  }
   const nodeIDs = input.nodes.map((node) => (node.id ?? GraphStorage.NodeID.create()) as GraphStorage.NodeID)
   const unknownRef = input.edges
     .flatMap((edge) => [edge.sourceID, edge.targetID])
