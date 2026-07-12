@@ -114,6 +114,73 @@ await Bun.write(sseTypesPath, sseTypesPatched)
 
 await $`bun prettier --write src/gen`
 await $`bun prettier --write src/v2`
+const formattedTypes = await Bun.file("./src/v2/gen/types.gen.ts").text()
+const graphNodeTypesPatched = patchGeneratedType(formattedTypes, "GraphNode", (body) =>
+  patchNullableObjectFields(
+    patchNullableScalarFields(body, [
+      ["  sessionID", "string"],
+      ["  priority", '"P0" | "P1" | "P2" | "P3"'],
+      ["  category", "string"],
+      ["  desc", "string"],
+      ["  codeHash", "string"],
+    ]),
+    ["  content"],
+  ),
+)
+const graphWorkflowTaskTypesPatched = patchGeneratedType(graphNodeTypesPatched, "GraphWorkflowTask", (body) =>
+  patchNullableObjectFields(
+    patchNullableScalarFields(body, [
+      ["  moduleID", "string"],
+      ["  moduleName", "string"],
+    ]),
+    ["  verification", "  latestEvidence"],
+  ),
+)
+const graphTypesPatched = patchGeneratedType(graphWorkflowTaskTypesPatched, "GraphWorkflow", (body) =>
+  patchNullableScalarFields(body, [
+    ["  mode", '"atomic" | "module" | "autopilot"'],
+    ["    kind", '"atomic" | "module" | "decision" | "failure" | "pause"'],
+    ["    scopeNodeID", "string"],
+    ["    scopeName", "string"],
+    ["    reason", "string"],
+    ["  currentTask", "GraphWorkflowTask"],
+  ]),
+)
+await Bun.write("./src/v2/gen/types.gen.ts", graphTypesPatched)
 await $`rm -rf dist`
 await $`bun tsc`
 await $`rm openapi.json`
+
+function patchGeneratedType(source: string, name: string, patch: (body: string) => string) {
+  const matches = [...source.matchAll(new RegExp(`(export type ${name} = \\{\\n)([\\s\\S]*?)(^}\\n)`, "gm"))]
+  if (matches.length !== 1) {
+    throw new Error(`Graph nullability patch expected exactly one generated type ${name}`)
+  }
+  const match = matches[0]
+  const body = match[2]
+  const patched = patch(body)
+  if (patched === body) throw new Error(`Graph nullability patch did not update generated type ${name}`)
+  const start = match.index + match[1].length
+  return source.slice(0, start) + patched + source.slice(start + body.length)
+}
+
+function patchNullableScalarFields(body: string, fields: ReadonlyArray<readonly [field: string, type: string]>) {
+  return fields.reduce((source, [field, type]) => {
+    const line = `${field}: ${type}`
+    if (source.split("\n").filter((candidate) => candidate === line).length !== 1) {
+      throw new Error(`Graph nullability patch expected exactly one generated field: ${line.trim()}`)
+    }
+    return source.replace(line, `${line} | null`)
+  }, body)
+}
+
+function patchNullableObjectFields(body: string, fields: ReadonlyArray<string>) {
+  return fields.reduce((source, field) => {
+    const indentation = field.slice(0, field.length - field.trimStart().length)
+    const pattern = new RegExp(`^${field}: \\{\\n[\\s\\S]*?^${indentation}\\}$`, "gm")
+    if ([...source.matchAll(pattern)].length !== 1) {
+      throw new Error(`Graph nullability patch expected exactly one generated object field: ${field.trim()}`)
+    }
+    return source.replace(pattern, "$& | null")
+  }, body)
+}

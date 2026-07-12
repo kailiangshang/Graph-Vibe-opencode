@@ -2314,18 +2314,18 @@ export type File = {
 export type GraphNode = {
   id: string
   projectID: string
-  sessionID: string
+  sessionID: string | null
   type: "prd" | "composite" | "atomic"
   name: string
   level: "L1" | "L2"
-  priority: "P0" | "P1" | "P2" | "P3"
-  category: string
+  priority: "P0" | "P1" | "P2" | "P3" | null
+  category: string | null
   status: "pending" | "implemented" | "verified" | "deprecated"
-  desc: string
+  desc: string | null
   content: {
     [key: string]: unknown
-  }
-  codeHash: string
+  } | null
+  codeHash: string | null
   testStatus: "none" | "pending" | "passed" | "failed"
   confidence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -2459,8 +2459,8 @@ export type GraphWorkflowTask = {
   id: string
   name: string
   order: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  moduleID: string
-  moduleName: string
+  moduleID: string | null
+  moduleName: string | null
   status: "pending" | "implemented" | "verified" | "deprecated"
   testStatus: "none" | "pending" | "passed" | "failed"
   buildable: boolean
@@ -2471,7 +2471,7 @@ export type GraphWorkflowTask = {
       name: "test" | "typecheck" | "lint"
       paths?: Array<string>
     }>
-  }
+  } | null
   latestEvidence: {
     kind: "diagnostics"
     nodeID: string
@@ -2487,7 +2487,7 @@ export type GraphWorkflowTask = {
       passed: boolean
       excerpt?: string
     }>
-  }
+  } | null
 }
 
 export type GraphWorkflowModule = {
@@ -2508,17 +2508,17 @@ export type GraphWorkflowRollup = {
 }
 
 export type GraphWorkflow = {
-  mode: "atomic" | "module" | "autopilot"
+  mode: "atomic" | "module" | "autopilot" | null
   revision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   phase: "planning" | "building" | "verifying" | "checkpoint" | "complete" | "failed"
   checkpoint: {
     status: "none" | "pending" | "approved"
-    kind: "atomic" | "module" | "decision" | "failure" | "pause"
-    scopeNodeID: string
-    scopeName: string
-    reason: string
+    kind: "atomic" | "module" | "decision" | "failure" | "pause" | null
+    scopeNodeID: string | null
+    scopeName: string | null
+    reason: string | null
   }
-  currentTask: GraphWorkflowTask
+  currentTask: GraphWorkflowTask | null
   modules: Array<GraphWorkflowModule>
   tasks: Array<GraphWorkflowTask>
   rollups: Array<GraphWorkflowRollup>
