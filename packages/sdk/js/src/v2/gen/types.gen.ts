@@ -2396,7 +2396,7 @@ export type GraphNodeAudit = {
 export type GraphVersion = {
   id: string
   versionNumber: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  message: string
+  message: string | null
   timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
@@ -2482,7 +2482,7 @@ export type GraphWorkflowTask = {
     commands: Array<{
       name: string
       command: string
-      exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | null
       timedOut: boolean
       passed: boolean
       excerpt?: string

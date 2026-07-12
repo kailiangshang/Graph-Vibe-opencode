@@ -1,4 +1,4 @@
-import type { GraphNode, GraphWorkflow, GraphWorkflowTask } from "../../src/v2/gen/types.gen.js"
+import type { GraphNode, GraphVersion, GraphWorkflow, GraphWorkflowTask } from "../../src/v2/gen/types.gen.js"
 import type { Graph } from "../../src/v2/gen/sdk.gen.js"
 
 const node = {
@@ -16,6 +16,28 @@ const task = {
   verification: null,
   latestEvidence: null,
 } satisfies Pick<GraphWorkflowTask, "moduleID" | "moduleName" | "verification" | "latestEvidence">
+
+const version = {
+  message: null,
+} satisfies Pick<GraphVersion, "message">
+
+const evidence = {
+  kind: "diagnostics",
+  nodeID: "node_test",
+  criteria: [],
+  artifactPaths: [],
+  complete: false,
+  passed: false,
+  commands: [
+    {
+      name: "test",
+      command: "bun test",
+      exitCode: null,
+      timedOut: true,
+      passed: false,
+    },
+  ],
+} satisfies NonNullable<GraphWorkflowTask["latestEvidence"]>
 
 const workflow = {
   mode: null,
@@ -37,4 +59,6 @@ graph.workflowPause
 
 void node
 void task
+void version
+void evidence
 void workflow

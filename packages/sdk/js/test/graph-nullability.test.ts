@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { Graph } from "../src/v2/gen/sdk.gen"
-import type { GraphNode, GraphWorkflow, GraphWorkflowTask } from "../src/v2/gen/types.gen"
+import type { GraphNode, GraphVersion, GraphWorkflow, GraphWorkflowTask } from "../src/v2/gen/types.gen"
 
 test("preserves nullable Graph response fields", () => {
   const node = {
@@ -17,6 +17,26 @@ test("preserves nullable Graph response fields", () => {
     verification: null,
     latestEvidence: null,
   } satisfies Pick<GraphWorkflowTask, "moduleID" | "moduleName" | "verification" | "latestEvidence">
+  const version = {
+    message: null,
+  } satisfies Pick<GraphVersion, "message">
+  const evidence = {
+    kind: "diagnostics",
+    nodeID: "node_test",
+    criteria: [],
+    artifactPaths: [],
+    complete: false,
+    passed: false,
+    commands: [
+      {
+        name: "test",
+        command: "bun test",
+        exitCode: null,
+        timedOut: true,
+        passed: false,
+      },
+    ],
+  } satisfies NonNullable<GraphWorkflowTask["latestEvidence"]>
   const workflow = {
     mode: null,
     checkpoint: {
@@ -31,6 +51,8 @@ test("preserves nullable Graph response fields", () => {
 
   expect(Object.values(node)).toEqual([null, null, null, null, null, null])
   expect(Object.values(task)).toEqual([null, null, null, null])
+  expect(version.message).toBeNull()
+  expect(evidence.commands[0].exitCode).toBeNull()
   expect(workflow).toEqual({
     mode: null,
     checkpoint: {
