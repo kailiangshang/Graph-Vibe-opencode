@@ -15,6 +15,7 @@ import { notFound } from "../errors"
 import {
   DiffQuery,
   GraphWorkflowRevisionConflict,
+  GraphWorkflowActiveOperation,
   PlanAdmitPayload,
   ProjectQuery,
   PromotePayload,
@@ -266,7 +267,15 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
               }),
             ),
           ),
-          Effect.catchTag("GraphWorkflowState.ActiveWorkflowError", () => Effect.fail(new HttpApiError.BadRequest({}))),
+          Effect.catchTag("GraphWorkflowState.ActiveWorkflowError", (error) =>
+            Effect.fail(
+              new GraphWorkflowActiveOperation({
+                operationKind: error.activeOperationKind,
+                message:
+                  "Workflow changes are active. Pause or wait for them to finish before changing execution mode.",
+              }),
+            ),
+          ),
           Effect.catchTag("GraphWorkflowState.ModuleScopeError", () => Effect.fail(new HttpApiError.BadRequest({}))),
         )
       yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })

@@ -9,6 +9,7 @@ import {
   normalizeWorkflow,
   reconcileSelection,
   workflowMutationFailure,
+  prefersReducedTransparency,
 } from "./graph-helpers"
 
 describe("countByStatus", () => {
@@ -208,10 +209,20 @@ describe("workflowMutationFailure", () => {
       refresh: false,
       message: "Execution mode cannot change while work is active. Pause the workflow first.",
     })
+    expect(workflowMutationFailure("mode", { _tag: "GraphWorkflowActiveOperation" })).toEqual({
+      kind: "active-workflow",
+      refresh: false,
+      message: "Workflow changes are active. Pause or wait for them to finish before changing execution mode.",
+    })
     expect(workflowMutationFailure("continue", { _tag: "BadRequest" })).toMatchObject({ kind: "invalid-action" })
     expect(workflowMutationFailure("pause", { _tag: "BadRequest" })).toMatchObject({ kind: "apply-rejected" })
     expect(workflowMutationFailure("continue", new TypeError("fetch failed"))).toMatchObject({ kind: "network" })
     expect(workflowMutationFailure("continue", new Error("socket closed"))).toMatchObject({ kind: "network" })
     expect(workflowMutationFailure("continue", { _tag: "Unexpected" })).toMatchObject({ kind: "rejected" })
   })
+})
+
+test("detects the reduced-transparency media preference for deterministic page styling", () => {
+  expect(prefersReducedTransparency((query) => ({ matches: query.includes("reduced-transparency") }))).toBe(true)
+  expect(prefersReducedTransparency(() => ({ matches: false }))).toBe(false)
 })

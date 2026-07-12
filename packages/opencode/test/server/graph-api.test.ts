@@ -585,6 +585,76 @@ describe("graph HttpApi", () => {
     }),
   )
 
+  it.instance("changes mode for idle work, preserves pending checkpoints, and rejects an active artifact owner", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      yield* sendJson(
+        "POST",
+        `/graph/plan/admit?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { nodes: [{ type: "atomic", name: "Idle Task", level: "L2", verification }], edges: [] },
+      )
+      const initial = yield* requestJson<{ revision: number }>(
+        `/graph/workflow?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+      )
+      const selected = yield* sendJson<{ revision: number }>(
+        "PATCH",
+        `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { mode: "atomic", expectedRevision: initial.revision },
+      )
+      const selectedJSON = selected.json ?? (yield* Effect.die(new Error("Expected selected workflow")))
+      const idle = yield* sendJson<{ revision: number }>(
+        "PATCH",
+        `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { mode: "autopilot", expectedRevision: selectedJSON.revision },
+      )
+      expect(idle.status).toBe(200)
+      const idleJSON = idle.json ?? (yield* Effect.die(new Error("Expected idle workflow mode change")))
+
+      const paused = yield* sendJson<{ revision: number }>(
+        "PATCH",
+        `/graph/workflow/pause?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { expectedRevision: idleJSON.revision },
+      )
+      const pausedJSON = paused.json ?? (yield* Effect.die(new Error("Expected paused workflow")))
+      const checkpoint = yield* sendJson<{ revision: number; checkpoint: { status: string; kind: string } }>(
+        "PATCH",
+        `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { mode: "atomic", expectedRevision: pausedJSON.revision },
+      )
+      expect(checkpoint.json?.checkpoint).toMatchObject({
+        status: "pending",
+        kind: "pause",
+        reason: null,
+      })
+      const checkpointJSON = checkpoint.json ?? (yield* Effect.die(new Error("Expected checkpoint workflow")))
+      const approved = yield* sendJson<{ revision: number }>(
+        "PATCH",
+        `/graph/workflow/approve?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { expectedRevision: checkpointJSON.revision },
+      )
+      const approvedJSON = approved.json ?? (yield* Effect.die(new Error("Expected approved workflow")))
+      const workflow = yield* GraphWorkflowState.Service
+      const active = yield* workflow.beginArtifactApply({
+        sessionID: session.id,
+        expectedRevision: approvedJSON.revision,
+        operationID: "api-active-mode",
+      })
+      const rejected = yield* send(
+        "PATCH",
+        `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        { mode: "autopilot", expectedRevision: active.revision },
+      )
+      expect(rejected.status).toBe(409)
+      expect(yield* rejected.json).toEqual({
+        _tag: "GraphWorkflowActiveOperation",
+        operationKind: "artifact_apply",
+        message: "Workflow changes are active. Pause or wait for them to finish before changing execution mode.",
+      })
+    }),
+  )
+
   it.instance("approves an atomic checkpoint idempotently and continues to the next task", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance

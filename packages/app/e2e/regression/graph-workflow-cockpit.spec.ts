@@ -8,13 +8,14 @@ const sessionID = "ses_graph_workflow_cockpit"
 const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
 
 for (const route of ["source", "embedded"] as const) {
-  test(`${route} route renders and updates the Graph workflow cockpit`, async ({ page }) => {
+  test(`${route} route renders the complete Graph workflow cockpit state matrix`, async ({ page }) => {
     const state = await setup(page, route === "embedded")
-    await page.goto(
+    const url =
       route === "embedded"
         ? `/server/${base64Encode(server)}/session/${sessionID}/graph`
-        : `/${base64Encode(directory)}/session/${sessionID}/graph`,
-    )
+        : `/${base64Encode(directory)}/session/${sessionID}/graph`
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(url)
 
     await expect(page.getByRole("region", { name: "Graph workflow cockpit" })).toBeVisible()
     await expect(page.getByRole("button", { name: "Plan" })).toHaveAttribute("aria-pressed", "true")
@@ -25,13 +26,69 @@ for (const route of ["source", "embedded"] as const) {
     await expect(page.getByRole("button", { name: "Continue" }).first()).toBeVisible()
     await expect(page.getByRole("button", { name: "Pause" })).toHaveCount(0)
     await expect(page.getByText("Rail remains visible at mobile width")).toBeVisible()
+    expect(
+      await page.evaluate(() => ({
+        document: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+        cockpit:
+          document.querySelector(".graph-cockpit")!.scrollWidth <=
+          document.querySelector(".graph-cockpit")!.clientWidth,
+      })),
+    ).toEqual({ document: true, cockpit: true })
 
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme })
+      await page.reload()
+      await expect(page.getByRole("region", { name: "Graph workflow cockpit" })).toBeVisible()
+      await expect(page.locator("html")).toHaveAttribute("data-color-scheme", colorScheme)
+      expect(
+        await page.evaluate((scheme) => matchMedia(`(prefers-color-scheme: ${scheme})`).matches, colorScheme),
+      ).toBe(true)
+    }
+
+    await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" })
+    await page.reload()
+    await expect(page.getByLabel("Workflow graph canvas. Use the task rail for keyboard navigation.")).toHaveAttribute(
+      "data-animation-active",
+      "false",
+    )
+
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send("Emulation.setEmulatedMedia", {
+      features: [
+        { name: "prefers-color-scheme", value: "dark" },
+        { name: "prefers-reduced-motion", value: "reduce" },
+        { name: "prefers-reduced-transparency", value: "reduce" },
+      ],
+    })
+    await page.reload()
+    await expect(page.locator(".graph-page")).toHaveAttribute("data-reduced-transparency", "true")
+    expect(
+      await page
+        .locator(".graph-glass")
+        .first()
+        .evaluate((element) => getComputedStyle(element).backdropFilter),
+    ).toBe("none")
+
+    await cdp.send("Emulation.setEmulatedMedia", { features: [] })
+    await page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" })
+
+    state.set("checkpoint")
+    await page.reload()
     await page.getByRole("button", { name: "Continue" }).first().click()
     await expect.poll(() => state.approvals).toBe(1)
     await expect(page.getByRole("button", { name: "Pause" })).toBeVisible()
     await expect(page.getByRole("button", { name: "Continue" })).toHaveCount(0)
 
+    await assertState(page, state, "mode-required", "Execution mode required", { mode: true })
+    await assertState(page, state, "paused", "Workflow paused", { mode: true, continue: true })
+    await assertState(page, state, "checkpoint", "Checkpoint waiting", { mode: true, continue: true })
+    await assertState(page, state, "failed", "Workflow failed", {})
+    await assertState(page, state, "complete", "Workflow complete", {})
+    await assertState(page, state, "network-error", "Workflow unavailable", { retry: true })
+
+    state.set("checkpoint")
     await page.setViewportSize({ width: 390, height: 844 })
+    await page.reload()
     const tasks = page.getByRole("tab", { name: "Tasks" })
     await tasks.focus()
     await tasks.press("ArrowRight")
@@ -49,8 +106,16 @@ for (const route of ["source", "embedded"] as const) {
 }
 
 async function setup(page: Page, embedded: boolean) {
-  let workflow = projection("checkpoint", "pending", 2)
-  const state = { approvals: 0 }
+  let view: WorkflowView = "checkpoint"
+  let approvals = 0
+  const state = {
+    get approvals() {
+      return approvals
+    },
+    set(next: WorkflowView) {
+      view = next
+    },
+  }
   await mockOpenCodeServer(page, {
     directory,
     project: {
@@ -78,12 +143,20 @@ async function setup(page: Page, embedded: boolean) {
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url())
     if (url.pathname === "/graph/workflow") {
-      if (route.request().method() === "GET") return route.fulfill(json(workflow))
+      if (route.request().method() === "GET") {
+        if (view === "network-error")
+          return route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "offline" }),
+          })
+        return route.fulfill(json(projection(view)))
+      }
     }
     if (url.pathname === "/graph/workflow/approve") {
-      state.approvals++
-      workflow = projection("building", "approved", 3)
-      return route.fulfill(json(workflow))
+      approvals++
+      view = "building"
+      return route.fulfill(json(projection(view)))
     }
     if (url.pathname === "/graph/current-plan" || url.pathname === "/graph/main") return route.fulfill(json(graph))
     return route.fallback()
@@ -105,23 +178,64 @@ async function setup(page: Page, embedded: boolean) {
   return state
 }
 
-function projection(phase: "checkpoint" | "building", checkpoint: "pending" | "approved", revision: number) {
+type WorkflowView = "mode-required" | "paused" | "checkpoint" | "building" | "failed" | "complete" | "network-error"
+
+function projection(view: Exclude<WorkflowView, "network-error">) {
+  const pending = view === "paused" || view === "checkpoint"
+  const complete = view === "complete"
+  const failed = view === "failed"
+  const phase = view === "mode-required" ? "planning" : view === "building" ? "building" : pending ? "checkpoint" : view
   return {
-    mode: "module",
-    revision,
+    mode: view === "mode-required" ? null : "module",
+    revision: 2,
+    activeOperationKind: null,
     phase,
     checkpoint: {
-      status: checkpoint,
-      kind: checkpoint === "pending" ? "module" : null,
-      scopeNodeID: checkpoint === "pending" ? "module" : null,
-      scopeName: checkpoint === "pending" ? "Interface" : null,
-      reason: checkpoint === "pending" ? "Review the verified module" : null,
+      status: pending ? "pending" : "approved",
+      kind: view === "paused" ? "pause" : view === "checkpoint" ? "module" : null,
+      scopeNodeID: pending ? "module" : null,
+      scopeName: pending ? "Interface" : null,
+      reason: view === "paused" ? "Paused for review" : view === "checkpoint" ? "Review the verified module" : null,
     },
     currentTask: { ...task, current: true },
-    progress: { total: 1, verified: 0, failed: 0, percent: 0 },
-    tasks: [{ ...task, current: true }],
-    modules: [{ id: "module", name: "Interface", status: "implemented", taskIDs: ["task"] }],
+    progress: { total: 1, verified: complete ? 1 : 0, failed: failed ? 1 : 0, percent: complete ? 100 : 0 },
+    tasks: [
+      {
+        ...task,
+        current: true,
+        status: complete ? "verified" : failed ? "implemented" : "pending",
+        testStatus: complete ? "passed" : failed ? "failed" : "none",
+      },
+    ],
+    modules: [
+      {
+        id: "module",
+        name: "Interface",
+        status: complete ? "verified" : failed ? "failed" : "implemented",
+        taskIDs: ["task"],
+      },
+    ],
   }
+}
+
+async function assertState(
+  page: Page,
+  state: Awaited<ReturnType<typeof setup>>,
+  view: WorkflowView,
+  label: string,
+  actions: { mode?: boolean; continue?: boolean; retry?: boolean },
+) {
+  state.set(view)
+  await page.reload()
+  await expect(page.getByText(label, { exact: false }).first()).toBeVisible()
+  if (actions.retry) {
+    await expect(page.getByLabel("Execution mode")).toHaveCount(0)
+  } else {
+    await expect(page.getByLabel("Execution mode")).toBeEnabled({ enabled: actions.mode ?? false })
+  }
+  await expect(page.getByRole("button", { name: "Continue" })).toHaveCount(actions.continue ? 2 : 0)
+  await expect(page.getByRole("button", { name: "Pause" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(actions.retry ? 1 : 0)
 }
 
 const task = {

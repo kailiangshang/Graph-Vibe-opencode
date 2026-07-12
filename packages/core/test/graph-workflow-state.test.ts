@@ -245,6 +245,37 @@ describe("GraphWorkflowState", () => {
     )
   })
 
+  test("changes mode with an idle current task and rejects an active artifact owner", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "atomic", expectedRevision: 0 })
+        const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+        const idle = yield* workflow.setMode({
+          sessionID: SID,
+          projectID: PID,
+          mode: "autopilot",
+          expectedRevision: planned.revision,
+        })
+        expect(idle).toMatchObject({ mode: "autopilot", currentNodeID: atomicA.id, activeOperationID: null })
+
+        const active = yield* workflow.beginArtifactApply({
+          sessionID: SID,
+          expectedRevision: idle.revision,
+          operationID: "active-mode-change",
+        })
+        const error = yield* workflow
+          .setMode({ sessionID: SID, projectID: PID, mode: "module", expectedRevision: active.revision })
+          .pipe(Effect.flip)
+        expect(error).toMatchObject({
+          _tag: "GraphWorkflowState.ActiveWorkflowError",
+          sessionID: SID,
+          activeOperationKind: "artifact_apply",
+        })
+      }),
+    )
+  })
+
   test("approves idempotently and pauses with an exact revision", async () => {
     await run(
       Effect.gen(function* () {

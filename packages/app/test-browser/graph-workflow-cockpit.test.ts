@@ -122,7 +122,12 @@ test("renders Pause only for an active authorized workflow", () => {
   const dispose = render(
     () =>
       createComponent(GraphCockpit, {
-        workflow: { ...workflow, phase: "building", checkpoint: { status: "approved", kind: null } },
+        workflow: {
+          ...workflow,
+          phase: "building",
+          activeOperationKind: "artifact_apply",
+          checkpoint: { status: "approved", kind: null },
+        },
         graph: { nodes: [], edges: [] },
         selectedNodeID: null,
         onSelectNode: () => {},
@@ -131,7 +136,7 @@ test("renders Pause only for an active authorized workflow", () => {
     root,
   )
   expect(root.textContent).toContain("Pause")
-  expect(root.textContent).toContain("Pause the workflow before changing execution mode")
+  expect(root.textContent).toContain("Pause or wait for active workflow changes before changing execution mode")
   expect(root.textContent).not.toContain("Continue")
   ;[...root.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Pause")!.click()
   expect(paused).toBe(1)
@@ -409,6 +414,7 @@ test("reduced motion draws without RAF and normal motion cancels RAF on cleanup"
   document.body.append(reduced)
   const disposeReduced = render(() => canvasComponent(), reduced)
   expect(requested).toEqual([])
+  expect(reduced.querySelector("canvas")?.getAttribute("data-animation-active")).toBe("false")
   disposeReduced()
   reduced.remove()
 
@@ -426,6 +432,7 @@ test("reduced motion draws without RAF and normal motion cancels RAF on cleanup"
   document.body.append(animated)
   const disposeAnimated = render(() => canvasComponent(), animated)
   expect(requested.length).toBeGreaterThan(0)
+  expect(animated.querySelector("canvas")?.getAttribute("data-animation-active")).toBe("true")
   disposeAnimated()
   expect(cancelled).toContain(requested.at(-1))
   animated.remove()

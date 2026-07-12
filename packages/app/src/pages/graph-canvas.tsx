@@ -224,7 +224,11 @@ export function GraphCanvas(props: {
       unsettled -= 1
     }
     draw()
-    if (unsettled > 0) frame = requestAnimationFrame(animate)
+    if (unsettled > 0) {
+      frame = requestAnimationFrame(animate)
+      return
+    }
+    canvas?.setAttribute("data-animation-active", "false")
   }
 
   const start = () => {
@@ -232,10 +236,12 @@ export function GraphCanvas(props: {
     reducedMotion ??= window.matchMedia("(prefers-reduced-motion: reduce)")
     if (reducedMotion?.matches) {
       unsettled = 0
+      canvas?.setAttribute("data-animation-active", "false")
       draw()
       return
     }
     unsettled = 80
+    canvas?.setAttribute("data-animation-active", "true")
     frame = requestAnimationFrame(animate)
   }
 
@@ -289,7 +295,10 @@ export function GraphCanvas(props: {
       reducedMotion?.removeEventListener("change", motion)
     })
   })
-  onCleanup(() => cancelAnimationFrame(frame))
+  onCleanup(() => {
+    cancelAnimationFrame(frame)
+    canvas?.setAttribute("data-animation-active", "false")
+  })
 
   return (
     <div
@@ -301,6 +310,7 @@ export function GraphCanvas(props: {
         ref={(element) => (canvas = element)}
         class="h-full w-full touch-none"
         aria-label={GRAPH_CANVAS_LABEL}
+        data-animation-active="false"
         data-center-request={props.centerNodeID ? `${props.centerNodeID}:${props.centerRequestToken ?? 0}` : undefined}
         onPointerDown={(event) => {
           if (hit(event)) return

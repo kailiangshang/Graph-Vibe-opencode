@@ -196,6 +196,46 @@ describe("Graph collaboration status", () => {
     })
   })
 
+  test("groups every top-level projected task once and keeps Ungrouped out of the module count", () => {
+    const taskA = {
+      id: "task-a",
+      name: "Module task",
+      moduleID: "module-a",
+      status: "pending",
+      testStatus: "none",
+      current: true,
+    }
+    const taskB = {
+      id: "task-b",
+      name: "Loose task",
+      moduleID: null,
+      status: "pending",
+      testStatus: "none",
+      current: false,
+    }
+    const mixed = formatPlanAdmission(
+      {},
+      {
+        ...workflow,
+        tasks: [taskA, taskB, { ...taskB }],
+        modules: [
+          { id: "module-a", name: "First module", taskIDs: ["task-a"], tasks: [taskA] },
+          { id: "module-b", name: "Second module", taskIDs: [], tasks: [] },
+        ],
+      },
+    )
+    expect(mixed).toMatchObject({ moduleCount: 2, taskCount: 2 })
+    expect(mixed.modules.map((module) => [module.name, module.tasks])).toEqual([
+      ["First module", ["Module task"]],
+      ["Second module", []],
+      ["Ungrouped", ["Loose task"]],
+    ])
+
+    const allUngrouped = formatPlanAdmission({}, { ...workflow, tasks: [taskA, taskB], modules: [] })
+    expect(allUngrouped).toMatchObject({ moduleCount: 0, taskCount: 2 })
+    expect(allUngrouped.modules).toEqual([{ name: "Ungrouped", tasks: ["Module task", "Loose task"] }])
+  })
+
   test("maps graph activity and errors without exposing internal identifiers", () => {
     expect(graphToolActivity("graph_artifact_apply")).toBe("Applying task changes")
     expect(graphToolActivity("graph_diagnostics_run", "error")).toBe("Task verification failed")
@@ -304,6 +344,10 @@ describe("Graph collaboration status", () => {
     expect(workflowActionFailure("continue", new TypeError("fetch failed"))).toMatchObject({ kind: "network" })
     expect(workflowActionFailure("continue", new Error("socket closed"))).toMatchObject({ kind: "network" })
     expect(workflowActionFailure("continue", { _tag: "Unexpected" })).toMatchObject({ kind: "rejected" })
+    expect(workflowActionFailure("mode", { _tag: "GraphWorkflowActiveOperation" })).toEqual({
+      kind: "active-workflow",
+      message: "Workflow changes are active. Pause or wait for them to finish before changing execution mode.",
+    })
   })
 
   test("rejects an empty mutation envelope instead of reporting success", async () => {
@@ -349,25 +393,46 @@ describe("Graph collaboration status", () => {
     ).toEqual({
       continue: true,
       pause: false,
+      mode: true,
     })
     expect(
       workflowActions({ mode: "module", phase: "building", checkpoint: { status: "approved", kind: "module" } }),
     ).toEqual({
       continue: false,
       pause: true,
+      mode: true,
     })
     expect(workflowActions({ mode: "module", phase: "complete", checkpoint: { status: "none", kind: null } })).toEqual({
       continue: false,
       pause: false,
+      mode: false,
     })
     expect(workflowActions({ mode: null, phase: "planning", checkpoint: { status: "none", kind: null } })).toEqual({
       continue: false,
       pause: false,
+      mode: true,
     })
     expect(workflowActions({ mode: null, phase: "checkpoint", checkpoint: { status: "pending" } })).toEqual({
       continue: false,
       pause: false,
+      mode: true,
     })
+    expect(
+      workflowActions({
+        mode: "atomic",
+        phase: "building",
+        activeOperationKind: null,
+        checkpoint: { status: "approved" },
+      }),
+    ).toMatchObject({ mode: true })
+    expect(
+      workflowActions({
+        mode: "atomic",
+        phase: "building",
+        activeOperationKind: "artifact_apply",
+        checkpoint: { status: "approved" },
+      }),
+    ).toMatchObject({ mode: false })
   })
 
   test("persists start mode before prompting and aborts without durable workflow", async () => {
