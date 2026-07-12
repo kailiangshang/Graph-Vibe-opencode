@@ -106,6 +106,26 @@ describe("GraphBuild.evaluate", () => {
     }))
   })
 
+  test("blocks concurrent second-apply and diagnostics evaluations after reservation", async () => {
+    await run(Effect.gen(function* () {
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "Owned", level: "L2" })
+      const workflow = yield* GraphWorkflowState.Service
+      yield* workflow.setMode({ projectID: PID, sessionID: SID, mode: "atomic", expectedRevision: 0 })
+      const planned = yield* workflow.resetPlan({ projectID: PID, sessionID: SID, graph: yield* storage.currentPlan({ sessionID: SID }) })
+      yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision, operationID: "active-apply" })
+      const build = yield* GraphBuild.Service
+      const [artifact, diagnostics] = yield* Effect.all([
+        build.evaluate({ projectID: PID, sessionID: SID, targetNodeID, executor: "manual", artifact: { mode: "full", path: "src/a.ts", code: "export {}", test: "test" } }),
+        build.evaluate({ projectID: PID, sessionID: SID, targetNodeID, executor: "manual", diagnosticsRequested: true }),
+      ], { concurrency: "unbounded" })
+      expect(artifact.issues.map((issue) => issue.code)).toContain("artifact_apply_active")
+      expect(diagnostics.issues.map((issue) => issue.code)).toContain("artifact_apply_active")
+      expect(artifact.requiredPermissions).toEqual([])
+      expect(diagnostics.requiredPermissions).toEqual([])
+    }))
+  })
+
   test("shares one database across exported build dependencies", async () => {
     expect(GraphBuild).toHaveProperty("layerFromDatabase")
     if (!("layerFromDatabase" in GraphBuild)) return

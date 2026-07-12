@@ -757,7 +757,8 @@ const layer = Layer.effectDiscard(
           agent: context.agent,
           source: source(context),
         })
-        const reservation = yield* workflow.beginArtifactApply({ sessionID: session.sessionID, expectedRevision: evaluation.workflowRevision })
+        const operationID = context.toolCallID
+        const reservation = yield* workflow.beginArtifactApply({ sessionID: session.sessionID, expectedRevision: evaluation.workflowRevision, operationID })
         const artifactEvidence = { kind: "artifact" as const, nodeID: input.targetNodeID, artifactPaths: files }
         yield* Effect.forEach(existing, (item) =>
           Effect.gen(function* () {
@@ -769,13 +770,14 @@ const layer = Layer.effectDiscard(
           }),
         ).pipe(Effect.onError((cause) => workflow.failArtifactApply({
           projectID: session.projectID, sessionID: session.sessionID, nodeID: input.targetNodeID,
-          reservedRevision: reservation.revision, evidence: artifactEvidence, error: String(cause),
+          reservedRevision: reservation.revision, operationID, evidence: artifactEvidence, error: String(cause),
         }).pipe(Effect.orDie)))
         yield* workflow.completeArtifactApply({
           projectID: session.projectID,
           sessionID: session.sessionID,
           nodeID: input.targetNodeID,
           reservedRevision: reservation.revision,
+          operationID,
           evidence: artifactEvidence,
           inputSummary: summarizePaths(paths),
           outputSummary: `applied:${paths.length}`,

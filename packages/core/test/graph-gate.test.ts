@@ -54,6 +54,23 @@ const authority = (currentNodeID: NodeID | null, patch: Record<string, unknown> 
 })
 
 describe("Build gate", () => {
+  test("blocks artifact and diagnostics while an artifact apply owns the workflow", () => {
+    const target = node("target")
+    for (const diagnosticsRequested of [false, true]) {
+      const result = evaluateBuildGate({
+        projectID: PID,
+        sessionID: SID,
+        targetNodeID: target.id,
+        workflow: authority(target.id, { artifactApplyActive: true }),
+        main: emptyMain,
+        currentPlan: { nodes: [target], edges: [] },
+        artifact: diagnosticsRequested ? undefined : { mode: "full", path: "src/a.ts", code: "a", test: "test" },
+        diagnosticsRequested,
+      })
+      expect(result.issues.map((issue) => issue.code)).toContain("artifact_apply_active")
+      expect(result.allowed).toBe(false)
+    }
+  })
   test("blocks target outside CurrentPlan", () => {
     const result = evaluateBuildGate({
       projectID: PID,

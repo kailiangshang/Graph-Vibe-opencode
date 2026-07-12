@@ -73,6 +73,9 @@ const state: GraphWorkflowState.State = {
   checkpointStatus: "approved",
   checkpointReason: null,
   revision: 4,
+  activeOperationID: null,
+  activeOperationKind: null,
+  activeOperationStartedAt: null,
   timeCreated: 1,
   timeUpdated: 2,
 }

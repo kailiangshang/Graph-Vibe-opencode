@@ -17,6 +17,7 @@ export interface WorkflowAuthority {
   readonly checkpointScopeNodeID: NodeID | null
   readonly checkpointStatus: CheckpointStatus
   readonly latestEvidenceComplete?: boolean
+  readonly artifactApplyActive?: boolean
 }
 
 export interface BuildGateInput {
@@ -49,6 +50,7 @@ export interface GateIssue {
     | "structural_drift"
     | "missing_code_reference"
     | "invalid_artifact"
+    | "artifact_apply_active"
   readonly severity: "block" | "warn"
   readonly nodeID?: NodeID
   readonly message: string
@@ -85,6 +87,9 @@ export function evaluateBuildGate(input: BuildGateInput): GateResult {
 
 function workflowIssues(workflow: WorkflowAuthority, targetNodeID: NodeID, currentPlan: GraphView): GateIssue[] {
   const issues: GateIssue[] = []
+  if (workflow.artifactApplyActive) {
+    issues.push({ code: "artifact_apply_active", severity: "block", message: "another artifact apply owns the workflow" })
+  }
   if (!workflow.mode) {
     issues.push({
       code: "execution_mode_required",

@@ -228,7 +228,8 @@ export const GraphArtifactApplyTool = Tool.define(
                   ...draftMetadata(source.draftID),
                 },
               })
-              const reservation = yield* build.beginArtifactApply({ sessionID: session.sessionID, expectedRevision: evaluation.workflowRevision })
+              const operationID = ctx.callID ?? ctx.messageID
+              const reservation = yield* build.beginArtifactApply({ sessionID: session.sessionID, expectedRevision: evaluation.workflowRevision, operationID })
               const artifactEvidence = { kind: "artifact" as const, nodeID: params.targetNodeID, artifactPaths: files }
               yield* Effect.forEach(existing, (item, index) =>
                 Effect.gen(function* () {
@@ -252,7 +253,7 @@ export const GraphArtifactApplyTool = Tool.define(
                 }),
               ).pipe(Effect.onError((cause) => build.failArtifactApply({
                 projectID: session.projectID, sessionID: session.sessionID, nodeID: params.targetNodeID,
-                reservedRevision: reservation.revision, evidence: artifactEvidence, error: String(cause),
+                reservedRevision: reservation.revision, operationID, evidence: artifactEvidence, error: String(cause),
               }).pipe(Effect.orDie)))
               yield* progress("updating_graph", { bytesPlanned, bytesWritten: bytesPlanned })
               yield* build.completeArtifactApply({
@@ -260,6 +261,7 @@ export const GraphArtifactApplyTool = Tool.define(
                 sessionID: session.sessionID,
                 nodeID: params.targetNodeID,
                 reservedRevision: reservation.revision,
+                operationID,
                 evidence: artifactEvidence,
                 inputSummary: summarizePaths(paths),
                 outputSummary: `applied:${paths.length}`,
