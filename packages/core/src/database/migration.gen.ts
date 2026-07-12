@@ -46,5 +46,6 @@ export const migrations = (
     import("./migration/20260710153207_graph_collaboration"),
     import("./migration/20260712132753_serious_blue_shield"),
     import("./migration/20260712134131_lazy_skin"),
+    import("./migration/20260712140000_recover_legacy_artifact_owners"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

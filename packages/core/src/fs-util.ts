@@ -134,7 +134,7 @@ export namespace FSUtil {
               }),
           ),
         )
-        if (mode) yield* fs.chmod(path, mode)
+        if (mode !== undefined) yield* fs.chmod(path, mode)
       })
 
       const glob = Effect.fn("FileSystem.glob")(function* (pattern: string, options?: Glob.Options) {
