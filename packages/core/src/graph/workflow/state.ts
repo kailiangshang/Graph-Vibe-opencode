@@ -26,11 +26,14 @@ export interface State {
   readonly activeOperationID: string | null
   readonly activeOperationKind: "artifact_apply" | null
   readonly activeOperationStartedAt: number | null
+  readonly activeOperationProcessID: number | null
+  readonly activeOperationRuntimeID: string | null
   readonly timeCreated: number
   readonly timeUpdated: number
 }
 
 export const ARTIFACT_APPLY_STALE_AFTER_MS = 15 * 60 * 1_000
+export const ARTIFACT_APPLY_RUNTIME_ID = Bun.randomUUIDv7()
 
 export class RevisionConflict extends Schema.TaggedErrorClass<RevisionConflict>()(
   "GraphWorkflowState.RevisionConflict",
@@ -104,7 +107,12 @@ export interface Interface {
     readonly expectedRevision: number
     readonly operationID: string
   }) => Effect.Effect<State, RevisionConflict | ArtifactApplyOwnershipConflict>
-  readonly recoverStaleArtifactApply: (sessionID: string) => Effect.Effect<State | undefined>
+  readonly recoverAbandonedArtifactApply: (sessionID: string) => Effect.Effect<State | undefined>
+  readonly assertArtifactApplyOwner: (input: {
+    readonly sessionID: string
+    readonly reservedRevision: number
+    readonly operationID: string
+  }) => Effect.Effect<void, RevisionConflict | ArtifactApplyOwnershipConflict>
   readonly completeArtifactApply: (input: {
     readonly projectID: ProjectV2.ID
     readonly sessionID: string
@@ -156,6 +164,8 @@ const fromRow = (row: typeof GraphWorkflowStateTable.$inferSelect): State => ({
   activeOperationID: row.active_operation_id,
   activeOperationKind: row.active_operation_kind,
   activeOperationStartedAt: row.active_operation_started_at,
+  activeOperationProcessID: row.active_operation_process_id,
+  activeOperationRuntimeID: row.active_operation_runtime_id,
   timeCreated: row.time_created,
   timeUpdated: row.time_updated,
 })
@@ -587,17 +597,20 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
-    const recoverStaleArtifactApply = Effect.fn("GraphWorkflowState.recoverStaleArtifactApply")(function* (sessionID: string) {
+    const recoverAbandonedArtifactApply = Effect.fn("GraphWorkflowState.recoverAbandonedArtifactApply")(function* (sessionID: string) {
       const now = yield* Clock.currentTimeMillis
       return yield* database.db.transaction(() => Effect.gen(function* () {
         const current = yield* get(sessionID)
-        if (!current?.activeOperationID || current.activeOperationStartedAt === null) return current
-        if (now - current.activeOperationStartedAt < ARTIFACT_APPLY_STALE_AFTER_MS) return current
-        const reason = `artifact apply ${current.activeOperationID} exceeded ${ARTIFACT_APPLY_STALE_AFTER_MS}ms`
+        if (!current?.activeOperationID) return current
+        if (!ownerDemonstrablyDead(current)) return current
+        const age = current.activeOperationStartedAt === null ? null : Math.max(0, now - current.activeOperationStartedAt)
+        const reason = `artifact apply ${current.activeOperationID} owner process is no longer alive; age=${age === null ? "unknown" : `${age}ms`} stale=${age !== null && age >= ARTIFACT_APPLY_STALE_AFTER_MS}`
         const row = yield* database.db.update(GraphWorkflowStateTable).set({
           active_operation_id: null,
           active_operation_kind: null,
           active_operation_started_at: null,
+          active_operation_process_id: null,
+          active_operation_runtime_id: null,
           checkpoint_kind: "failure",
           checkpoint_scope_node_id: current.currentNodeID,
           checkpoint_status: "pending",
@@ -625,7 +638,7 @@ export const layer = Layer.effect(
       return yield* database.db.transaction(() => Effect.gen(function* () {
         const current = yield* get(input.sessionID)
         if (!current) return yield* new RevisionConflict({ expectedRevision: input.expectedRevision, actualRevision: 0 })
-        if (current.activeOperationID === input.operationID) return current
+        if (current.activeOperationID === input.operationID && ownerIsCurrentRuntime(current)) return current
         if (current.activeOperationID) return yield* new ArtifactApplyOwnershipConflict({ operationID: input.operationID, activeOperationID: current.activeOperationID })
         if (current.revision !== input.expectedRevision) return yield* new RevisionConflict({ expectedRevision: input.expectedRevision, actualRevision: current.revision })
         const row = yield* database.db.update(GraphWorkflowStateTable).set({
@@ -633,12 +646,23 @@ export const layer = Layer.effect(
           active_operation_id: input.operationID,
           active_operation_kind: "artifact_apply",
           active_operation_started_at: now,
+          active_operation_process_id: process.pid,
+          active_operation_runtime_id: ARTIFACT_APPLY_RUNTIME_ID,
         })
           .where(and(eq(GraphWorkflowStateTable.session_id, input.sessionID), eq(GraphWorkflowStateTable.revision, current.revision)))
           .returning().get().pipe(Effect.orDie)
         if (!row) return yield* new RevisionConflict({ expectedRevision: input.expectedRevision, actualRevision: (yield* get(input.sessionID))?.revision ?? 0 })
         return fromRow(row)
       }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
+    })
+
+    const assertArtifactApplyOwner = Effect.fn("GraphWorkflowState.assertArtifactApplyOwner")(function* (input: {
+      readonly sessionID: string
+      readonly reservedRevision: number
+      readonly operationID: string
+    }) {
+      const current = yield* requireState(get, input.sessionID, input.reservedRevision)
+      yield* requireArtifactOwner(current, input.operationID)
     })
 
     const completeArtifactApply = Effect.fn("GraphWorkflowState.completeArtifactApply")(function* (input: {
@@ -662,7 +686,8 @@ export const layer = Layer.effect(
           inputSummary: input.inputSummary, outputSummary: input.outputSummary, evidence: input.evidence,
         })
         const row = yield* database.db.update(GraphWorkflowStateTable).set({
-          active_operation_id: null, active_operation_kind: null, active_operation_started_at: null, revision: current.revision + 1,
+          active_operation_id: null, active_operation_kind: null, active_operation_started_at: null,
+          active_operation_process_id: null, active_operation_runtime_id: null, revision: current.revision + 1,
         }).where(and(eq(GraphWorkflowStateTable.session_id, input.sessionID), eq(GraphWorkflowStateTable.revision, current.revision), eq(GraphWorkflowStateTable.active_operation_id, input.operationID))).returning().get().pipe(Effect.orDie)
         if (!row) return yield* new RevisionConflict({ expectedRevision: input.reservedRevision, actualRevision: (yield* get(input.sessionID))?.revision ?? 0 })
         return fromRow(row)
@@ -686,6 +711,8 @@ export const layer = Layer.effect(
           active_operation_id: null,
           active_operation_kind: null,
           active_operation_started_at: null,
+          active_operation_process_id: null,
+          active_operation_runtime_id: null,
           checkpoint_kind: "failure",
           checkpoint_scope_node_id: input.nodeID,
           checkpoint_status: "pending",
@@ -794,7 +821,7 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
-    return Service.of({ get, setMode, resetPlan, approve, pause, advanceVerified, completeVerification, recoverStaleArtifactApply, beginArtifactApply, completeArtifactApply, failArtifactApply, failVerification, fail, promote })
+    return Service.of({ get, setMode, resetPlan, approve, pause, advanceVerified, completeVerification, recoverAbandonedArtifactApply, assertArtifactApplyOwner, beginArtifactApply, completeArtifactApply, failArtifactApply, failVerification, fail, promote })
   }),
 )
 
@@ -827,8 +854,23 @@ function requireState(
 }
 
 function requireArtifactOwner(state: State, operationID: string) {
-  if (state.activeOperationID === operationID) return Effect.void
+  if (state.activeOperationID === operationID && ownerIsCurrentRuntime(state)) return Effect.void
   return new ArtifactApplyOwnershipConflict({ operationID, activeOperationID: state.activeOperationID ?? "" })
+}
+
+function ownerIsCurrentRuntime(state: State) {
+  return state.activeOperationProcessID === process.pid && state.activeOperationRuntimeID === ARTIFACT_APPLY_RUNTIME_ID
+}
+
+function ownerDemonstrablyDead(state: State) {
+  if (state.activeOperationProcessID === null || state.activeOperationRuntimeID === null) return false
+  if (state.activeOperationProcessID === process.pid) return false
+  try {
+    process.kill(state.activeOperationProcessID, 0)
+    return false
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ESRCH"
+  }
 }
 
 function requireModule(graph: GraphView, nodeID: NodeID) {

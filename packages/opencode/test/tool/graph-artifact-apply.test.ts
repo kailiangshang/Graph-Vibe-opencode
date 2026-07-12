@@ -16,14 +16,14 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionTable } from "@opencode-ai/core/session/sql"
-import { Effect } from "effect"
+import { Deferred, Effect, Fiber } from "effect"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
-import { GraphArtifactApplyTool } from "@/tool/graph/artifact-apply"
+import { artifactOperationID, GraphArtifactApplyTool } from "@/tool/graph/artifact-apply"
 import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { TestConfig } from "../fixture/config"
@@ -133,6 +133,59 @@ const authorize = Effect.fn("GraphArtifactApplyTest.authorize")(function* (targe
 })
 
 describe("graph_artifact_apply", () => {
+  it.effect("gives two no-callID artifact calls in one message distinct operation IDs", () =>
+    Effect.sync(() => {
+      const messageID = MessageID.ascending()
+      const first = { mode: "full" as const, path: "src/a.ts", code: "a", test: "test" }
+      const second = { mode: "full" as const, path: "src/b.ts", code: "b", test: "test" }
+      expect(artifactOperationID({ messageID, targetNodeID: "node", artifact: first })).not.toBe(artifactOperationID({ messageID, targetNodeID: "node", artifact: second }))
+      expect(artifactOperationID({ messageID, targetNodeID: "node", artifact: first, draftID: "draft-1" })).not.toBe(artifactOperationID({ messageID, targetNodeID: "node", artifact: first, draftID: "draft-2" }))
+    }),
+  )
+
+  it.effect("gives an exact no-callID retry the same operation ID and prefers callID", () =>
+    Effect.sync(() => {
+      const messageID = MessageID.ascending()
+      const artifact = { mode: "full" as const, path: "src/a.ts", code: "a", test: "test" }
+      expect(artifactOperationID({ messageID, targetNodeID: "node", artifact })).toBe(artifactOperationID({ messageID, targetNodeID: "node", artifact }))
+      expect(artifactOperationID({ messageID, callID: "call-1", targetNodeID: "node", artifact })).toBe("call-1")
+    }),
+  )
+
+  it.instance("uses stable distinct durable owners for real no-callID calls in one message", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const workflow = yield* GraphWorkflowState.Service
+      const targetNodeID = yield* storage.node.create({ projectID, sessionID, type: "atomic", name: "Identity", level: "L2" })
+      yield* authorize(targetNodeID)
+      const tool = yield* init()
+      const messageID = MessageID.ascending()
+      const run = Effect.fnUntraced(function* (artifact: { mode: "full"; path: string; code: string; test: string }) {
+        const writing = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const base = context()
+        const fiber = yield* tool.execute({ targetNodeID, artifact }, {
+          ...base,
+          messageID,
+          metadata: (input) => input.metadata?.stage === "writing"
+            ? Deferred.succeed(writing, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void,
+        }).pipe(Effect.forkChild)
+        yield* Deferred.await(writing)
+        const operationID = (yield* workflow.get(sessionID))?.activeOperationID
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(fiber)
+        return operationID
+      })
+      const first = { mode: "full" as const, path: "src/a.ts", code: "a", test: "test" }
+      const second = { mode: "full" as const, path: "src/b.ts", code: "b", test: "test" }
+      const firstID = yield* run(first)
+      expect(yield* run(first)).toBe(firstID)
+      expect(yield* run(second)).not.toBe(firstID)
+    }),
+  )
   it.instance("does not ask permission or write when the Build gate blocks", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
@@ -233,6 +286,36 @@ describe("graph_artifact_apply", () => {
       expect(yield* fs.readFileString(path.join(test.directory, "src/ok.ts"))).toBe(code)
       expect(node.status).toBe("implemented")
       expect(node.testStatus).toBe("pending")
+    }),
+  )
+
+  it.instance("clears durable ownership when a live artifact apply is interrupted", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({ projectID, sessionID, type: "atomic", name: "Interrupt", level: "L2" })
+      yield* authorize(targetNodeID)
+      const writing = yield* Deferred.make<void>()
+      const base = context()
+      const tool = yield* init()
+      const fiber = yield* tool.execute({
+        targetNodeID,
+        artifact: { mode: "full", path: "src/interrupted.ts", code: "export const interrupted = true\n", test: "test\n" },
+      }, {
+        ...base,
+        callID: "call-interrupted-apply",
+        metadata: (input) => input.metadata?.stage === "writing"
+          ? Deferred.succeed(writing, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.void,
+      }).pipe(Effect.forkChild)
+      yield* Deferred.await(writing)
+      yield* Fiber.interrupt(fiber)
+      expect(yield* (yield* GraphWorkflowState.Service).get(sessionID)).toMatchObject({
+        activeOperationID: null,
+        checkpointKind: "failure",
+        checkpointStatus: "pending",
+      })
     }),
   )
 

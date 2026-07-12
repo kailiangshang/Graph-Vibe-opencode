@@ -76,6 +76,8 @@ const state: GraphWorkflowState.State = {
   activeOperationID: null,
   activeOperationKind: null,
   activeOperationStartedAt: null,
+  activeOperationProcessID: null,
+  activeOperationRuntimeID: null,
   timeCreated: 1,
   timeUpdated: 2,
 }

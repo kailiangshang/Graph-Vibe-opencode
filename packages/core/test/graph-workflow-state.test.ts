@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Graph } from "@opencode-ai/schema"
-import { Effect, Exit, Layer, Schema } from "effect"
+import { Effect, Exit, Layer, Ref, Schema } from "effect"
 import * as TestClock from "effect/testing/TestClock"
+import { eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -11,6 +12,7 @@ import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import type { EdgeID, EdgeRow, GraphView, NodeID, NodeRow } from "@opencode-ai/core/graph/storage"
 import { GraphEdgeTable, GraphNodeTable } from "@opencode-ai/core/graph/sql"
 import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
+import { GraphWorkflowStateTable } from "@opencode-ai/core/graph/workflow/state.sql"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { tmpdir } from "./fixture/tmpdir"
 import path from "node:path"
@@ -892,21 +894,50 @@ describe("GraphWorkflowState", () => {
     }))
   })
 
-  test("recovers an artifact owner exactly at the fifteen minute timeout", async () => {
+  test("does not recover a live artifact owner after the reporting threshold", async () => {
     await run(Effect.gen(function* () {
       yield* TestClock.setTime(1_000)
       const workflow = yield* GraphWorkflowState.Service
       yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
       const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
       const reserved = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision, operationID: "stale-apply" })
+      expect(reserved).toMatchObject({ activeOperationProcessID: process.pid, activeOperationRuntimeID: GraphWorkflowState.ARTIFACT_APPLY_RUNTIME_ID })
       yield* TestClock.adjust(GraphWorkflowState.ARTIFACT_APPLY_STALE_AFTER_MS - 1)
-      expect(yield* workflow.recoverStaleArtifactApply(SID)).toMatchObject({ activeOperationID: "stale-apply", revision: reserved.revision })
+      expect(yield* workflow.recoverAbandonedArtifactApply(SID)).toMatchObject({ activeOperationID: "stale-apply", revision: reserved.revision })
       yield* TestClock.adjust(1)
-      const recovered = yield* workflow.recoverStaleArtifactApply(SID)
-      expect(recovered).toMatchObject({ activeOperationID: null, revision: reserved.revision + 1, checkpointKind: "failure", checkpointStatus: "pending" })
-      if (!recovered) return yield* Effect.die(new Error("missing recovered workflow"))
-      expect(yield* workflow.approve({ sessionID: SID, expectedRevision: recovered.revision })).toMatchObject({ activeOperationID: null, checkpointStatus: "approved", revision: recovered.revision + 1 })
+      expect(yield* workflow.recoverAbandonedArtifactApply(SID)).toMatchObject({ activeOperationID: "stale-apply", revision: reserved.revision })
     }).pipe(Effect.provide(TestClock.layer())))
+  })
+
+  test("conservatively retains an owner when a live PID has an ambiguous runtime", async () => {
+    await run(Effect.gen(function* () {
+      const workflow = yield* GraphWorkflowState.Service
+      yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+      const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+      const reserved = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision, operationID: "ambiguous-apply" })
+      const database = yield* Database.Service
+      yield* database.db.update(GraphWorkflowStateTable).set({ active_operation_runtime_id: "other-runtime" })
+        .where(eq(GraphWorkflowStateTable.session_id, SID)).run().pipe(Effect.orDie)
+      expect(yield* workflow.recoverAbandonedArtifactApply(SID)).toMatchObject({ activeOperationID: "ambiguous-apply", revision: reserved.revision })
+    }))
+  })
+
+  test("recovers a dead-process owner and fences its old writer", async () => {
+    await run(Effect.gen(function* () {
+      const workflow = yield* GraphWorkflowState.Service
+      yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+      const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph: workflowGraph })
+      const reserved = yield* workflow.beginArtifactApply({ sessionID: SID, expectedRevision: planned.revision, operationID: "dead-apply" })
+      const database = yield* Database.Service
+      yield* database.db.update(GraphWorkflowStateTable).set({ active_operation_process_id: 2_147_483_647, active_operation_runtime_id: "dead-runtime" })
+        .where(eq(GraphWorkflowStateTable.session_id, SID)).run().pipe(Effect.orDie)
+      expect(yield* workflow.recoverAbandonedArtifactApply(SID)).toMatchObject({ activeOperationID: null, checkpointKind: "failure", checkpointStatus: "pending" })
+      const writes = yield* Ref.make(0)
+      const fenced = yield* workflow.assertArtifactApplyOwner({ sessionID: SID, reservedRevision: reserved.revision, operationID: "dead-apply" })
+        .pipe(Effect.andThen(Ref.update(writes, (value) => value + 1)), Effect.exit)
+      expect(Exit.isFailure(fenced)).toBe(true)
+      expect(yield* Ref.get(writes)).toBe(0)
+    }))
   })
 
   test("failed diagnostics persist status and matching evidence atomically", async () => {

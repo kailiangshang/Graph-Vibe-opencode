@@ -28,5 +28,7 @@ export const GraphWorkflowStateTable = sqliteTable("graph_workflow_state", {
   active_operation_id: text(),
   active_operation_kind: text().$type<"artifact_apply">(),
   active_operation_started_at: integer(),
+  active_operation_process_id: integer(),
+  active_operation_runtime_id: text(),
   ...Timestamps,
 })
