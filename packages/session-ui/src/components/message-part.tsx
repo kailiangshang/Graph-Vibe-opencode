@@ -63,6 +63,7 @@ import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
 import { readPartText } from "./message-part-text"
 import { SessionProgressIndicatorV2 } from "../v2/components/session-progress-indicator-v2"
+import { graphActivityInfo } from "./graph-activity"
 
 async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -458,6 +459,8 @@ export function getToolInfo(
   metadata: Record<string, unknown> | undefined = {},
 ): ToolInfo {
   const i18n = useI18n()
+  const graph = graphActivityInfo(tool, input)
+  if (graph) return { icon: "checklist", title: graph.title, subtitle: graph.summary }
   switch (tool) {
     case "read":
       return {

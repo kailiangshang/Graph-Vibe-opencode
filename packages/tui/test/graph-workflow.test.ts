@@ -3,6 +3,10 @@ import {
   TASK_DRAFT,
   graphWebAvailable,
   graphWebUrl,
+  formatWorkflowStatus,
+  GRAPH_MODES,
+  continueWorkflow,
+  pauseWorkflow,
   startGraphPrompt,
   summarizeCurrentPlan,
 } from "../src/graph/workflow"
@@ -119,5 +123,89 @@ describe("Graph Workflow", () => {
         sessionID: "ses_123",
       }),
     ).toBeUndefined()
+  })
+})
+
+describe("Graph collaboration status", () => {
+  const workflow = {
+    mode: "module" as const,
+    revision: 7,
+    phase: "checkpoint" as const,
+    checkpoint: { status: "pending" as const, kind: "module" as const, reason: "Module verified" },
+    currentTask: { id: "task-b", name: "Wire controls", moduleName: "Interaction", current: true },
+    progress: { total: 3, verified: 1, failed: 0, percent: 33 },
+    modules: [
+      {
+        id: "module-a",
+        name: "Interaction",
+        tasks: [
+          { id: "task-a", name: "Add state", status: "verified", testStatus: "passed", current: false },
+          { id: "task-b", name: "Wire controls", status: "pending", testStatus: "none", current: true },
+        ],
+      },
+    ],
+  }
+
+  test("offers three modes with Module recommended by default", () => {
+    expect(GRAPH_MODES).toEqual([
+      { value: "atomic", label: "Atomic", description: "Pause after every verified task" },
+      { value: "module", label: "Module", description: "Pause at module and decision checkpoints", recommended: true },
+      { value: "autopilot", label: "Autopilot", description: "Run all tasks unless blocked or paused" },
+    ])
+  })
+
+  test("formats durable mode, current task, evidence, checkpoint, and next action", () => {
+    expect(formatWorkflowStatus(workflow)).toEqual({
+      mode: "Module",
+      phase: "Checkpoint",
+      progress: "1/3 verified (33%)",
+      current: "Interaction · Wire controls",
+      checkpoint: "Module checkpoint: Module verified",
+      nextAction: "Continue to authorize the next module.",
+      modules: [
+        {
+          name: "Interaction",
+          progress: "1/2",
+          tasks: ["✓ Add state — verified", "→ Wire controls — pending · verification not run"],
+        },
+      ],
+    })
+    expect(JSON.stringify(formatWorkflowStatus(workflow))).not.toContain("graph_")
+  })
+
+  test("continues and pauses using the freshly fetched durable revision", async () => {
+    const revisions: number[] = []
+    const client = {
+      graph: {
+        workflow: async () => ({ data: { revision: 9 } }),
+        workflowApprove: async (input: { graphWorkflowApprovePayload?: { expectedRevision: number } }) => {
+          revisions.push(input.graphWorkflowApprovePayload!.expectedRevision)
+          return { data: { revision: 10 } }
+        },
+        workflowPause: async (input: { graphWorkflowPausePayload?: { expectedRevision: number } }) => {
+          revisions.push(input.graphWorkflowPausePayload!.expectedRevision)
+          return { data: { revision: 10 } }
+        },
+      },
+    }
+    expect(await continueWorkflow(client, { session: "ses_1", directory: "/work" })).toMatchObject({ ok: true })
+    expect(await pauseWorkflow(client, { session: "ses_1", directory: "/work" })).toMatchObject({ ok: true })
+    expect(revisions).toEqual([9, 9])
+  })
+
+  test("refreshes projection and returns actionable copy after a stale revision", async () => {
+    let reads = 0
+    const client = {
+      graph: {
+        workflow: async () => ({ data: { revision: ++reads } }),
+        workflowApprove: async () => ({ error: { _tag: "GraphWorkflowRevisionConflict" } }),
+      },
+    }
+    expect(await continueWorkflow(client, { session: "ses_1", directory: "/work" })).toEqual({
+      ok: false,
+      conflict: true,
+      workflow: { revision: 2 },
+      message: "The plan changed before approval. Status was refreshed; review it and Continue again.",
+    })
   })
 })
