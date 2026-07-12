@@ -3,7 +3,7 @@ export * as GraphTools from "./graph"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Graph } from "@opencode-ai/schema/graph"
 import { ChildProcess } from "effect/unstable/process"
-import { Effect, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { realpathSync } from "node:fs"
 import path from "node:path"
 import { EventV2 } from "../event"
@@ -760,28 +760,31 @@ const layer = Layer.effectDiscard(
         const operationID = context.toolCallID
         const reservation = yield* workflow.beginArtifactApply({ sessionID: session.sessionID, expectedRevision: evaluation.workflowRevision, operationID })
         const artifactEvidence = { kind: "artifact" as const, nodeID: input.targetNodeID, artifactPaths: files }
-        yield* Effect.forEach(existing, (item) =>
-          Effect.gen(function* () {
+        yield* Effect.gen(function* () {
+          yield* Effect.forEach(existing, (item, index) => Effect.gen(function* () {
             const content = artifactPlan.files[item.relative]
             if (content === undefined) return yield* Effect.die(new Error(`Artifact did not produce ${item.relative}`))
-            yield* fs.writeWithDirs(item.absolute, content)
+            const temporary = `${item.absolute}.opencode-${GraphArtifact.hashContent(operationID).slice(0, 16)}-${index}.tmp`
+            yield* Effect.gen(function* () {
+              yield* workflow.assertArtifactApplyOwner({ sessionID: session.sessionID, reservedRevision: reservation.revision, operationID })
+              yield* fs.writeWithDirs(temporary, content)
+              yield* workflow.assertArtifactApplyOwner({ sessionID: session.sessionID, reservedRevision: reservation.revision, operationID })
+              yield* fs.rename(temporary, item.absolute)
+            }).pipe(Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore)))
             yield* events.publish(FileSystem.Event.Edited, { file: item.absolute })
             yield* events.publish(Watcher.Event.Updated, { file: item.absolute, event: item.existed ? "change" : "add" })
-          }),
-        ).pipe(Effect.onError((cause) => workflow.failArtifactApply({
-          projectID: session.projectID, sessionID: session.sessionID, nodeID: input.targetNodeID,
-          reservedRevision: reservation.revision, operationID, evidence: artifactEvidence, error: String(cause),
-        }).pipe(Effect.orDie)))
-        yield* workflow.completeArtifactApply({
-          projectID: session.projectID,
-          sessionID: session.sessionID,
-          nodeID: input.targetNodeID,
-          reservedRevision: reservation.revision,
-          operationID,
-          evidence: artifactEvidence,
-          inputSummary: summarizePaths(paths),
-          outputSummary: `applied:${paths.length}`,
-        })
+          }))
+          yield* workflow.completeArtifactApply({
+            projectID: session.projectID, sessionID: session.sessionID, nodeID: input.targetNodeID,
+            reservedRevision: reservation.revision, operationID, evidence: artifactEvidence,
+            inputSummary: summarizePaths(paths), outputSummary: `applied:${paths.length}`,
+          })
+        }).pipe(Effect.onExit((exit) => Exit.isFailure(exit)
+          ? Effect.uninterruptible(workflow.failArtifactApply({
+              projectID: session.projectID, sessionID: session.sessionID, nodeID: input.targetNodeID,
+              reservedRevision: reservation.revision, operationID, evidence: artifactEvidence, error: Cause.pretty(exit.cause),
+            }).pipe(Effect.ignore))
+          : Effect.void))
         yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
         if (sourceInput.draftID !== undefined) yield* drafts.markApplied(sourceInput.draftID)
         return toolOutput("Artifact applied", {

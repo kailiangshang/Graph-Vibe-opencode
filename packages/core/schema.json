@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "23cf4c3e-7ad9-4929-9516-9dd36ea6be19",
+  "id": "39419e63-551f-41fc-8bbf-68331c9d7fdb",
   "prevIds": [
-    "7e72efaf-ad27-4e80-8511-4ca8d6cd0504"
+    "23cf4c3e-7ad9-4929-9516-9dd36ea6be19"
   ],
   "ddl": [
     {
@@ -667,6 +667,26 @@
       "default": null,
       "generated": null,
       "name": "active_operation_started_at",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "active_operation_process_id",
+      "entityType": "columns",
+      "table": "graph_workflow_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "active_operation_runtime_id",
       "entityType": "columns",
       "table": "graph_workflow_state"
     },

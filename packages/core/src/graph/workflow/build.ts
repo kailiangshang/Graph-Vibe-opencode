@@ -36,6 +36,7 @@ export interface Interface {
   readonly advanceVerified: GraphWorkflowState.Interface["advanceVerified"]
   readonly completeVerification: GraphWorkflowState.Interface["completeVerification"]
   readonly beginArtifactApply: GraphWorkflowState.Interface["beginArtifactApply"]
+  readonly assertArtifactApplyOwner: GraphWorkflowState.Interface["assertArtifactApplyOwner"]
   readonly completeArtifactApply: GraphWorkflowState.Interface["completeArtifactApply"]
   readonly failArtifactApply: GraphWorkflowState.Interface["failArtifactApply"]
   readonly failVerification: GraphWorkflowState.Interface["failVerification"]
@@ -52,7 +53,7 @@ export const layer = Layer.effect(
     const workflowState = yield* GraphWorkflowState.Service
 
     const evaluateWithRevision = Effect.fn("GraphBuild.evaluateWithRevision")(function* (input: BuildEvaluateInput) {
-      yield* workflowState.recoverStaleArtifactApply(input.sessionID)
+      yield* workflowState.recoverAbandonedArtifactApply(input.sessionID)
       const main = yield* storage.main({ projectID: input.projectID })
       const currentPlan = yield* storage.currentPlan({ sessionID: input.sessionID })
       const state = yield* workflowState.get(input.sessionID)
@@ -115,6 +116,7 @@ export const layer = Layer.effect(
       advanceVerified: workflowState.advanceVerified,
       completeVerification: workflowState.completeVerification,
       beginArtifactApply: workflowState.beginArtifactApply,
+      assertArtifactApplyOwner: workflowState.assertArtifactApplyOwner,
       completeArtifactApply: workflowState.completeArtifactApply,
       failArtifactApply: workflowState.failArtifactApply,
       failVerification: workflowState.failVerification,

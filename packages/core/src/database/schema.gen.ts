@@ -92,6 +92,8 @@ export default {
           \`active_operation_id\` text,
           \`active_operation_kind\` text,
           \`active_operation_started_at\` integer,
+          \`active_operation_process_id\` integer,
+          \`active_operation_runtime_id\` text,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
           CONSTRAINT \`fk_graph_workflow_state_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE,
