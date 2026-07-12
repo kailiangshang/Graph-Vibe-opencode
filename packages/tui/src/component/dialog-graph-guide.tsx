@@ -25,8 +25,10 @@ export function DialogGraphGuide() {
       </box>
       <text fg={theme.text}>1. Describe the outcome you want in normal language.</text>
       <text fg={theme.text}>2. {Product.current().name} creates and validates a plan.</text>
-      <text fg={theme.text}>3. Inspect implementation progress with /graph-status.</text>
-      <text fg={theme.text}>4. Completion requires diagnostics to pass.</text>
+      <text fg={theme.text}>3. Module mode pauses at module, decision, and failure checkpoints.</text>
+      <text fg={theme.text}>4. Inspect tasks and verification evidence with /graph-status.</text>
+      <text fg={theme.text}>5. Use /graph-continue to approve or /graph-pause to pause safely.</text>
+      <text fg={theme.textMuted}>Completion requires diagnostics to pass.</text>
       <text fg={theme.textMuted}>Start with /graph-start · {Product.current().attribution}</text>
     </box>
   )

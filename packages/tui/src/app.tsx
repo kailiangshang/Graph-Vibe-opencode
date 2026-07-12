@@ -89,7 +89,8 @@ import { cliErrorMessage, errorFormat } from "./util/error"
 import { Product } from "@opencode-ai/core/product"
 import { DialogGraphGuide } from "./component/dialog-graph-guide"
 import { DialogGraphStatus } from "./component/dialog-graph-status"
-import { graphWebAvailable, graphWebUrl, startGraphPrompt, summarizeCurrentPlan } from "./graph/workflow"
+import { DialogGraphMode } from "./component/dialog-graph-mode"
+import { continueWorkflow, graphWebAvailable, graphWebUrl, pauseWorkflow, startGraphPrompt } from "./graph/workflow"
 
 registerOpencodeSpinner()
 
@@ -612,16 +613,37 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
               title: "Start a graph-guided task",
               category: "Graph Workflow",
               slashName: "graph-start",
-              run: () => {
-                if (!startGraphPrompt(promptRef.current)) {
-                  toast.show({
-                    variant: "warning",
-                    message: "Open a prompt, then run /graph-start again.",
-                  })
-                  return
-                }
-                dialog.clear()
-              },
+              run: () =>
+                dialog.replace(() => (
+                  <DialogGraphMode
+                    onSelect={async (mode) => {
+                      if (route.data.type === "session") {
+                        const current = await sdk.client.graph.workflow({
+                          session: route.data.sessionID,
+                          directory: sdk.directory,
+                        })
+                        if (current.data) {
+                          const changed = await sdk.client.graph.workflowMode({
+                            session: route.data.sessionID,
+                            directory: sdk.directory,
+                            graphWorkflowModePayload: { mode, expectedRevision: current.data.revision },
+                          })
+                          if (changed.error) {
+                            toast.show({
+                              variant: "warning",
+                              message: "The workflow changed. Run /graph-start again to review the latest mode.",
+                            })
+                            return
+                          }
+                        }
+                      }
+                      if (!startGraphPrompt(promptRef.current)) {
+                        toast.show({ variant: "warning", message: "Open a prompt, then run /graph-start again." })
+                        return
+                      }
+                    }}
+                  />
+                )),
             },
             {
               name: "graph.status",
@@ -636,15 +658,112 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
                   })
                   return
                 }
-                const response = await sdk.client.graph.currentPlan({
-                  session: route.data.sessionID,
+                const sessionID = route.data.sessionID
+                const response = await sdk.client.graph.workflow({
+                  session: sessionID,
                   directory: sdk.directory,
                 })
                 if (response.error || !response.data) {
-                  toast.show({ variant: "error", message: "Unable to load the Current Plan." })
+                  toast.show({ variant: "error", message: "Unable to load workflow status." })
                   return
                 }
-                dialog.replace(() => <DialogGraphStatus summary={summarizeCurrentPlan(response.data.nodes)} />)
+                dialog.replace(() => (
+                  <DialogGraphStatus
+                    workflow={response.data}
+                    onContinue={async () => {
+                      const result = await continueWorkflow(sdk.client, {
+                        session: sessionID,
+                        directory: sdk.directory,
+                      })
+                      dialog.clear()
+                      toast.show({
+                        variant: result.ok ? "info" : "warning",
+                        message: result.ok
+                          ? "Checkpoint approved. The authorized workflow scope can continue."
+                          : result.message,
+                      })
+                    }}
+                    onPause={async () => {
+                      const result = await pauseWorkflow(sdk.client, {
+                        session: sessionID,
+                        directory: sdk.directory,
+                      })
+                      dialog.clear()
+                      toast.show({
+                        variant: result.ok ? "info" : "warning",
+                        message: result.ok ? "Workflow will pause before the next mutation boundary." : result.message,
+                      })
+                    }}
+                  />
+                ))
+              },
+            },
+            {
+              name: "graph.mode",
+              title: "Change Graph Workflow mode",
+              category: "Graph Workflow",
+              run: () =>
+                dialog.replace(() => (
+                  <DialogGraphMode
+                    onSelect={async (mode) => {
+                      if (route.data.type !== "session") {
+                        toast.show({ variant: "info", message: "Start or select a session before changing mode." })
+                        return
+                      }
+                      const current = await sdk.client.graph.workflow({
+                        session: route.data.sessionID,
+                        directory: sdk.directory,
+                      })
+                      if (!current.data)
+                        return toast.show({ variant: "error", message: "Unable to load workflow status." })
+                      const response = await sdk.client.graph.workflowMode({
+                        session: route.data.sessionID,
+                        directory: sdk.directory,
+                        graphWorkflowModePayload: { mode, expectedRevision: current.data.revision },
+                      })
+                      if (response.error)
+                        return toast.show({
+                          variant: "warning",
+                          message: "The workflow changed. Status was refreshed; choose the mode again.",
+                        })
+                      toast.show({ variant: "info", message: `Execution mode changed to ${mode}.` })
+                    }}
+                  />
+                )),
+            },
+            {
+              name: "graph.continue",
+              title: "Continue Graph Workflow",
+              category: "Graph Workflow",
+              slashName: "graph-continue",
+              run: async () => {
+                if (route.data.type !== "session")
+                  return toast.show({ variant: "info", message: "Start or select a session before continuing." })
+                const result = await continueWorkflow(sdk.client, {
+                  session: route.data.sessionID,
+                  directory: sdk.directory,
+                })
+                if (!result.ok) return toast.show({ variant: "warning", message: result.message })
+                toast.show({
+                  variant: "info",
+                  message: "Checkpoint approved. The authorized workflow scope can continue.",
+                })
+              },
+            },
+            {
+              name: "graph.pause",
+              title: "Pause Graph Workflow",
+              category: "Graph Workflow",
+              slashName: "graph-pause",
+              run: async () => {
+                if (route.data.type !== "session")
+                  return toast.show({ variant: "info", message: "Start or select a session before pausing." })
+                const result = await pauseWorkflow(sdk.client, {
+                  session: route.data.sessionID,
+                  directory: sdk.directory,
+                })
+                if (!result.ok) return toast.show({ variant: "warning", message: result.message })
+                toast.show({ variant: "info", message: "Workflow will pause before the next mutation boundary." })
               },
             },
             {

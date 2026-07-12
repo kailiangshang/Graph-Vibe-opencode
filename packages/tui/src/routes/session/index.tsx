@@ -78,6 +78,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
+import { graphToolActivity } from "../../graph/workflow"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
@@ -1801,17 +1802,18 @@ function GenericTool(props: ToolProps) {
     return collapsed().output
   })
 
+  const graphActivity = createMemo(() => graphToolActivity(props.tool))
   return (
     <Show
       when={props.output && ctx.showGenericToolOutput()}
       fallback={
         <InlineTool icon="⚙" pending="Writing command..." complete={true} part={props.part}>
-          {props.tool} {input(props.input)}
+          {graphActivity() ?? props.tool} {graphActivity() ? "" : input(props.input)}
         </InlineTool>
       }
     >
       <BlockTool
-        title={`# ${props.tool} ${input(props.input)}`}
+        title={`# ${graphActivity() ?? props.tool}${graphActivity() ? "" : ` ${input(props.input)}`}`}
         part={props.part}
         onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
       >

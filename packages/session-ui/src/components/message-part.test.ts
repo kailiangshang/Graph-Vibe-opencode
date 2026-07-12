@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { readPartText } from "./message-part-text"
+import { graphActivityInfo } from "./graph-activity"
 
 describe("readPartText", () => {
   test("returns empty string when accum is undefined and part text is undefined", () => {
@@ -24,5 +25,31 @@ describe("readPartText", () => {
 
   test("trims leading and trailing whitespace", () => {
     expect(readPartText(undefined, { id: "part_1", text: "\n  body  \n" })).toBe("body")
+  })
+})
+
+describe("graphActivityInfo", () => {
+  test("maps internal operations to user-facing workflow intent", () => {
+    expect(graphActivityInfo("graph_plan_admit", {})).toEqual({ title: "Preparing work plan", phase: "planning" })
+    expect(graphActivityInfo("graph_artifact_apply", { nodeName: "Keyboard controls" })).toEqual({
+      title: "Applying task changes",
+      phase: "implementing",
+      summary: "Keyboard controls",
+    })
+    expect(graphActivityInfo("graph_diagnostics_run", { nodeName: "Keyboard controls" })).toEqual({
+      title: "Verifying task",
+      phase: "verifying",
+      summary: "Keyboard controls",
+    })
+  })
+
+  test("covers checkpoint, pause, and completion without exposing identifiers", () => {
+    const activities = [
+      graphActivityInfo("graph_build_gate", { checkpoint: "pending" }),
+      graphActivityInfo("graph_workflow_pause", {}),
+      graphActivityInfo("graph_promote", { verified: 4, total: 4 }),
+    ]
+    expect(activities.map((item) => item?.phase)).toEqual(["checkpoint", "paused", "complete"])
+    expect(JSON.stringify(activities)).not.toContain("graph_")
   })
 })

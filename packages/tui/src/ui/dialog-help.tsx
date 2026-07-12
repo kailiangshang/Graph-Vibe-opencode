@@ -40,6 +40,8 @@ export function DialogHelp() {
           <text fg={theme.textMuted}>/graph workflow guide</text>
           <text fg={theme.textMuted}>/graph-start create a guided task draft</text>
           <text fg={theme.textMuted}>/graph-status inspect Current Plan progress</text>
+          <text fg={theme.textMuted}>/graph-continue approve the current checkpoint</text>
+          <text fg={theme.textMuted}>/graph-pause pause before the next change</text>
           <text fg={theme.textMuted}>/graph-open open the session graph in Web</text>
           {Product.current().attribution && <text fg={theme.textMuted}>{Product.current().attribution}</text>}
         </box>

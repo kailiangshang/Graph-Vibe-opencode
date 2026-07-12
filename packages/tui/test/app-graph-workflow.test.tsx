@@ -62,7 +62,15 @@ test("Graph Vibe registers Graph commands and renders onboarding", async () => {
         .getCommands()
         .map((command) => command.name)
         .filter((name) => name.startsWith("graph.")),
-    ).toEqual(["graph.guide", "graph.start", "graph.status", "graph.open"])
+    ).toEqual([
+      "graph.guide",
+      "graph.start",
+      "graph.status",
+      "graph.mode",
+      "graph.continue",
+      "graph.pause",
+      "graph.open",
+    ])
     expect(setup.captureCharFrame()).toContain("GRAPH WORKFLOW ACTIVE")
     expect(setup.captureCharFrame()).toContain("Plan → Build → Verify")
 
