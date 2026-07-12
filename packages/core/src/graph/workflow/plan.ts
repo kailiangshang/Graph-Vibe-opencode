@@ -1,6 +1,7 @@
 export * as GraphPlan from "./plan"
 
-import { Context, Effect, Layer } from "effect"
+import { Graph } from "@opencode-ai/schema/graph"
+import { Context, Effect, Layer, Schema } from "effect"
 import { LayerNode } from "../../effect/layer-node"
 import { Database } from "../../database/database"
 import * as GraphDomain from "../domain"
@@ -158,6 +159,15 @@ function validatePlan(input: AdmitPlanInput) {
     return [{
       rule: "node.verification_atomic_only",
       message: `verification is only valid on atomic nodes: ${invalidVerification.name}`,
+    }]
+  }
+  const malformedVerification = input.nodes.find(
+    (node) => node.verification !== undefined && Schema.decodeUnknownOption(Graph.VerificationSpec)(node.verification).valueOrUndefined === undefined,
+  )
+  if (malformedVerification) {
+    return [{
+      rule: "node.verification_invalid",
+      message: `node ${malformedVerification.name} has an invalid verification specification`,
     }]
   }
   const nodeIDs = input.nodes.map((node) => (node.id ?? GraphStorage.NodeID.create()) as GraphStorage.NodeID)

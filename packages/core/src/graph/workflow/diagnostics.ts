@@ -21,7 +21,7 @@ export type Resolution =
     }
   | {
       readonly ok: false
-      readonly reason: "diagnostic_script_missing" | "verification_path_missing" | "verification_path_escape"
+      readonly reason: "diagnostic_script_missing" | "verification_path_missing" | "verification_path_escape" | "verification_path_option"
       readonly path?: string
       readonly diagnostic?: DiagnosticName
     }
@@ -47,6 +47,7 @@ export async function resolve(input: {
   for (const item of focused) {
     for (const relative of item.paths) {
       const segments = relative.split("/")
+      if (segments[0]?.startsWith("-")) return { ok: false, reason: "verification_path_option", path: relative }
       if (
         path.isAbsolute(relative) ||
         path.win32.isAbsolute(relative) ||
@@ -64,8 +65,12 @@ export async function resolve(input: {
     }
   }
 
-  const focusedCommands = focused.map((item) => command(item.diagnostic.name, ["run", item.diagnostic.name, "--", ...item.paths], true))
-  const completeCommands = detected.map((name) => command(name, ["run", name], false))
+  const focusedCommands = focused.map((item) =>
+    command(item.diagnostic.name, ["run", item.diagnostic.name, "--", ...item.paths.map((item) => `./${item}`)], true),
+  )
+  const completeCommands = detected.length === 0 && input.verification === null
+    ? [command("test", ["test"], false)]
+    : detected.map((name) => command(name, ["run", name], false))
   const commands = [...focusedCommands, ...completeCommands]
   const selected = input.filter ? commands.filter((item) => item.name.includes(input.filter ?? "")) : commands
   return {

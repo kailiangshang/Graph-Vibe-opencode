@@ -41,6 +41,13 @@ const projectDir = path.resolve(import.meta.dir, "../../../../examples/tic-tac-t
 const projectID = ProjectV2.ID.make("proj_ttt")
 const sessionID = SessionID.descending("ses_ttt")
 
+function verification(criteria: string) {
+  return {
+    criteria: [criteria] as const,
+    diagnostics: [{ name: "test", paths: ["test/game.test.ts"] }] as const,
+  }
+}
+
 const it = testEffect(
   LayerNode.compile(
     LayerNode.group([
@@ -108,10 +115,10 @@ describe("graph mode 开发流程演示", () => {
           { type: "composite", name: "Game Logic", level: "L1" },
           { type: "composite", name: "CLI Render", level: "L1" },
           // @3 Atomic — 具体任务
-          { type: "atomic", name: "Board Model", level: "L2" },
-          { type: "atomic", name: "Move Validator", level: "L2" },
-          { type: "atomic", name: "Win Detector", level: "L2" },
-          { type: "atomic", name: "Board Renderer", level: "L2" },
+          { type: "atomic", name: "Board Model", level: "L2", verification: verification("the board tracks every played cell") },
+          { type: "atomic", name: "Move Validator", level: "L2", verification: verification("invalid moves are rejected") },
+          { type: "atomic", name: "Win Detector", level: "L2", verification: verification("winning rows, columns, and diagonals are detected") },
+          { type: "atomic", name: "Board Renderer", level: "L2", verification: verification("the board renders played cells") },
         ],
         edges: [
           // ✅ P1 验证：prd→composite 现在可以用 contains（之前被拒绝）
@@ -152,12 +159,13 @@ describe("graph mode 开发流程演示", () => {
       yield* seed(test.directory)
       const plan = yield* GraphPlan.Service
       const build = yield* GraphBuild.Service
+      yield* plan.workflow.setMode({ projectID, sessionID, mode: "atomic", expectedRevision: 0 })
 
       yield* plan.admit({
         projectID, sessionID,
         nodes: [
-          { type: "atomic", name: "Dep", level: "L2" },
-          { type: "atomic", name: "Target", level: "L2" },
+          { type: "atomic", name: "Dep", level: "L2", verification: verification("the prerequisite game behavior passes") },
+          { type: "atomic", name: "Target", level: "L2", verification: verification("dependent game behavior passes") },
         ],
         edges: [{ sourceID: "@0", targetID: "@1", relation: "blocks" }],
       })
@@ -190,7 +198,7 @@ describe("graph mode 开发流程演示", () => {
 
       yield* plan.admit({
         projectID, sessionID,
-        nodes: [{ type: "atomic", name: "Board Model", level: "L2" }],
+        nodes: [{ type: "atomic", name: "Board Model", level: "L2", verification: verification("the board model passes its focused tests") }],
         edges: [],
       })
 
@@ -226,7 +234,7 @@ describe("graph mode 开发流程演示", () => {
 
       yield* plan.admit({
         projectID, sessionID,
-        nodes: [{ type: "atomic", name: "Game Logic", level: "L2", status: "implemented" }],
+        nodes: [{ type: "atomic", name: "Game Logic", level: "L2", status: "implemented", verification: verification("game rules pass their focused tests") }],
         edges: [],
       })
 
@@ -270,7 +278,7 @@ describe("graph mode 开发流程演示", () => {
 
       yield* plan.admit({
         projectID, sessionID,
-        nodes: [{ type: "atomic", name: "FailingNode", level: "L2", status: "implemented" }],
+        nodes: [{ type: "atomic", name: "FailingNode", level: "L2", status: "implemented", verification: verification("game behavior passes after repair") }],
         edges: [],
       })
 
@@ -314,8 +322,8 @@ describe("graph mode 开发流程演示", () => {
       yield* plan.admit({
         projectID, sessionID,
         nodes: [
-          { type: "atomic", name: "Correct Node", level: "L2" },
-          { type: "atomic", name: "Wrong Node", level: "L2" },
+          { type: "atomic", name: "Correct Node", level: "L2", verification: verification("the retained game behavior passes") },
+          { type: "atomic", name: "Wrong Node", level: "L2", verification: verification("the candidate game behavior passes") },
         ],
         edges: [{ sourceID: "@0", targetID: "@1", relation: "blocks" }],
       })
@@ -349,7 +357,7 @@ describe("graph mode 开发流程演示", () => {
         projectID, sessionID,
         nodes: [
           { type: "prd", name: "Game", level: "L1", status: "verified" },
-          { type: "atomic", name: "Logic", level: "L2", status: "verified" },
+          { type: "atomic", name: "Logic", level: "L2", status: "verified", verification: verification("the promoted game logic passes") },
         ],
         edges: [{ sourceID: "@0", targetID: "@1", relation: "contains" }],
       })

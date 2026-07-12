@@ -54,7 +54,7 @@ describe("Graph collaboration schemas", () => {
       criteria: ["theme can be changed"],
       diagnostics: [{ name: "test", paths: ["src/theme.test.ts"] }],
     })
-    for (const invalid of ["", "/tmp/outside.test.ts", "C:\\outside.test.ts", "../outside.test.ts", "src//test.ts"]) {
+    for (const invalid of ["", "/tmp/outside.test.ts", "C:\\outside.test.ts", "../outside.test.ts", "src//test.ts", "--watch"]) {
       expect(() =>
         Schema.decodeUnknownSync(Graph.VerificationSpec)({
           criteria: ["theme can be changed"],
