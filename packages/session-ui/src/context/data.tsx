@@ -1,4 +1,5 @@
 import type { Message, Session, Part, SnapshotFileDiff, SessionStatus, Provider } from "@opencode-ai/sdk/v2"
+import type { GraphWorkflow } from "@opencode-ai/sdk/v2"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 
@@ -35,6 +36,7 @@ type Data = {
   part_text_accum_delta?: {
     [partID: string]: string
   }
+  graph_workflow?: Record<string, GraphWorkflow>
 }
 
 export type NavigateToSessionFn = (sessionID: string) => void

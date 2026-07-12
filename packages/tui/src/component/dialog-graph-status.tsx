@@ -3,19 +3,38 @@ import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { useBindings } from "../keymap"
-import { formatWorkflowStatus, type Workflow } from "../graph/workflow"
+import { formatWorkflowStatus, type Workflow, workflowActions } from "../graph/workflow"
 
-export function DialogGraphStatus(props: { workflow: Workflow; onContinue?: () => void; onPause?: () => void }) {
+export function DialogGraphStatus(props: {
+  workflow: Workflow
+  conflict?: string
+  onContinue?: () => void
+  onPause?: () => void
+}) {
   const dialog = useDialog()
+  return <GraphStatusView {...props} onClose={() => dialog.clear()} />
+}
+
+export function GraphStatusView(props: {
+  workflow: Workflow
+  conflict?: string
+  onContinue?: () => void
+  onPause?: () => void
+  onClose: () => void
+}) {
   const { theme } = useTheme()
   const status = () => formatWorkflowStatus(props.workflow)
 
   useBindings(() => ({
     bindings: [
-      { key: "c", desc: "Continue", group: "Workflow", cmd: () => props.onContinue?.() },
-      { key: "p", desc: "Pause", group: "Workflow", cmd: () => props.onPause?.() },
-      { key: "return", desc: "Close status", group: "Dialog", cmd: () => dialog.clear() },
-      { key: "escape", desc: "Close status", group: "Dialog", cmd: () => dialog.clear() },
+      ...(workflowActions(props.workflow).continue
+        ? [{ key: "c", desc: "Continue", group: "Workflow", cmd: () => props.onContinue?.() }]
+        : []),
+      ...(workflowActions(props.workflow).pause
+        ? [{ key: "p", desc: "Pause", group: "Workflow", cmd: () => props.onPause?.() }]
+        : []),
+      { key: "return", desc: "Close status", group: "Dialog", cmd: props.onClose },
+      { key: "escape", desc: "Close status", group: "Dialog", cmd: props.onClose },
     ],
   }))
 
@@ -32,6 +51,12 @@ export function DialogGraphStatus(props: { workflow: Workflow; onContinue?: () =
         <text fg={theme.text}>Phase: {status().phase}</text>
         <text fg={theme.text}>Progress: {status().progress}</text>
       </box>
+      <Show when={props.conflict}>
+        <box border={["left"]} borderColor={theme.warning} paddingLeft={1}>
+          <text fg={theme.warning}>{props.conflict}</text>
+          <text fg={theme.text}>Review refreshed status, then press the action key again.</text>
+        </box>
+      </Show>
       <text attributes={TextAttributes.BOLD} fg={theme.text}>
         Current task: {status().current}
       </text>
@@ -52,10 +77,10 @@ export function DialogGraphStatus(props: { workflow: Workflow; onContinue?: () =
         )}
       </For>
       <box flexDirection="row" gap={2}>
-        <Show when={props.workflow.checkpoint.status === "pending"}>
+        <Show when={workflowActions(props.workflow).continue}>
           <text fg={theme.primary}>c Continue</text>
         </Show>
-        <Show when={props.workflow.phase !== "complete" && props.workflow.checkpoint.status !== "pending"}>
+        <Show when={workflowActions(props.workflow).pause}>
           <text fg={theme.primary}>p Pause</text>
         </Show>
       </box>

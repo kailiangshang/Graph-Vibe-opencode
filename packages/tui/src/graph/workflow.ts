@@ -8,12 +8,138 @@ export const GRAPH_MODES = [
   { value: "autopilot", label: "Autopilot", description: "Run all tasks unless blocked or paused" },
 ] as const
 
-type WorkflowClient = {
+export function formatPlanAdmission(input: Record<string, unknown>, workflow?: Workflow) {
+  const nodes = Array.isArray(input.nodes) ? input.nodes.filter(isRecord) : []
+  const edges = Array.isArray(input.edges) ? input.edges.filter(isRecord) : []
+  const prd = nodes.find((node) => node.type === "prd")
+  const goal = typeof prd?.desc === "string" ? prd.desc : typeof prd?.name === "string" ? prd.name : "Current work plan"
+  if (workflow) {
+    const mode = workflow.mode ? workflow.mode[0].toUpperCase() + workflow.mode.slice(1) : "Not selected"
+    const nextStop =
+      workflow.checkpoint.status === "pending"
+        ? "Now, at the pending checkpoint"
+        : workflow.mode === "atomic"
+          ? "After the current task"
+          : workflow.mode === "module"
+            ? "After the current module"
+            : workflow.mode === "autopilot"
+              ? "At a decision, failure, or pause"
+              : "After execution mode is selected"
+    return {
+      goal,
+      mode,
+      currentTask: workflow.currentTask?.name ?? "",
+      nextStop,
+      modules: workflow.modules.map((module) => ({
+        name: module.name,
+        tasks: module.tasks.map((task) =>
+          [task.name, task.verification?.criteria.join("; ")].filter(Boolean).join(" · "),
+        ),
+      })),
+    }
+  }
+  const tasks = nodes
+    .filter(
+      (node): node is Record<string, unknown> & { id: string; name: string } =>
+        node.type === "atomic" && typeof node.id === "string" && typeof node.name === "string",
+    )
+    .filter((task, index, all) => all.findIndex((candidate) => candidate.id === task.id) === index)
+  const modules = nodes
+    .filter(
+      (node): node is Record<string, unknown> & { id: string; name: string } =>
+        node.type === "composite" && typeof node.id === "string" && typeof node.name === "string",
+    )
+    .map((module) => ({
+      id: module.id,
+      name: module.name,
+      tasks: tasks.filter((task) =>
+        edges.some((edge) => edge.relation === "contains" && edge.sourceID === module.id && edge.targetID === task.id),
+      ),
+    }))
+  const assigned = new Set(modules.flatMap((module) => module.tasks.map((task) => task.id)))
+  const grouped = [
+    ...modules,
+    ...(tasks.some((task) => !assigned.has(task.id))
+      ? [{ id: null, name: "Ungrouped", tasks: tasks.filter((task) => !assigned.has(task.id)) }]
+      : []),
+  ]
+  return {
+    goal,
+    mode: "Not selected",
+    currentTask: typeof tasks[0]?.name === "string" ? tasks[0].name : "",
+    nextStop: "After execution mode is selected",
+    modules: grouped.map((module) => ({
+      name: module.name,
+      tasks: module.tasks.map((task) => {
+        const criteria =
+          isRecord(task.verification) && Array.isArray(task.verification.criteria)
+            ? task.verification.criteria.filter((item): item is string => typeof item === "string")
+            : []
+        return [task.name, criteria.join("; ")].filter(Boolean).join(" · ")
+      }),
+    })),
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+export function workflowActions(_workflow: {
+  mode?: string | null
+  phase: string
+  checkpoint: { status: string; kind?: string | null }
+}) {
+  const complete = _workflow.phase === "complete"
+  const pending = _workflow.checkpoint.status === "pending"
+  return {
+    continue: !!_workflow.mode && pending,
+    pause: !!_workflow.mode && !complete && !pending && _workflow.phase !== "failed",
+  }
+}
+
+type StartModeClient = {
   graph: {
     workflow(input: {
       session: string
       directory?: string
     }): Promise<{ data?: { revision: number | string }; error?: unknown }>
+    workflowMode?(input: {
+      session: string
+      directory?: string
+      graphWorkflowModePayload: { mode: "atomic" | "module" | "autopilot"; expectedRevision: number }
+    }): Promise<{ data?: unknown; error?: unknown }>
+  }
+}
+
+export async function persistGraphStartMode(
+  client: StartModeClient,
+  input: { session: string; directory?: string; mode: "atomic" | "module" | "autopilot" },
+  start: () => void,
+) {
+  const current = await client.graph.workflow({ session: input.session, directory: input.directory })
+  if (!current.data || !client.graph.workflowMode)
+    return {
+      ok: false as const,
+      message: "No durable workflow exists for this session. Create or select a session, then retry /graph-start.",
+    }
+  const changed = await client.graph.workflowMode({
+    session: input.session,
+    directory: input.directory,
+    graphWorkflowModePayload: { mode: input.mode, expectedRevision: Number(current.data.revision) },
+  })
+  if (changed.error || !changed.data)
+    return {
+      ok: false as const,
+      message: "Execution mode could not be saved because the workflow changed. Review status and retry /graph-start.",
+    }
+  start()
+  return { ok: true as const }
+}
+
+type WorkflowClient<T extends { revision: number | string }> = {
+  graph: {
+    workflow(input: { session: string; directory?: string }): Promise<{ data?: T; error?: unknown }>
     workflowApprove?(input: {
       session: string
       directory?: string
@@ -27,7 +153,10 @@ type WorkflowClient = {
   }
 }
 
-export async function continueWorkflow(client: WorkflowClient, input: { session: string; directory?: string }) {
+export async function continueWorkflow<T extends { revision: number | string }>(
+  client: WorkflowClient<T>,
+  input: { session: string; directory?: string },
+) {
   const current = await client.graph.workflow(input)
   if (!current.data || !client.graph.workflowApprove)
     return { ok: false as const, message: "Unable to load current workflow status." }
@@ -45,7 +174,10 @@ export async function continueWorkflow(client: WorkflowClient, input: { session:
   }
 }
 
-export async function pauseWorkflow(client: WorkflowClient, input: { session: string; directory?: string }) {
+export async function pauseWorkflow<T extends { revision: number | string }>(
+  client: WorkflowClient<T>,
+  input: { session: string; directory?: string },
+) {
   const current = await client.graph.workflow(input)
   if (!current.data || !client.graph.workflowPause)
     return { ok: false as const, message: "Unable to load current workflow status." }
@@ -85,14 +217,28 @@ export type Workflow = {
   }>
 }
 
-export function graphToolActivity(tool: string): string | undefined {
+export function graphToolActivity(tool: string, status?: string): string | undefined {
+  if (status === "error") {
+    if (tool === "graph_plan_admit") return "Work plan could not be prepared"
+    if (tool === "graph_diagnostics_run") return "Task verification failed"
+    if (tool.startsWith("graph_artifact_")) return "Task changes could not be applied"
+    if (tool === "graph_build_gate") return "Task readiness check failed"
+    if (tool.startsWith("graph_")) return "Graph workflow activity failed"
+  }
   if (tool === "graph_plan_admit") return "Preparing work plan"
   if (tool === "graph_build_gate") return "Checking task readiness"
   if (tool === "graph_artifact_begin" || tool === "graph_artifact_chunk" || tool === "graph_artifact_seal")
     return "Preparing task changes"
   if (tool === "graph_artifact_apply") return "Applying task changes"
   if (tool === "graph_diagnostics_run") return "Verifying task"
+  if (tool === "graph_workflow_pause") return "Workflow paused"
+  if (tool === "graph_promote") return "Workflow complete"
+  if (tool.startsWith("graph_")) return "Graph workflow activity"
   return undefined
+}
+
+export function graphToolError(error: string) {
+  return error.replace(/\bgraph_[a-z0-9_]+\b/gi, "Graph workflow activity")
 }
 
 export function formatWorkflowStatus(workflow: Workflow) {

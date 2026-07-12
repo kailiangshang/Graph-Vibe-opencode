@@ -5,6 +5,7 @@ import {
   countByStatus,
   deterministicPosition,
   filterByLevel,
+  groupWorkflowTasks,
   normalizeWorkflow,
   reconcileSelection,
 } from "./graph-helpers"
@@ -104,6 +105,55 @@ describe("workflow cockpit helpers", () => {
   test("uses graph identity for deterministic initial positions", () => {
     expect(deterministicPosition("session-1", "task-a", 3)).toEqual(deterministicPosition("session-1", "task-a", 3))
     expect(deterministicPosition("session-1", "task-a", 3)).not.toEqual(deterministicPosition("session-2", "task-a", 3))
+  })
+
+  test("groups by module identity and includes ungrouped tasks once", () => {
+    const tasks = [
+      { id: "a", moduleID: "m1", moduleName: "Same" },
+      { id: "b", moduleID: "m2", moduleName: "Same" },
+      { id: "c", moduleID: null, moduleName: null },
+    ]
+    expect(
+      groupWorkflowTasks(tasks, [
+        { id: "m1", name: "Same" },
+        { id: "m2", name: "Same" },
+      ]),
+    ).toEqual([
+      { id: "m1", name: "Same", tasks: [tasks[0]] },
+      { id: "m2", name: "Same", tasks: [tasks[1]] },
+      { id: null, name: "Ungrouped", tasks: [tasks[2]] },
+    ])
+  })
+
+  test("normalizes module task IDs and removes duplicate task records", () => {
+    const task = {
+      id: "task-a",
+      name: "Repeated name",
+      order: 1,
+      moduleID: null,
+      moduleName: null,
+      status: "pending",
+      testStatus: "none",
+      buildable: true,
+      current: false,
+      verification: null,
+      latestEvidence: null,
+    }
+    const workflow = normalizeWorkflow({
+      mode: "module",
+      revision: 1,
+      phase: "planning",
+      checkpoint: { status: "none", kind: null, scopeNodeID: null, scopeName: null, reason: null },
+      currentTask: null,
+      progress: { total: 1, verified: 0, failed: 0, percent: 0 },
+      tasks: [task, { ...task }],
+      modules: [{ id: "module-a", name: "Interface", status: "pending", taskIDs: ["task-a"] }],
+    })
+
+    expect(workflow.tasks).toHaveLength(1)
+    expect(workflow.modules).toHaveLength(1)
+    expect(workflow.modules[0]?.tasks.map((item) => item.id)).toEqual(["task-a"])
+    expect(workflow.modules[0]?.tasks[0]?.moduleID).toBe("module-a")
   })
 })
 

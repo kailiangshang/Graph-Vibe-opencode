@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { GRAPH_CANVAS_LABEL, panCamera, reconcileCanvasNodes, screenToWorld } from "./graph-canvas"
+import { GRAPH_CANVAS_LABEL, canvasNodeState, panCamera, reconcileCanvasNodes, screenToWorld } from "./graph-canvas"
 
 describe("GraphCanvas model", () => {
   test("retains positions while updating node data and adding deterministic nodes", () => {
@@ -39,5 +39,43 @@ describe("GraphCanvas model", () => {
 
   test("renders an accessible deterministic canvas boundary", () => {
     expect(GRAPH_CANVAS_LABEL).toBe("Workflow graph canvas. Use the task rail for keyboard navigation.")
+  })
+
+  test("derives shape, icon, and text for workflow node state", () => {
+    expect(canvasNodeState({ status: "pending", testStatus: "none", buildable: false }, false, false)).toEqual({
+      state: "blocked",
+      icon: "×",
+      shape: "diamond",
+      label: "Blocked",
+    })
+    expect(canvasNodeState({ status: "implemented", testStatus: "failed", buildable: true }, false, false)).toEqual({
+      state: "failed",
+      icon: "!",
+      shape: "square",
+      label: "Failed",
+    })
+    expect(canvasNodeState({ status: "verified", testStatus: "passed", buildable: false }, false, false)).toEqual({
+      state: "verified",
+      icon: "✓",
+      shape: "circle",
+      label: "Verified",
+    })
+    expect(canvasNodeState({ status: "verified", testStatus: "none", buildable: false }, false, false)).toMatchObject({
+      state: "verified",
+      label: "Verified",
+    })
+    expect(canvasNodeState({ status: "pending", testStatus: "none", buildable: true }, true, false)).toMatchObject({
+      state: "current",
+      label: "Current",
+    })
+    expect(canvasNodeState({ status: "pending", testStatus: "none", buildable: true }, false, true)).toEqual({
+      state: "selected",
+      icon: "◆",
+      shape: "hexagon",
+      label: "Selected",
+    })
+    expect(
+      canvasNodeState({ status: "pending", testStatus: "none", buildable: true, checkpoint: true }, false, false),
+    ).toEqual({ state: "checkpoint", icon: "Ⅱ", shape: "diamond", label: "Checkpoint" })
   })
 })

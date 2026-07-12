@@ -90,7 +90,15 @@ import { Product } from "@opencode-ai/core/product"
 import { DialogGraphGuide } from "./component/dialog-graph-guide"
 import { DialogGraphStatus } from "./component/dialog-graph-status"
 import { DialogGraphMode } from "./component/dialog-graph-mode"
-import { continueWorkflow, graphWebAvailable, graphWebUrl, pauseWorkflow, startGraphPrompt } from "./graph/workflow"
+import {
+  continueWorkflow,
+  graphWebAvailable,
+  graphWebUrl,
+  pauseWorkflow,
+  persistGraphStartMode,
+  startGraphPrompt,
+  type Workflow,
+} from "./graph/workflow"
 
 registerOpencodeSpinner()
 
@@ -563,6 +571,35 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (workspace?.type !== "worktree" || !workspace.directory) return
     return workspace
   })
+  const showGraphStatus = (sessionID: string, workflow: Workflow, conflict?: string) => {
+    const action = async (kind: "continue" | "pause") => {
+      const result =
+        kind === "continue"
+          ? await continueWorkflow(sdk.client, { session: sessionID, directory: sdk.directory })
+          : await pauseWorkflow(sdk.client, { session: sessionID, directory: sdk.directory })
+      if (!result.ok && result.conflict && result.workflow) {
+        showGraphStatus(sessionID, result.workflow, result.message)
+        return
+      }
+      dialog.clear()
+      toast.show({
+        variant: result.ok ? "info" : "warning",
+        message: result.ok
+          ? kind === "continue"
+            ? "Checkpoint approved. The authorized workflow scope can continue."
+            : "Workflow will pause before the next mutation boundary."
+          : result.message,
+      })
+    }
+    dialog.replace(() => (
+      <DialogGraphStatus
+        workflow={workflow}
+        conflict={conflict}
+        onContinue={() => action("continue")}
+        onPause={() => action("pause")}
+      />
+    ))
+  }
   const appCommands = createMemo(() =>
     [
       {
@@ -613,37 +650,28 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
               title: "Start a graph-guided task",
               category: "Graph Workflow",
               slashName: "graph-start",
-              run: () =>
+              run: () => {
+                if (route.data.type !== "session") {
+                  toast.show({
+                    variant: "warning",
+                    message: "Create or select a session before /graph-start so execution mode can be saved.",
+                  })
+                  return
+                }
+                const sessionID = route.data.sessionID
                 dialog.replace(() => (
                   <DialogGraphMode
                     onSelect={async (mode) => {
-                      if (route.data.type === "session") {
-                        const current = await sdk.client.graph.workflow({
-                          session: route.data.sessionID,
-                          directory: sdk.directory,
-                        })
-                        if (current.data) {
-                          const changed = await sdk.client.graph.workflowMode({
-                            session: route.data.sessionID,
-                            directory: sdk.directory,
-                            graphWorkflowModePayload: { mode, expectedRevision: current.data.revision },
-                          })
-                          if (changed.error) {
-                            toast.show({
-                              variant: "warning",
-                              message: "The workflow changed. Run /graph-start again to review the latest mode.",
-                            })
-                            return
-                          }
-                        }
-                      }
-                      if (!startGraphPrompt(promptRef.current)) {
-                        toast.show({ variant: "warning", message: "Open a prompt, then run /graph-start again." })
-                        return
-                      }
+                      const result = await persistGraphStartMode(
+                        sdk.client,
+                        { session: sessionID, directory: sdk.directory, mode },
+                        () => startGraphPrompt(promptRef.current),
+                      )
+                      if (!result.ok) toast.show({ variant: "warning", message: result.message })
                     }}
                   />
-                )),
+                ))
+              },
             },
             {
               name: "graph.status",
@@ -667,35 +695,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
                   toast.show({ variant: "error", message: "Unable to load workflow status." })
                   return
                 }
-                dialog.replace(() => (
-                  <DialogGraphStatus
-                    workflow={response.data}
-                    onContinue={async () => {
-                      const result = await continueWorkflow(sdk.client, {
-                        session: sessionID,
-                        directory: sdk.directory,
-                      })
-                      dialog.clear()
-                      toast.show({
-                        variant: result.ok ? "info" : "warning",
-                        message: result.ok
-                          ? "Checkpoint approved. The authorized workflow scope can continue."
-                          : result.message,
-                      })
-                    }}
-                    onPause={async () => {
-                      const result = await pauseWorkflow(sdk.client, {
-                        session: sessionID,
-                        directory: sdk.directory,
-                      })
-                      dialog.clear()
-                      toast.show({
-                        variant: result.ok ? "info" : "warning",
-                        message: result.ok ? "Workflow will pause before the next mutation boundary." : result.message,
-                      })
-                    }}
-                  />
-                ))
+                showGraphStatus(sessionID, response.data)
               },
             },
             {
@@ -743,6 +743,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
                   session: route.data.sessionID,
                   directory: sdk.directory,
                 })
+                if (!result.ok && result.conflict && result.workflow)
+                  return showGraphStatus(route.data.sessionID, result.workflow, result.message)
                 if (!result.ok) return toast.show({ variant: "warning", message: result.message })
                 toast.show({
                   variant: "info",
@@ -762,6 +764,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
                   session: route.data.sessionID,
                   directory: sdk.directory,
                 })
+                if (!result.ok && result.conflict && result.workflow)
+                  return showGraphStatus(route.data.sessionID, result.workflow, result.message)
                 if (!result.ok) return toast.show({ variant: "warning", message: result.message })
                 toast.show({ variant: "info", message: "Workflow will pause before the next mutation boundary." })
               },

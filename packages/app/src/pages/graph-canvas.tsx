@@ -6,9 +6,27 @@ type CanvasData = {
   name: string
   status?: string
   type?: string
+  testStatus?: string
+  buildable?: boolean
+  blockerCount?: number
+  checkpoint?: boolean
 }
 export type CanvasNode = { id: string; x: number; y: number; vx: number; vy: number; data: CanvasData }
 export const GRAPH_CANVAS_LABEL = "Workflow graph canvas. Use the task rail for keyboard navigation."
+
+export function canvasNodeState(
+  node: { status?: string; testStatus?: string; buildable?: boolean; checkpoint?: boolean },
+  current: boolean,
+  selected = false,
+) {
+  if (current) return { state: "current", icon: "→", shape: "double-circle", label: "Current" }
+  if (node.testStatus === "failed") return { state: "failed", icon: "!", shape: "square", label: "Failed" }
+  if (node.status === "verified") return { state: "verified", icon: "✓", shape: "circle", label: "Verified" }
+  if (node.checkpoint) return { state: "checkpoint", icon: "Ⅱ", shape: "diamond", label: "Checkpoint" }
+  if (node.buildable === false) return { state: "blocked", icon: "×", shape: "diamond", label: "Blocked" }
+  if (selected) return { state: "selected", icon: "◆", shape: "hexagon", label: "Selected" }
+  return { state: "pending", icon: "○", shape: "circle", label: "Pending" }
+}
 
 export function panCamera(
   camera: { x: number; y: number; zoom: number },
@@ -51,6 +69,7 @@ export function GraphCanvas(props: {
   currentNodeID: string | null
   onSelectNode: (id: string | null) => void
   onCenterNode?: (id: string) => void
+  centerNodeID?: string | null
 }) {
   let canvas: HTMLCanvasElement | undefined
   let container: HTMLDivElement | undefined
@@ -61,6 +80,7 @@ export function GraphCanvas(props: {
   let panStart: { x: number; y: number } | undefined
   let panOrigin = camera
   let panned = false
+  let reducedMotion: MediaQueryList | undefined
 
   const colors = () => {
     if (!container || typeof getComputedStyle === "undefined") return defaultColors
@@ -113,32 +133,52 @@ export function GraphCanvas(props: {
     nodes.forEach((node) => {
       const current = node.id === props.currentNodeID
       const selected = node.id === props.selectedNodeID
+      const presentation = canvasNodeState(node.data, current, selected)
       const state =
-        node.data.status === "verified"
+        presentation.state === "verified"
           ? palette.verified
-          : node.data.status === "failed"
+          : presentation.state === "failed"
             ? palette.failed
-            : node.data.status === "implemented"
+            : presentation.state === "blocked" || presentation.state === "checkpoint"
               ? palette.checkpoint
-              : palette.pending
+              : presentation.state === "selected"
+                ? palette.selected
+                : presentation.state === "current"
+                  ? palette.current
+                  : palette.pending
       context.fillStyle = palette.surface
       context.strokeStyle = current ? palette.current : selected ? palette.selected : state
       context.lineWidth = current ? 5 : selected ? 3 : 2
       context.beginPath()
-      if (node.data.status === "failed") context.rect(node.x - 18, node.y - 18, 36, 36)
-      else context.arc(node.x, node.y, current ? 22 : 18, 0, Math.PI * 2)
+      if (presentation.shape === "square") context.rect(node.x - 18, node.y - 18, 36, 36)
+      else if (presentation.shape === "diamond") {
+        context.moveTo(node.x, node.y - 22)
+        context.lineTo(node.x + 22, node.y)
+        context.lineTo(node.x, node.y + 22)
+        context.lineTo(node.x - 22, node.y)
+        context.closePath()
+      } else if (presentation.shape === "hexagon") {
+        Array.from({ length: 6 }).forEach((_, index) => {
+          const angle = (Math.PI / 3) * index - Math.PI / 2
+          const x = node.x + Math.cos(angle) * 21
+          const y = node.y + Math.sin(angle) * 21
+          if (index === 0) context.moveTo(x, y)
+          else context.lineTo(x, y)
+        })
+        context.closePath()
+      } else context.arc(node.x, node.y, current ? 22 : 18, 0, Math.PI * 2)
       context.fill()
       context.stroke()
-      if (node.data.status === "verified") {
-        context.fillStyle = state
-        context.font = "bold 13px sans-serif"
-        context.textAlign = "center"
-        context.fillText("✓", node.x, node.y + 5)
-      }
+      context.fillStyle = state
+      context.font = "bold 13px sans-serif"
+      context.textAlign = "center"
+      context.fillText(presentation.icon, node.x, node.y + 5)
       context.fillStyle = palette.text
       context.font = `${current ? "600 " : ""}12px sans-serif`
       context.textAlign = "center"
       context.fillText(node.data.name, node.x, node.y + 38)
+      context.font = "10px sans-serif"
+      context.fillText(presentation.label, node.x, node.y + 51)
     })
   }
 
@@ -168,7 +208,7 @@ export function GraphCanvas(props: {
   }
 
   const animate = () => {
-    if (unsettled > 0 && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (unsettled > 0 && !reducedMotion?.matches) {
       settle()
       unsettled -= 1
     }
@@ -178,6 +218,12 @@ export function GraphCanvas(props: {
 
   const start = () => {
     cancelAnimationFrame(frame)
+    reducedMotion ??= window.matchMedia("(prefers-reduced-motion: reduce)")
+    if (reducedMotion?.matches) {
+      unsettled = 0
+      draw()
+      return
+    }
     unsettled = 80
     frame = requestAnimationFrame(animate)
   }
@@ -213,30 +259,34 @@ export function GraphCanvas(props: {
   createEffect(() => {
     nodes = reconcileCanvasNodes(props.graphID, nodes, props.data.nodes)
     props.data.edges.length
+    props.selectedNodeID
+    props.currentNodeID
     if (typeof window !== "undefined") start()
   })
   createEffect(() => {
-    props.selectedNodeID
-    props.currentNodeID
-    if (typeof window !== "undefined") draw()
+    if (props.centerNodeID) center(props.centerNodeID)
   })
-
   onMount(() => {
     const resize = () => draw()
+    reducedMotion ??= window.matchMedia("(prefers-reduced-motion: reduce)")
+    const motion = () => start()
     window.addEventListener("resize", resize)
-    onCleanup(() => window.removeEventListener("resize", resize))
-    start()
+    reducedMotion.addEventListener("change", motion)
+    onCleanup(() => {
+      window.removeEventListener("resize", resize)
+      reducedMotion?.removeEventListener("change", motion)
+    })
   })
   onCleanup(() => cancelAnimationFrame(frame))
 
   return (
     <div
-      ref={container}
+      ref={(element) => (container = element)}
       class="graph-canvas relative h-full min-h-72 w-full overflow-hidden"
       aria-label="Workflow graph"
     >
       <canvas
-        ref={canvas}
+        ref={(element) => (canvas = element)}
         class="h-full w-full touch-none"
         aria-label={GRAPH_CANVAS_LABEL}
         onPointerDown={(event) => {
@@ -255,7 +305,14 @@ export function GraphCanvas(props: {
         }}
         onPointerUp={(event) => {
           panStart = undefined
-          event.currentTarget.releasePointerCapture(event.pointerId)
+          if (event.currentTarget.hasPointerCapture(event.pointerId))
+            event.currentTarget.releasePointerCapture(event.pointerId)
+        }}
+        onPointerCancel={(event) => {
+          panStart = undefined
+          panned = false
+          if (event.currentTarget.hasPointerCapture(event.pointerId))
+            event.currentTarget.releasePointerCapture(event.pointerId)
         }}
         onClick={(event) => {
           if (panned) {
@@ -266,7 +323,9 @@ export function GraphCanvas(props: {
         }}
         onDblClick={(event) => {
           const node = hit(event)
-          if (node) center(node.id)
+          if (!node) return
+          props.onSelectNode(node.id)
+          center(node.id)
         }}
         onWheel={(event) => {
           event.preventDefault()
