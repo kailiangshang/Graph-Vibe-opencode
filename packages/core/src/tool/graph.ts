@@ -174,6 +174,7 @@ type NamedCommand = {
   readonly args: ReadonlyArray<string>
   readonly command: string
   readonly focused: boolean
+  readonly targets: ReadonlyArray<GraphDiagnostics.Target>
 }
 
 type ApplySource = {
@@ -565,7 +566,9 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source: source(context),
               })
-              const results = yield* Effect.forEach(commands, (command) => runDiagnostic(processes, command, session.directory, input.timeout ?? DEFAULT_TIMEOUT_MS), { concurrency: 1 })
+              const executed = yield* Effect.forEach(commands, (command) => runDiagnostic(processes, command, session.directory, input.timeout ?? DEFAULT_TIMEOUT_MS), { concurrency: 1 })
+              const stable = yield* Effect.forEach(commands, (command) => Effect.promise(() => GraphDiagnostics.targetsUnchanged(command)))
+              const results = executed.map((result, index) => stable[index] ? result : changedTarget(commands[index]))
               const allPassed = results.every((result) => result.passed)
               const verified = allPassed && completeDiagnostics
               const artifactPaths = (yield* audit.tool.list({
@@ -676,13 +679,14 @@ const layer = Layer.effectDiscard(
         const paths = resolveArtifactPathsSafe(sourceInput.artifact, session.directory)
         if (isArtifactPathError(paths)) return blockedArtifactPath(paths)
         const files = paths.map((item) => item.relative)
-        const gate = yield* build.evaluate({
+        const evaluation = yield* build.evaluateWithRevision({
           projectID: session.projectID,
           sessionID: session.sessionID,
           targetNodeID: input.targetNodeID,
           artifact: sourceInput.artifact,
           executor: "manual",
         })
+        const gate = evaluation.gate
         if (!gate.allowed) {
           const currentPlan = yield* domain.currentPlan({ sessionID: session.sessionID })
           const buildable = buildableNodes(currentPlan.nodes, currentPlan.edges).map((node) => node.name)
@@ -753,6 +757,8 @@ const layer = Layer.effectDiscard(
           agent: context.agent,
           source: source(context),
         })
+        const reservation = yield* workflow.beginArtifactApply({ sessionID: session.sessionID, expectedRevision: evaluation.workflowRevision })
+        const artifactEvidence = { kind: "artifact" as const, nodeID: input.targetNodeID, artifactPaths: files }
         yield* Effect.forEach(existing, (item) =>
           Effect.gen(function* () {
             const content = artifactPlan.files[item.relative]
@@ -761,12 +767,16 @@ const layer = Layer.effectDiscard(
             yield* events.publish(FileSystem.Event.Edited, { file: item.absolute })
             yield* events.publish(Watcher.Event.Updated, { file: item.absolute, event: item.existed ? "change" : "add" })
           }),
-        )
-        yield* workflow.artifactApplied({
+        ).pipe(Effect.onError((cause) => workflow.failArtifactApply({
+          projectID: session.projectID, sessionID: session.sessionID, nodeID: input.targetNodeID,
+          reservedRevision: reservation.revision, evidence: artifactEvidence, error: String(cause),
+        }).pipe(Effect.orDie)))
+        yield* workflow.completeArtifactApply({
           projectID: session.projectID,
           sessionID: session.sessionID,
           nodeID: input.targetNodeID,
-          evidence: { kind: "artifact", nodeID: input.targetNodeID, artifactPaths: files },
+          reservedRevision: reservation.revision,
+          evidence: artifactEvidence,
           inputSummary: summarizePaths(paths),
           outputSummary: `applied:${paths.length}`,
         })
@@ -1178,6 +1188,19 @@ function allowedEdgeMatrix() {
 }
 
 function runDiagnostic(processes: AppProcess.Interface, command: NamedCommand, directory: string, timeoutMs: number) {
+  return Effect.gen(function* () {
+    if (!(yield* Effect.promise(() => GraphDiagnostics.targetsUnchanged(command)))) return changedTarget(command)
+    const result = yield* runDiagnosticUnchecked(processes, command, directory, timeoutMs)
+    if (!(yield* Effect.promise(() => GraphDiagnostics.targetsUnchanged(command)))) return changedTarget(command)
+    return result
+  })
+}
+
+function changedTarget(command: NamedCommand): CommandResult {
+  return { name: command.name, command: command.command, exitCode: null, output: "Focused verification target changed", timedOut: false, passed: false, failureReason: "verification_target_changed" }
+}
+
+function runDiagnosticUnchecked(processes: AppProcess.Interface, command: NamedCommand, directory: string, timeoutMs: number) {
   return processes
     .run(
       ChildProcess.make(command.executable, command.args, {

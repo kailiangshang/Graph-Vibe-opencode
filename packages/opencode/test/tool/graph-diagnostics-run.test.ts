@@ -1,6 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import path from "node:path"
-import { mkdir, mkdtemp, rm, symlink, unlink } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -267,6 +267,7 @@ describe("graph_diagnostics_run", () => {
     Effect.gen(function* () {
       const test = yield* TestInstance
       yield* seed(test.directory)
+      if (!(yield* Effect.promise(() => supportsSymlink(test.directory)))) return
       const outside = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "graph-diagnostics-outside-")))
       yield* Effect.addFinalizer(() => Effect.promise(() => rm(outside, { recursive: true, force: true })))
       yield* Effect.promise(async () => {
@@ -301,10 +302,11 @@ describe("graph_diagnostics_run", () => {
     }),
   )
 
-  it.instance("executes the validated canonical target when a focused symlink is swapped during permission", () =>
+  it.instance("rejects a canonical target changed during permission", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       yield* seed(test.directory)
+      if (!(yield* Effect.promise(() => supportsSymlink(test.directory)))) return
       const outside = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "graph-swap-outside-")))
       yield* Effect.addFinalizer(() => Effect.promise(() => rm(outside, { recursive: true, force: true })))
       yield* Effect.promise(async () => {
@@ -320,11 +322,40 @@ describe("graph_diagnostics_run", () => {
       const targetNodeID = yield* storage.node.create({ projectID, sessionID, type: "atomic", name: "Swap", level: "L2", status: "implemented", verification: { criteria: ["canonical target"], diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }] } })
       yield* authorize(targetNodeID)
       const tool = yield* init()
-      const result = yield* tool.execute({ targetNodeID }, context([], () => Effect.promise(async () => {
-        await unlink(path.join(test.directory, "test/focused.test.ts"))
-        await symlink(path.join(outside, "outside.txt"), path.join(test.directory, "test/focused.test.ts"))
-      })))
-      expect(JSON.parse(result.output)).toMatchObject({ verified: true, complete: true })
+      const result = yield* tool.execute({ targetNodeID }, context([], () => Effect.promise(() =>
+        Bun.write(path.join(test.directory, "test/inside.txt"), "changed")
+      ).pipe(Effect.asVoid)))
+      expect(JSON.parse(result.output)).toMatchObject({ verified: false, passed: false })
+    }),
+  )
+
+async function supportsSymlink(directory: string) {
+  const target = path.join(directory, ".symlink-capability-target")
+  const link = path.join(directory, ".symlink-capability-link")
+  await Bun.write(target, "test")
+  return symlink(target, link).then(
+    () => rm(link, { force: true }).then(() => true),
+    () => false,
+  ).finally(() => rm(target, { force: true }))
+}
+
+  it.instance("rejects a canonical target changed during command execution", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "test"), { recursive: true })
+        await mkdir(path.join(test.directory, "scripts"), { recursive: true })
+        await Bun.write(path.join(test.directory, "test/focused.test.ts"), "original")
+        await Bun.write(path.join(test.directory, "scripts/change.ts"), 'const file = process.argv[2]\nif (file) await Bun.write(file, "changed")\n')
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/change.ts" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({ projectID, sessionID, type: "atomic", name: "Mutation", level: "L2", status: "implemented", verification: { criteria: ["stable target"], diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }] } })
+      yield* authorize(targetNodeID)
+      const result = yield* (yield* init()).execute({ targetNodeID }, context([]))
+      expect(JSON.parse(result.output)).toMatchObject({ verified: false, passed: false })
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("implemented")
     }),
   )
 

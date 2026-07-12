@@ -89,14 +89,27 @@ export interface Interface {
     readonly inputSummary?: string
     readonly outputSummary?: string
   }) => Effect.Effect<State, RevisionConflict | ModuleScopeError>
-  readonly artifactApplied: (input: {
+  readonly beginArtifactApply: (input: {
+    readonly sessionID: string
+    readonly expectedRevision: number
+  }) => Effect.Effect<State, RevisionConflict>
+  readonly completeArtifactApply: (input: {
     readonly projectID: ProjectV2.ID
     readonly sessionID: string
     readonly nodeID: NodeID
+    readonly reservedRevision: number
     readonly evidence: ArtifactEvidence
     readonly inputSummary?: string
     readonly outputSummary?: string
-  }) => Effect.Effect<State>
+  }) => Effect.Effect<State, RevisionConflict>
+  readonly failArtifactApply: (input: {
+    readonly projectID: ProjectV2.ID
+    readonly sessionID: string
+    readonly nodeID: NodeID
+    readonly reservedRevision: number
+    readonly evidence: ArtifactEvidence
+    readonly error: string
+  }) => Effect.Effect<State, RevisionConflict>
   readonly failVerification: (input: {
     readonly projectID: ProjectV2.ID
     readonly sessionID: string
@@ -557,27 +570,55 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
-    const artifactApplied = Effect.fn("GraphWorkflowState.artifactApplied")(function* (input: {
+    const beginArtifactApply = Effect.fn("GraphWorkflowState.beginArtifactApply")(function* (input: {
+      readonly sessionID: string
+      readonly expectedRevision: number
+    }) {
+      return yield* database.db.transaction(() => Effect.gen(function* () {
+        const current = yield* requireState(get, input.sessionID, input.expectedRevision)
+        const row = yield* database.db.update(GraphWorkflowStateTable).set({ revision: current.revision + 1 })
+          .where(and(eq(GraphWorkflowStateTable.session_id, input.sessionID), eq(GraphWorkflowStateTable.revision, current.revision)))
+          .returning().get().pipe(Effect.orDie)
+        if (!row) return yield* new RevisionConflict({ expectedRevision: input.expectedRevision, actualRevision: (yield* get(input.sessionID))?.revision ?? 0 })
+        return fromRow(row)
+      }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
+    })
+
+    const completeArtifactApply = Effect.fn("GraphWorkflowState.completeArtifactApply")(function* (input: {
       readonly projectID: ProjectV2.ID
       readonly sessionID: string
       readonly nodeID: NodeID
+      readonly reservedRevision: number
       readonly evidence: ArtifactEvidence
       readonly inputSummary?: string
       readonly outputSummary?: string
     }) {
       return yield* database.db.transaction(() => Effect.gen(function* () {
-        const current = yield* get(input.sessionID)
-        if (!current) return yield* Effect.die(new Error(`Workflow state not found: ${input.sessionID}`))
+        const current = yield* requireState(get, input.sessionID, input.reservedRevision)
         yield* database.db.update(GraphNodeTable).set({ status: "implemented", test_status: "pending" })
           .where(eq(GraphNodeTable.id, input.nodeID)).run().pipe(Effect.orDie)
-        const row = yield* database.db.update(GraphWorkflowStateTable).set({ revision: current.revision + 1 })
-          .where(eq(GraphWorkflowStateTable.session_id, input.sessionID)).returning().get().pipe(Effect.orDie)
         yield* audit.tool.record({
           projectID: input.projectID, sessionID: input.sessionID, nodeID: input.nodeID,
           toolName: "graph.artifact.apply", toolType: "artifact", status: "succeeded",
           inputSummary: input.inputSummary, outputSummary: input.outputSummary, evidence: input.evidence,
         })
-        return fromRow(row)
+        return current
+      }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
+    })
+
+    const failArtifactApply = Effect.fn("GraphWorkflowState.failArtifactApply")(function* (input: {
+      readonly projectID: ProjectV2.ID
+      readonly sessionID: string
+      readonly nodeID: NodeID
+      readonly reservedRevision: number
+      readonly evidence: ArtifactEvidence
+      readonly error: string
+    }) {
+      return yield* database.db.transaction(() => Effect.gen(function* () {
+        const current = yield* requireState(get, input.sessionID, input.reservedRevision)
+        yield* audit.tool.record({ projectID: input.projectID, sessionID: input.sessionID, nodeID: input.nodeID,
+          toolName: "graph.artifact.apply", toolType: "artifact", status: "failed", error: input.error, evidence: input.evidence })
+        return current
       }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
@@ -674,7 +715,7 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
-    return Service.of({ get, setMode, resetPlan, approve, pause, advanceVerified, completeVerification, artifactApplied, failVerification, fail, promote })
+    return Service.of({ get, setMode, resetPlan, approve, pause, advanceVerified, completeVerification, beginArtifactApply, completeArtifactApply, failArtifactApply, failVerification, fail, promote })
   }),
 )
 

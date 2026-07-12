@@ -35,7 +35,9 @@ export interface Interface {
   }>
   readonly advanceVerified: GraphWorkflowState.Interface["advanceVerified"]
   readonly completeVerification: GraphWorkflowState.Interface["completeVerification"]
-  readonly artifactApplied: GraphWorkflowState.Interface["artifactApplied"]
+  readonly beginArtifactApply: GraphWorkflowState.Interface["beginArtifactApply"]
+  readonly completeArtifactApply: GraphWorkflowState.Interface["completeArtifactApply"]
+  readonly failArtifactApply: GraphWorkflowState.Interface["failArtifactApply"]
   readonly failVerification: GraphWorkflowState.Interface["failVerification"]
   readonly fail: GraphWorkflowState.Interface["fail"]
 }
@@ -110,7 +112,9 @@ export const layer = Layer.effect(
       evaluateWithRevision,
       advanceVerified: workflowState.advanceVerified,
       completeVerification: workflowState.completeVerification,
-      artifactApplied: workflowState.artifactApplied,
+      beginArtifactApply: workflowState.beginArtifactApply,
+      completeArtifactApply: workflowState.completeArtifactApply,
+      failArtifactApply: workflowState.failArtifactApply,
       failVerification: workflowState.failVerification,
       fail: workflowState.fail,
     })
