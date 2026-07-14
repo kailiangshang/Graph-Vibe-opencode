@@ -75,6 +75,9 @@ export const Flag = {
   get OPENCODE_PLUGIN_META_FILE() {
     return process.env["OPENCODE_PLUGIN_META_FILE"]
   },
+  get GRAPH_VIBE_ALLOW_OPENCODE_PATHS() {
+    return truthy("GRAPH_VIBE_ALLOW_OPENCODE_PATHS")
+  },
   get OPENCODE_CLIENT() {
     return process.env["OPENCODE_CLIENT"] ?? "cli"
   },

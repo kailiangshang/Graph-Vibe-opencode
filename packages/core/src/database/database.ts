@@ -5,10 +5,11 @@ import { layer as sqliteLayer } from "#sqlite"
 import { Context, Effect, Layer } from "effect"
 import { Global } from "../global"
 import { Flag } from "../flag/flag"
-import { isAbsolute, join } from "path"
+import { isAbsolute, join, relative, sep } from "path"
 import { DatabaseMigration } from "./migration"
 import { InstallationChannel } from "../installation/version"
 import { makeGlobalNode } from "../effect/app-node"
+import { Product } from "../product"
 
 const makeDatabase = EffectDrizzleSqlite.makeWithDefaults()
 type DatabaseShape = Effect.Success<typeof makeDatabase>
@@ -40,18 +41,45 @@ export function layerFromPath(filename: string) {
   return layer.pipe(Layer.provide(sqliteLayer({ filename })))
 }
 
-export function path() {
-  if (Flag.OPENCODE_DB) {
-    if (Flag.OPENCODE_DB === ":memory:" || isAbsolute(Flag.OPENCODE_DB)) return Flag.OPENCODE_DB
-    return join(Global.Path.data, Flag.OPENCODE_DB)
+export function pathFor(input: {
+  profile: Product.Profile
+  data: string
+  openCodeData: string
+  channel: string
+  database?: string
+  disableChannel?: boolean
+  allowOpenCodePaths?: boolean
+}) {
+  const database = input.database
+    ? input.database === ":memory:" || isAbsolute(input.database)
+      ? input.database
+      : join(input.data, input.database)
+    : join(
+        input.data,
+        ["latest", "beta", "prod"].includes(input.channel) || input.disableChannel
+          ? input.profile.database
+          : input.profile.database.replace(/\.db$/, `-${input.channel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`),
+      )
+  if (input.profile !== Product.GraphVibe || input.allowOpenCodePaths || database === ":memory:") return database
+
+  const relation = relative(input.openCodeData, database)
+  if (relation === "" || (relation !== ".." && !relation.startsWith(`..${sep}`) && !isAbsolute(relation))) {
+    throw new Error(`Graph Vibe refuses an OpenCode database path: ${database}`)
   }
-  if (
-    ["latest", "beta", "prod"].includes(InstallationChannel) ||
-    process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
-    process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
-  )
-    return join(Global.Path.data, "opencode.db")
-  return join(Global.Path.data, `opencode-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
+  return database
+}
+
+export function path() {
+  return pathFor({
+    profile: Product.current(),
+    data: Global.Path.data,
+    openCodeData: Global.paths(Product.OpenCode).data,
+    channel: InstallationChannel,
+    database: Flag.OPENCODE_DB,
+    disableChannel:
+      process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" || process.env.OPENCODE_DISABLE_CHANNEL_DB === "true",
+    allowOpenCodePaths: Flag.GRAPH_VIBE_ALLOW_OPENCODE_PATHS,
+  })
 }
 
 export const node = makeGlobalNode({ service: Service, layer: layerFromPath(path()), deps: [] })

@@ -14,6 +14,7 @@ test("graph-vibe launcher selects product identity and preserves the caller dire
       "#!/bin/sh",
       'printf "%s\\n" "$OPENCODE_CLIENT"',
       'printf "%s\\n" "$OPENCODE_ENABLE_GRAPH_MODE"',
+      'printf "%s\\n" "${OPENCODE_DISABLE_CHANNEL_DB:-}"',
       'printf "%s\\n" "$OPENCODE_GRAPH_VIBE_SOURCE_ROOT"',
       'printf "%s\\n" "$OPENCODE_INITIAL_DIRECTORY"',
       'printf "%s\\n" "$OPENCODE_GRAPH_VIBE_WEB_URL"',
@@ -27,7 +28,7 @@ test("graph-vibe launcher selects product identity and preserves the caller dire
   const proc = Bun.spawn({
     cmd: [path.join(root, "scripts/graph-vibe"), "--version"],
     cwd: tmp.path,
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, OPENCODE_DISABLE_CHANNEL_DB: undefined },
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -39,6 +40,7 @@ test("graph-vibe launcher selects product identity and preserves the caller dire
   expect(output).toEqual([
     "graph-vibe",
     "1",
+    "",
     root,
     tmp.path,
     "http://localhost:4444",
