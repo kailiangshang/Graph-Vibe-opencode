@@ -78,6 +78,9 @@ export const Flag = {
   get GRAPH_VIBE_ALLOW_OPENCODE_PATHS() {
     return truthy("GRAPH_VIBE_ALLOW_OPENCODE_PATHS")
   },
+  get GRAPH_VIBE_CONFIG_DIR() {
+    return process.env["GRAPH_VIBE_CONFIG_DIR"]
+  },
   get OPENCODE_CLIENT() {
     return process.env["OPENCODE_CLIENT"] ?? "cli"
   },
