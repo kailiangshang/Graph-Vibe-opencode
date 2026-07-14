@@ -25,9 +25,25 @@ describe("Product.current", () => {
       id: "graph-vibe",
       name: "Graph Vibe",
       cli: "graph-vibe",
+      storage: "graph-vibe",
+      database: "graph-vibe.db",
+      config: "graph-vibe",
+      backendPort: 4097,
+      uiPort: 4444,
+      package: "graph-vibe",
+      desktopID: "ai.graph-vibe.desktop",
+      protocol: "graph-vibe",
       capability: "Graph-guided development",
       attribution: "Powered by OpenCode",
     })
+  })
+
+  test("resolves product profiles without mutating process state", () => {
+    process.env.OPENCODE_CLIENT = "cli"
+
+    expect(Product.forClient("graph-vibe")).toBe(Product.GraphVibe)
+    expect(Product.forClient("cli")).toBe(Product.OpenCode)
+    expect(Product.current()).toBe(Product.OpenCode)
   })
 
   test("reads the client at access time", () => {

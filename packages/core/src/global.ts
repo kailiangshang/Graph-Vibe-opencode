@@ -6,31 +6,47 @@ import { Context, Effect, Layer } from "effect"
 import { Flock } from "./util/flock"
 import { Flag } from "./flag/flag"
 import { makeGlobalNode } from "./effect/app-node"
+import { Product } from "./product"
 
-const app = "opencode"
-const data = path.join(xdgData!, app)
-const cache = path.join(xdgCache!, app)
-const config = path.join(xdgConfig!, app)
-const state = path.join(xdgState!, app)
-const tmp = path.join(os.tmpdir(), app)
-
-const paths = {
-  get home() {
-    return process.env.OPENCODE_TEST_HOME ?? os.homedir()
-  },
-  data,
-  bin: path.join(cache, "bin"),
-  log: path.join(data, "log"),
-  repos: path.join(data, "repos"),
-  cache,
-  config,
-  state,
-  tmp,
+export interface Roots {
+  readonly home: string
+  readonly data: string
+  readonly cache: string
+  readonly config: string
+  readonly state: string
+  readonly tmp: string
 }
 
-export const Path = paths
+function platformRoots(): Roots {
+  return {
+    home: process.env.OPENCODE_TEST_HOME ?? os.homedir(),
+    data: xdgData!,
+    cache: xdgCache!,
+    config: xdgConfig!,
+    state: xdgState!,
+    tmp: os.tmpdir(),
+  }
+}
 
-Flock.setGlobal({ state })
+export function paths(profile: Product.Profile, roots: Roots = platformRoots()) {
+  const data = path.join(roots.data, profile.storage)
+  const cache = path.join(roots.cache, profile.storage)
+  return {
+    home: roots.home,
+    data,
+    bin: path.join(cache, "bin"),
+    log: path.join(data, "log"),
+    repos: path.join(data, "repos"),
+    cache,
+    config: path.join(roots.config, profile.storage),
+    state: path.join(roots.state, profile.storage),
+    tmp: path.join(roots.tmp, profile.storage),
+  }
+}
+
+export const Path = paths(Product.current())
+
+Flock.setGlobal({ state: Path.state })
 
 await Promise.all([
   fs.mkdir(Path.data, { recursive: true }),
