@@ -23,6 +23,24 @@ interface RemovalTargets {
   binary: string | null
 }
 
+export function uninstallPackageCommand(profile: Product.Profile, method: Installation.Method) {
+  const packageName = Installation.packageName(profile, method)
+  const commands: Partial<Record<Installation.Method, string[]>> = {
+    npm: ["npm", "uninstall", "-g", packageName],
+    pnpm: ["pnpm", "uninstall", "-g", packageName],
+    bun: ["bun", "remove", "-g", packageName],
+    yarn: ["yarn", "global", "remove", packageName],
+    brew: ["brew", "uninstall", packageName],
+    choco: ["choco", "uninstall", packageName],
+    scoop: ["scoop", "uninstall", packageName],
+  }
+  return commands[method]
+}
+
+export function uninstallShellIdentity(profile: Product.Profile) {
+  return { marker: `# ${profile.id}`, bin: `.${profile.storage}/bin` }
+}
+
 export const UninstallCommand = {
   command: "uninstall",
   describe: `uninstall ${Product.commandName()} and remove all related files`,
@@ -96,8 +114,9 @@ async function collectRemovalTargets(args: UninstallArgs, method: Installation.M
     { path: Global.Path.state, label: "State", keep: false },
   ]
 
-  const shellConfig = method === "curl" ? await getShellConfigFile() : null
-  const binary = method === "curl" ? process.execPath : null
+  const profile = Product.current()
+  const shellConfig = method === "curl" ? await getShellConfigFile(profile) : null
+  const binary = method === "curl" && profile === Product.OpenCode ? process.execPath : null
 
   return { directories, shellConfig, binary }
 }
@@ -129,16 +148,7 @@ async function showRemovalSummary(targets: RemovalTargets, method: Installation.
   }
 
   if (method !== "curl" && method !== "unknown") {
-    const cmds: Record<string, string> = {
-      npm: "npm uninstall -g opencode-ai",
-      pnpm: "pnpm uninstall -g opencode-ai",
-      bun: "bun remove -g opencode-ai",
-      yarn: "yarn global remove opencode-ai",
-      brew: "brew uninstall opencode",
-      choco: "choco uninstall opencode",
-      scoop: "scoop uninstall opencode",
-    }
-    prompts.log.info(`  ✓ Package: ${cmds[method] || method}`)
+    prompts.log.info(`  ✓ Package: ${uninstallPackageCommand(Product.current(), method)?.join(" ") ?? method}`)
   }
 }
 
@@ -170,7 +180,7 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
 
   if (targets.shellConfig) {
     spinner.start("Cleaning shell config...")
-    const err = await cleanShellConfig(targets.shellConfig).catch((e) => e)
+    const err = await cleanShellConfig(targets.shellConfig, Product.current()).catch((e) => e)
     if (err) {
       spinner.stop("Failed to clean shell config", 1)
       errors.push(`Shell config: ${err.message}`)
@@ -180,20 +190,10 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
   }
 
   if (method !== "curl" && method !== "unknown") {
-    const cmds: Record<string, string[]> = {
-      npm: ["npm", "uninstall", "-g", "opencode-ai"],
-      pnpm: ["pnpm", "uninstall", "-g", "opencode-ai"],
-      bun: ["bun", "remove", "-g", "opencode-ai"],
-      yarn: ["yarn", "global", "remove", "opencode-ai"],
-      brew: ["brew", "uninstall", "opencode"],
-      choco: ["choco", "uninstall", "opencode"],
-      scoop: ["scoop", "uninstall", "opencode"],
-    }
-
-    const cmd = cmds[method]
+    const cmd = uninstallPackageCommand(Product.current(), method)
     if (cmd) {
       spinner.start(`Running ${cmd.join(" ")}...`)
-      const result = await Process.run(method === "choco" ? ["choco", "uninstall", "opencode", "-y", "-r"] : cmd, {
+      const result = await Process.run(method === "choco" ? [...cmd, "-y", "-r"] : cmd, {
         nothrow: true,
       })
       if (result.code !== 0) {
@@ -233,7 +233,7 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
   prompts.log.success(`Thank you for using ${Product.current().name}!`)
 }
 
-async function getShellConfigFile(): Promise<string | null> {
+async function getShellConfigFile(profile: Product.Profile): Promise<string | null> {
   const shell = path.basename(process.env.SHELL || "bash")
   const home = os.homedir()
   const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(home, ".config")
@@ -267,7 +267,8 @@ async function getShellConfigFile(): Promise<string | null> {
     if (!exists) continue
 
     const content = await Filesystem.readText(file).catch(() => "")
-    if (content.includes("# opencode") || content.includes(".opencode/bin")) {
+    const identity = uninstallShellIdentity(profile)
+    if (content.includes(identity.marker) || content.includes(identity.bin)) {
       return file
     }
   }
@@ -275,9 +276,10 @@ async function getShellConfigFile(): Promise<string | null> {
   return null
 }
 
-async function cleanShellConfig(file: string) {
+async function cleanShellConfig(file: string, profile: Product.Profile) {
   const content = await Filesystem.readText(file)
   const lines = content.split("\n")
+  const identity = uninstallShellIdentity(profile)
 
   const filtered: string[] = []
   let skip = false
@@ -285,21 +287,21 @@ async function cleanShellConfig(file: string) {
   for (const line of lines) {
     const trimmed = line.trim()
 
-    if (trimmed === "# opencode") {
+    if (trimmed === identity.marker) {
       skip = true
       continue
     }
 
     if (skip) {
       skip = false
-      if (trimmed.includes(".opencode/bin") || trimmed.includes("fish_add_path")) {
+      if (trimmed.includes(identity.bin) || trimmed.includes("fish_add_path")) {
         continue
       }
     }
 
     if (
-      (trimmed.startsWith("export PATH=") && trimmed.includes(".opencode/bin")) ||
-      (trimmed.startsWith("fish_add_path") && trimmed.includes(".opencode"))
+      (trimmed.startsWith("export PATH=") && trimmed.includes(identity.bin)) ||
+      (trimmed.startsWith("fish_add_path") && trimmed.includes(`.${profile.storage}`))
     ) {
       continue
     }

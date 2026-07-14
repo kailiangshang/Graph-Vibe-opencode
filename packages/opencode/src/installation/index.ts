@@ -14,10 +14,20 @@ import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { NpmConfig } from "@opencode-ai/core/npm-config"
 import { InstallationEvent } from "@opencode-ai/schema/installation-event"
+import { Product } from "@opencode-ai/core/product"
 
 export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "unknown"
 
 export type ReleaseType = "patch" | "minor" | "major"
+
+export function packageName(profile: Product.Profile, method: Method) {
+  if (method === "npm" || method === "yarn" || method === "pnpm" || method === "bun") return profile.package
+  return profile === Product.GraphVibe ? "graph-vibe" : "opencode"
+}
+
+export function releaseAvailable(profile: Product.Profile) {
+  return profile === Product.OpenCode
+}
 
 export const Event = InstallationEvent
 
@@ -196,8 +206,7 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
 
         for (const check of checks) {
           const output = yield* check.command()
-          const installedName =
-            check.name === "brew" || check.name === "choco" || check.name === "scoop" ? "opencode" : "opencode-ai"
+          const installedName = packageName(Product.current(), check.name)
           if (output.includes(installedName)) {
             return check.name
           }
@@ -206,6 +215,7 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
         return "unknown" as Method
       }),
       latest: Effect.fn("Installation.latest")(function* (installMethod?: Method) {
+        if (!releaseAvailable(Product.current())) return InstallationVersion
         const detectedMethod = installMethod || (yield* result.method())
 
         if (detectedMethod === "brew") {
@@ -263,6 +273,9 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
         return data.tag_name.replace(/^v/, "")
       }, Effect.orDie),
       upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {
+        if (!releaseAvailable(Product.current())) {
+          return yield* new UpgradeFailedError({ stderr: "Graph Vibe upgrades are unavailable until its release channel is configured" })
+        }
         let upgradeResult: { code: number; stdout: string; stderr: string } | undefined
         switch (m) {
           case "curl":

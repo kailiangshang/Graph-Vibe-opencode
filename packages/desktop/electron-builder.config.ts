@@ -31,15 +31,22 @@ const channel = (() => {
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
   return "dev"
 })()
+const graph = process.env.OPENCODE_CLIENT === "graph-vibe"
 
-const APP_IDS = {
-  dev: "ai.opencode.desktop.dev",
-  beta: "ai.opencode.desktop.beta",
-  prod: "ai.opencode.desktop",
-} as const
+const APP_IDS = graph
+  ? ({
+      dev: "ai.graph-vibe.desktop.dev",
+      beta: "ai.graph-vibe.desktop.beta",
+      prod: "ai.graph-vibe.desktop",
+    } as const)
+  : ({
+      dev: "ai.opencode.desktop.dev",
+      beta: "ai.opencode.desktop.beta",
+      prod: "ai.opencode.desktop",
+    } as const)
 
 const getBase = (appId: string): Configuration => ({
-  artifactName: "opencode-desktop-${os}-${arch}.${ext}",
+  artifactName: `${graph ? "graph-vibe" : "opencode-desktop"}-\${os}-\${arch}.\${ext}`,
   directories: {
     output: "dist",
     buildResources: "resources",
@@ -74,8 +81,8 @@ const getBase = (appId: string): Configuration => ({
     sign: true,
   },
   protocols: {
-    name: "OpenCode",
-    schemes: ["opencode"],
+    name: graph ? "Graph Vibe" : "OpenCode",
+    schemes: [graph ? "graph-vibe" : "opencode"],
   },
   win: {
     icon: `resources/icons/icon.ico`,
@@ -115,29 +122,33 @@ function getConfig() {
       return {
         ...base,
         appId,
-        productName: "OpenCode Dev",
-        rpm: { packageName: "opencode-dev" },
+        productName: graph ? "Graph Vibe Dev" : "OpenCode Dev",
+        rpm: { packageName: graph ? "graph-vibe-dev" : "opencode-dev" },
       }
     }
     case "beta": {
       return {
         ...base,
         appId,
-        productName: "OpenCode Beta",
-        protocols: { name: "OpenCode Beta", schemes: ["opencode"] },
-        publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
-        rpm: { packageName: "opencode-beta" },
+        productName: graph ? "Graph Vibe Beta" : "OpenCode Beta",
+        protocols: { name: graph ? "Graph Vibe Beta" : "OpenCode Beta", schemes: [graph ? "graph-vibe" : "opencode"] },
+        ...(graph ? {} : { publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" } }),
+        rpm: { packageName: graph ? "graph-vibe-beta" : "opencode-beta" },
       }
     }
     case "prod": {
       return {
         ...base,
         appId,
-        productName: "OpenCode",
-        protocols: { name: "OpenCode", schemes: ["opencode"] },
-        publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
-        deb: { fpm: [legacyDesktopEntryFpm] },
-        rpm: { packageName: "opencode", fpm: [legacyDesktopEntryFpm] },
+        productName: graph ? "Graph Vibe" : "OpenCode",
+        protocols: { name: graph ? "Graph Vibe" : "OpenCode", schemes: [graph ? "graph-vibe" : "opencode"] },
+        ...(graph
+          ? { rpm: { packageName: "graph-vibe" } }
+          : {
+              publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
+              deb: { fpm: [legacyDesktopEntryFpm] },
+              rpm: { packageName: "opencode", fpm: [legacyDesktopEntryFpm] },
+            }),
       }
     }
   }

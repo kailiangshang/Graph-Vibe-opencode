@@ -11,6 +11,11 @@ import { createRoutes } from "@opencode-ai/server/routes"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Daemon } from "../../services/daemon"
+import { Product } from "@opencode-ai/core/product"
+
+export function defaultPort(profile = Product.current()) {
+  return profile.backendPort
+}
 
 export default Runtime.handler(
   Commands.commands.serve,
@@ -33,7 +38,7 @@ function listen(hostname: string, port: Option.Option<number>, password: string)
     bind(hostname, port, password).pipe(
       Effect.catch((error) => (port === 65_535 ? Effect.fail(error) : next(port + 1))),
     )
-  return next(4096)
+  return next(defaultPort())
 }
 
 function bind(hostname: string, port: number, password: string) {

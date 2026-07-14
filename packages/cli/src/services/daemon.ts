@@ -7,6 +7,7 @@ import { HttpServer } from "effect/unstable/http"
 import { randomBytes, randomUUID } from "crypto"
 import { spawn } from "node:child_process"
 import path from "path"
+import { Product } from "@opencode-ai/core/product"
 
 export interface Interface {
   readonly client: () => Effect.Effect<ReturnType<typeof createOpencodeClient>, unknown>
@@ -28,6 +29,19 @@ const Registration = Schema.Struct({
 })
 type Registration = typeof Registration.Type
 
+export function paths(directory: string, profile = Product.current()) {
+  if (profile === Product.OpenCode) {
+    return {
+      registration: path.join(directory, "server.json"),
+      password: path.join(directory, "password"),
+    }
+  }
+  return {
+    registration: path.join(directory, `${profile.id}-server.json`),
+    password: path.join(directory, `${profile.id}-password`),
+  }
+}
+
 function sameRegistration(left: Registration, right: Registration) {
   return left.id === right.id && left.version === right.version && left.url === right.url && left.pid === right.pid
 }
@@ -37,8 +51,9 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const directory = Global.Path.state
-    const file = path.join(directory, "server.json")
-    const passwordFile = path.join(directory, "password")
+    const files = paths(directory)
+    const file = files.registration
+    const passwordFile = files.password
     const decodeRegistration = Schema.decodeUnknownEffect(Schema.fromJsonString(Registration))
 
     const password = Effect.fn("cli.daemon.password")(function* (value?: string) {

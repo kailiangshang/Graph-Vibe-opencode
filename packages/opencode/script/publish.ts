@@ -3,6 +3,7 @@ import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode-ai/script"
 import { fileURLToPath } from "url"
+import { packageManifests } from "./package-manifest"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
@@ -31,54 +32,37 @@ for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" }
 console.log("binaries", binaries)
 const version = Object.values(binaries)[0]
 
-await $`mkdir -p ./dist/${pkg.name}`
-await $`mkdir -p ./dist/${pkg.name}/bin`
-await $`cp ./script/postinstall.mjs ./dist/${pkg.name}/postinstall.mjs`
-await $`cp ./bin/graph-vibe.cjs ./dist/${pkg.name}/bin/graph-vibe.cjs`
-await Bun.file(`./dist/${pkg.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
-await Bun.file(`./dist/${pkg.name}/bin/${pkg.name}.exe`).write(
-  [
-    `echo "Error: ${pkg.name}-ai's postinstall script was not run." >&2`,
+const manifests = packageManifests(version, binaries, pkg.license)
+for (const manifest of Object.values(manifests)) {
+  const target = `./dist/${manifest.name}`
+  await $`mkdir -p ${target}/bin`
+  await $`cp ./script/postinstall.mjs ${target}/postinstall.mjs`
+  await Bun.file(`${target}/LICENSE`).write(await Bun.file("../../LICENSE").text())
+  await Bun.file(`${target}/bin/opencode.exe`).write(
+    [
+    `echo "Error: ${manifest.name}'s postinstall script was not run." >&2`,
     'echo "" >&2',
     'echo "This occurs when using --ignore-scripts during installation, or when using a" >&2',
     'echo "package manager like pnpm that does not run postinstall scripts by default." >&2',
     'echo "" >&2',
     'echo "To fix this, run the postinstall script manually:" >&2',
-    `echo "  cd node_modules/${pkg.name}-ai && node postinstall.mjs" >&2`,
+    `echo "  cd node_modules/${manifest.name} && node postinstall.mjs" >&2`,
     'echo "" >&2',
-    `echo "Or reinstall ${pkg.name}-ai without the --ignore-scripts flag." >&2`,
+    `echo "Or reinstall ${manifest.name} without the --ignore-scripts flag." >&2`,
     "exit 1",
     "",
-  ].join("\n"),
-)
-
-await Bun.file(`./dist/${pkg.name}/package.json`).write(
-  JSON.stringify(
-    {
-      name: pkg.name + "-ai",
-      bin: {
-        [pkg.name]: `./bin/${pkg.name}.exe`,
-        "graph-vibe": "./bin/graph-vibe.cjs",
-      },
-      scripts: {
-        postinstall: "node ./postinstall.mjs",
-      },
-      version: version,
-      license: pkg.license,
-      os: ["darwin", "linux", "win32"],
-      cpu: ["arm64", "x64"],
-      optionalDependencies: binaries,
-    },
-    null,
-    2,
-  ),
-)
+    ].join("\n"),
+  )
+  if (manifest.name === "graph-vibe") await $`cp ./bin/graph-vibe.cjs ${target}/bin/graph-vibe.cjs`
+  await Bun.file(`${target}/package.json`).write(JSON.stringify(manifest, null, 2))
+}
 
 const tasks = Object.entries(binaries).map(async ([name]) => {
   await publish(`./dist/${name}`, name, binaries[name])
 })
 await Promise.all(tasks)
-await publish(`./dist/${pkg.name}`, `${pkg.name}-ai`, version)
+await publish(`./dist/${manifests.opencode.name}`, manifests.opencode.name, version)
+await publish(`./dist/${manifests.graphVibe.name}`, manifests.graphVibe.name, version)
 
 const image = "ghcr.io/anomalyco/opencode"
 const platforms = "linux/amd64,linux/arm64"
