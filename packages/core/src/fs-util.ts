@@ -122,7 +122,11 @@ export namespace FSUtil {
         content: string | Uint8Array,
         mode?: number,
       ) {
-        const write = typeof content === "string" ? fs.writeFileString(path, content) : fs.writeFile(path, content)
+        const options = mode === undefined ? undefined : { mode }
+        const write =
+          typeof content === "string"
+            ? fs.writeFileString(path, content, options)
+            : fs.writeFile(path, content, options)
 
         yield* write.pipe(
           Effect.catchIf(
@@ -134,7 +138,7 @@ export namespace FSUtil {
               }),
           ),
         )
-        if (mode) yield* fs.chmod(path, mode)
+        if (mode !== undefined) yield* fs.chmod(path, mode)
       })
 
       const glob = Effect.fn("FileSystem.glob")(function* (pattern: string, options?: Glob.Options) {

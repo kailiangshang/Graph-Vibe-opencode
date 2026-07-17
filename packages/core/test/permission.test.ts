@@ -1,14 +1,18 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
+import { EventTable } from "@opencode-ai/core/event/sql"
 import { Location } from "@opencode-ai/core/location"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { PermissionTable } from "@opencode-ai/core/permission/sql"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
+import { Product } from "@opencode-ai/core/product"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -23,19 +27,24 @@ const current = Layer.succeed(
   Location.Service,
   Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
 )
-const it = testEffect(
+const permissionLayer = (profile: Product.Profile) =>
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
       EventV2.node,
+      ProductMigrationState.node,
       SessionStore.node,
       PermissionSaved.node,
       AgentV2.node,
       PermissionV2.node,
     ]),
-    [[Location.node, current]],
-  ),
-)
+    [
+      [Location.node, current],
+      [Product.node, Product.layerWith(profile)],
+    ],
+  )
+const it = testEffect(permissionLayer(Product.OpenCode))
+const graphVibe = testEffect(permissionLayer(Product.GraphVibe))
 
 function setup(rules: PermissionV2.Ruleset = []) {
   return Effect.gen(function* () {
@@ -103,6 +112,50 @@ function waitForRequest() {
 }
 
 describe("PermissionV2", () => {
+  graphVibe.effect("blocks permission state, events, and saved rows until migration completion", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* PermissionV2.Service
+      const saved = yield* PermissionSaved.Service
+      const observed: string[] = []
+      const unsubscribe = yield* (yield* EventV2.Service).listen((event) =>
+        Effect.sync(() => {
+          if (event.type === PermissionV2.Event.Asked.type || event.type === PermissionV2.Event.Replied.type)
+            observed.push(event.type)
+        }),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const input = assertion({ save: ["src/*"] })
+      const failures = yield* Effect.all([
+        service.ask(input).pipe(Effect.exit),
+        service.assert(input).pipe(Effect.exit),
+        service.reply({ requestID: input.id, reply: "always" }).pipe(Effect.exit),
+        saved.add({ projectID: Project.ID.global, action: "read", resources: ["src/*"] }).pipe(Effect.exit),
+        saved.remove(PermissionSaved.ID.create()).pipe(Effect.exit),
+      ])
+
+      expect(
+        failures.every(
+          (exit: Exit.Exit<unknown, unknown>) =>
+            Exit.isFailure(exit) && Cause.squash(exit.cause) instanceof ProductMigration.Required,
+        ),
+      ).toBe(true)
+      expect(yield* service.list()).toEqual([])
+      expect(observed).toEqual([])
+      const { db } = yield* Database.Service
+      expect(yield* db.select().from(EventTable).all().pipe(Effect.orDie)).toEqual([])
+      expect(yield* db.select().from(PermissionTable).all().pipe(Effect.orDie)).toEqual([])
+
+      yield* (yield* ProductMigrationState.Service).freshStart({ expectedRevision: 0 })
+      expect(yield* service.ask(input)).toMatchObject({ id: input.id, effect: "ask" })
+      yield* saved.add({ projectID: Project.ID.global, action: "read", resources: ["src/*"] })
+      expect(yield* service.list()).toHaveLength(1)
+      expect(observed).toEqual([PermissionV2.Event.Asked.type])
+      expect(yield* db.select().from(EventTable).all().pipe(Effect.orDie)).toEqual([])
+      expect(yield* db.select().from(PermissionTable).all().pipe(Effect.orDie)).toHaveLength(1)
+    }),
+  )
+
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])

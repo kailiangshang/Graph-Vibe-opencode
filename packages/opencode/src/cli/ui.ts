@@ -1,6 +1,7 @@
 import { EOL } from "os"
 import { Schema } from "effect"
 import { logo as glyphs } from "./logo"
+import { Product } from "@opencode-ai/core/product"
 
 const wordmark = [
   `⠀                                ▄     `,
@@ -46,7 +47,16 @@ export function empty() {
 }
 
 export function logo(pad?: string) {
-  const subtitle = "Graph Vibe OpenCode · forked from anomalyco/opencode"
+  const product = Product.current()
+  if (product === Product.GraphVibe) {
+    const lines = [product.name, product.capability, product.attribution].map((line) => (pad ?? "") + line)
+    if (!process.stdout.isTTY && !process.stderr.isTTY) return lines.join(EOL)
+    return `${Style.TEXT_NORMAL_BOLD}${lines[0]}${Style.TEXT_NORMAL}${EOL}${Style.TEXT_DIM}${lines.slice(1).join(EOL)}${Style.TEXT_NORMAL}`
+  }
+  const subtitle = [`${product.name} · ${product.capability}`, product.attribution]
+    .filter((line) => line.length > 0)
+    .map((line) => (pad ?? "") + line)
+    .join(EOL)
   if (!process.stdout.isTTY && !process.stderr.isTTY) {
     const result = []
     for (const row of wordmark) {
@@ -54,7 +64,7 @@ export function logo(pad?: string) {
       result.push(row)
       result.push(EOL)
     }
-    return result.join("").trimEnd() + EOL + (pad ?? "") + subtitle
+    return result.join("").trimEnd() + EOL + subtitle
   }
 
   const result: string[] = []
@@ -101,7 +111,7 @@ export function logo(pad?: string) {
     result.push(draw(other, right.fg, right.shadow, right.bg))
     result.push(EOL)
   })
-  return result.join("").trimEnd() + EOL + "\x1b[90m" + (pad ?? "") + subtitle + reset
+  return result.join("").trimEnd() + EOL + "\x1b[90m" + subtitle + reset
 }
 
 export async function input(prompt: string): Promise<string> {

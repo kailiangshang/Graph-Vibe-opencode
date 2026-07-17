@@ -24,6 +24,7 @@ import { InstanceHttpApi } from "../api"
 import * as ApiError from "../errors"
 import { CursorQuery, PtyConnectApi } from "../groups/pty"
 import { WebSocketTracker } from "../websocket-tracker"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 function validOrigin(request: HttpServerRequest.HttpServerRequest, opts: CorsOptions | undefined) {
   return isAllowedRequestOrigin(request.headers.origin, request.headers.host, opts)
@@ -44,6 +45,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     const cors = yield* CorsConfig
     const plugin = yield* Plugin.Service
     const locations = yield* LocationServiceMap.Service
+    const migration = yield* ProductMigrationState.Service
     const unregister = registerDisposer((directory) =>
       Effect.runPromise(locations.invalidate(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
     )
@@ -67,6 +69,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     })
 
     const create = Effect.fn("PtyHttpApi.create")(function* (ctx: { payload: typeof Pty.CreateInput.Type }) {
+      yield* migration.requireCompleted()
       const cwd = ctx.payload.cwd || (yield* InstanceState.context).directory
       const shell = yield* plugin.trigger("shell.env", { cwd }, { env: {} as Record<string, string> })
       return yield* pty(
@@ -106,6 +109,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
       params: { ptyID: PtyID }
       payload: typeof Pty.UpdateInput.Type
     }) {
+      yield* migration.requireCompleted()
       yield* get(ctx)
       return yield* pty(
         Pty.Service.use((service) =>
@@ -127,6 +131,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     })
 
     const remove = Effect.fn("PtyHttpApi.remove")(function* (ctx: { params: { ptyID: PtyID } }) {
+      yield* migration.requireCompleted()
       yield* get(ctx)
       yield* pty(Pty.Service.use((service) => service.remove(ctx.params.ptyID))).pipe(
         Effect.catchTag(
@@ -142,6 +147,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     })
 
     const connectToken = Effect.fn("PtyHttpApi.connectToken")(function* (ctx: { params: { ptyID: PtyID } }) {
+      yield* migration.requireCompleted()
       const request = yield* HttpServerRequest.HttpServerRequest
       if (request.headers[PTY_CONNECT_TOKEN_HEADER] !== PTY_CONNECT_TOKEN_HEADER_VALUE || !validOrigin(request, cors))
         return yield* new ApiError.PtyForbiddenError({ message: "Invalid PTY connect token request" })
@@ -165,6 +171,7 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
     const tickets = yield* PtyTicket.Service
     const cors = yield* CorsConfig
     const locations = yield* LocationServiceMap.Service
+    const migration = yield* ProductMigrationState.Service
     const unregister = registerDisposer((directory) =>
       Effect.runPromise(locations.invalidate(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
     )
@@ -184,6 +191,7 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
         params: { ptyID: PtyID }
         request: HttpServerRequest.HttpServerRequest
       }) {
+        yield* migration.requireCompleted()
         const exists = yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
           Effect.map((info) => info.status === "running"),
           Effect.catchTag("Pty.NotFoundError", () => Effect.succeed(false)),

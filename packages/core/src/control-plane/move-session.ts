@@ -11,6 +11,8 @@ import { SessionEvent } from "../session/event"
 import { SessionSchema } from "../session/schema"
 import { SessionStore } from "../session/store"
 import { AbsolutePath, RelativePath } from "../schema"
+import { ProductMigrationState } from "../product-migration/state"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import path from "path"
 
 export const Destination = Schema.Struct({
@@ -59,6 +61,7 @@ export type Error =
   | CaptureChangesError
   | ApplyChangesError
   | ResetSourceChangesError
+  | ProductMigration.Required
 
 export interface Interface {
   readonly moveSession: (input: Input) => Effect.Effect<void, Error>
@@ -73,8 +76,10 @@ const layer = Layer.effect(
     const events = yield* EventV2.Service
     const project = yield* ProjectV2.Service
     const sessions = yield* SessionStore.Service
+    const migration = yield* ProductMigrationState.Service
 
     const moveSession = Effect.fn("MoveSession.moveSession")(function* (input: Input) {
+      yield* migration.requireCompleted()
       const current = yield* sessions.get(input.sessionID)
       if (!current) return yield* new SessionV2.NotFoundError({ sessionID: input.sessionID })
       const directory = AbsolutePath.make(input.destination.directory)
@@ -144,5 +149,5 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Git.node, EventV2.node, ProjectV2.node, SessionStore.node],
+  deps: [Git.node, EventV2.node, ProjectV2.node, SessionStore.node, ProductMigrationState.node],
 })

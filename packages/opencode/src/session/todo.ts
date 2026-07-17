@@ -7,6 +7,8 @@ import { asc } from "drizzle-orm"
 import { TodoTable } from "@opencode-ai/core/session/sql"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionTodo } from "@opencode-ai/schema/session-todo"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 
 export const Info = SessionTodo.Info
 export type Info = SessionTodo.Info
@@ -14,7 +16,10 @@ export type Info = SessionTodo.Info
 export const Event = SessionTodo.Event
 
 export interface Interface {
-  readonly update: (input: { sessionID: SessionID; todos: ReadonlyArray<Info> }) => Effect.Effect<void>
+  readonly update: (input: {
+    sessionID: SessionID
+    todos: ReadonlyArray<Info>
+  }) => Effect.Effect<void, ProductMigration.Required>
   readonly get: (sessionID: SessionID) => Effect.Effect<Info[]>
 }
 
@@ -25,8 +30,10 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
     const { db } = yield* Database.Service
+    const migration = yield* ProductMigrationState.Service
 
     const update = Effect.fn("Todo.update")(function* (input: { sessionID: SessionID; todos: ReadonlyArray<Info> }) {
+      yield* migration.requireCompleted()
       yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -69,6 +76,10 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [EventV2Bridge.node, Database.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer: layer,
+  deps: [EventV2Bridge.node, Database.node, ProductMigrationState.node],
+})
 
 export * as Todo from "./todo"

@@ -1,5 +1,6 @@
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { RootHttpApi } from "../api"
@@ -13,12 +14,13 @@ export const controlPlaneHandlers = HttpApiBuilder.group(RootHttpApi, "controlPl
       payload: typeof MoveSessionPayload.Type
     }) {
       yield* service.moveSession(ctx.payload).pipe(
-        Effect.mapError(
-          (error) =>
-            new ApiMoveSessionError({
-              name: "MoveSessionError",
-              data: { message: message(error) },
-            }),
+        Effect.mapError((error) =>
+          error instanceof ProductMigration.Required
+            ? error
+            : new ApiMoveSessionError({
+                name: "MoveSessionError",
+                data: { message: message(error) },
+              }),
         ),
       )
     })

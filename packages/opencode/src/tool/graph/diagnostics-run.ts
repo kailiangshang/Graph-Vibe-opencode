@@ -3,11 +3,12 @@ import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { buildableNodes } from "@opencode-ai/core/graph/build-order"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
+import { GraphDiagnostics } from "@opencode-ai/core/graph/workflow/diagnostics"
+import { Graph } from "@opencode-ai/schema/graph"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ChildProcess } from "effect/unstable/process"
 import * as Stream from "effect/Stream"
 import { Effect, Schema } from "effect"
-import path from "node:path"
 import { Session } from "@/session/session"
 import { Tool } from "../tool"
 import { formatJson, resolveGraphSession, summarizeGate } from "./util"
@@ -35,8 +36,12 @@ interface CommandResult {
 type ExitKind = { kind: "exit"; code: number } | { kind: "timeout"; code: null } | { kind: "abort"; code: null }
 
 interface NamedCommand {
-  name: string
+  name: Graph.DiagnosticName
+  executable: "bun"
+  args: ReadonlyArray<string>
   command: string
+  focused: boolean
+  targets: ReadonlyArray<GraphDiagnostics.Target>
 }
 
 export const GraphDiagnosticsRunTool = Tool.define(
@@ -51,8 +56,8 @@ export const GraphDiagnosticsRunTool = Tool.define(
 
     const runCmd = (cmd: NamedCommand, cwd: string, abort: AbortSignal, timeoutMs: number) =>
       Effect.gen(function* () {
-        const spec = ChildProcess.make(cmd.command, [], {
-          shell: process.env.SHELL ?? "/bin/sh",
+        if (!(yield* Effect.promise(() => GraphDiagnostics.targetsUnchanged(cmd)))) return changedTarget(cmd)
+        const spec = ChildProcess.make(cmd.executable, cmd.args, {
           cwd,
           env: process.env,
           stdin: "ignore",
@@ -93,7 +98,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
         const truncatedOutput = output.slice(0, MAX_OUTPUT_CHARS)
         const failureReason = diagnosticFailureReason(cmd.command, exit, truncatedOutput)
 
-        return {
+        const result = {
           name: cmd.name,
           command: cmd.command,
           exitCode: exit.code,
@@ -102,6 +107,8 @@ export const GraphDiagnosticsRunTool = Tool.define(
           passed: failureReason === undefined,
           ...(failureReason ? { failureReason } : {}),
         } satisfies CommandResult
+        if (!(yield* Effect.promise(() => GraphDiagnostics.targetsUnchanged(cmd)))) return changedTarget(cmd)
+        return result
       }).pipe(Effect.scoped)
 
     return {
@@ -112,13 +119,14 @@ export const GraphDiagnosticsRunTool = Tool.define(
         Effect.gen(function* () {
           const session = yield* resolveGraphSession(ctx, sessions)
 
-          const gate = yield* build.evaluate({
+          const evaluation = yield* build.evaluateWithRevision({
             projectID: session.projectID,
             sessionID: session.sessionID,
             targetNodeID: params.targetNodeID,
             diagnosticsRequested: true,
             executor: "manual",
           })
+          const gate = evaluation.gate
 
           if (!gate.allowed) {
             yield* audit.tool.record({
@@ -145,6 +153,8 @@ export const GraphDiagnosticsRunTool = Tool.define(
             (r) => r.toolName === "graph.diagnostics.run" && r.status === "failed",
           ).length
           if (failedDiagCount >= MAX_FIX_ATTEMPTS) {
+            const reason = `Node has ${failedDiagCount} previous failed diagnostics (max ${MAX_FIX_ATTEMPTS}). Review the failures and revise the plan or seek human input.`
+            yield* build.fail({ sessionID: session.sessionID, nodeID: params.targetNodeID, reason })
             yield* audit.tool.record({
               projectID: session.projectID,
               sessionID: session.sessionID,
@@ -168,16 +178,48 @@ export const GraphDiagnosticsRunTool = Tool.define(
                 ran: false,
                 complete: false,
                 verified: false,
-                reason: `Node has ${failedDiagCount} previous failed diagnostics (max ${MAX_FIX_ATTEMPTS}). Review the failures and revise the plan or seek human input.`,
+                reason,
               }),
             }
           }
 
           const timeoutMs = params.timeout ?? DEFAULT_TIMEOUT_MS
 
-          const detected = yield* Effect.promise(() => detectDiagnosticsCommands(session.directory))
-          const cmds = params.filter ? detected.filter((c) => c.name.includes(params.filter!)) : detected
-          const completeDiagnostics = cmds.length === detected.length
+          const target = yield* storage.node.get(params.targetNodeID)
+          const resolution = yield* Effect.promise(() => GraphDiagnostics.resolve({
+            directory: session.directory,
+            verification: target.verification,
+            filter: params.filter,
+          }))
+          if (!resolution.ok) {
+            const evidence: Graph.VerificationEvidence = {
+              kind: "diagnostics",
+              nodeID: params.targetNodeID,
+              criteria: target.verification?.criteria ?? [],
+              artifactPaths: [],
+              projectChecksOnly: target.verification === null,
+              complete: false,
+              passed: false,
+              commands: [],
+            }
+            yield* audit.tool.record({
+              projectID: session.projectID,
+              sessionID: session.sessionID,
+              nodeID: params.targetNodeID,
+              toolName: "graph.diagnostics.run",
+              toolType: "diagnostics",
+              status: "blocked",
+              outputSummary: resolution.reason,
+              evidence,
+            })
+            return {
+              title: "Diagnostics blocked",
+              metadata: { gate: summarizeGate(gate), ran: false, passed: false, complete: false, verified: false, results: [], ...resolution },
+              output: formatJson({ ran: false, passed: false, complete: false, verified: false, ...resolution }),
+            }
+          }
+          const cmds = resolution.commands
+          const completeDiagnostics = resolution.complete
           if (cmds.length === 0 && params.filter) {
             return {
               title: "Diagnostics skipped",
@@ -193,24 +235,76 @@ export const GraphDiagnosticsRunTool = Tool.define(
             metadata: { commands: cmds },
           })
 
-          const results: CommandResult[] = []
+          const executed: CommandResult[] = []
           for (const cmd of cmds) {
             const result = yield* runCmd(cmd, session.directory, ctx.abort, timeoutMs)
-            results.push(result)
+            executed.push(result)
           }
+          const stable = yield* Effect.forEach(cmds, (command) => Effect.promise(() => GraphDiagnostics.targetsUnchanged(command)))
+          const results = executed.map((result, index) => stable[index] ? result : changedTarget(cmds[index]))
 
           const allPassed = results.every((r) => r.passed)
           const verified = allPassed && completeDiagnostics
 
-          if (verified || !allPassed) {
-            yield* storage.node.update(params.targetNodeID, {
-              testStatus: allPassed ? "passed" : "failed",
-              ...(verified ? { status: "verified" as const } : {}),
-            })
+          const artifactPaths = (yield* audit.tool.list({
+            projectID: session.projectID,
+            sessionID: session.sessionID,
+            nodeID: params.targetNodeID,
+          }))
+            .flatMap((record) => record.evidence?.kind === "artifact" ? [record.evidence] : [])
+            .at(-1)?.artifactPaths ?? []
+          const evidence: Graph.VerificationEvidence = {
+            kind: "diagnostics",
+            nodeID: params.targetNodeID,
+            criteria: target.verification?.criteria ?? [],
+            artifactPaths,
+            projectChecksOnly: resolution.projectChecksOnly,
+            complete: completeDiagnostics,
+            passed: verified,
+            commands: results.map((result) => ({
+              name: result.name,
+              command: result.command,
+              exitCode: result.exitCode,
+              timedOut: result.timedOut,
+              passed: result.passed,
+              excerpt: result.output.slice(0, 8_192),
+            })),
           }
+          const inputSummary = cmds.map((command) => command.name).join("; ")
+          const outputSummary = results.map((result) => `${result.name}:${result.failureReason ?? result.exitCode}`).join(", ")
 
           let nextHint = ""
           if (verified) {
+            const completion = yield* build.completeVerification({
+              projectID: session.projectID,
+              sessionID: session.sessionID,
+              nodeID: params.targetNodeID,
+              expectedRevision: evaluation.workflowRevision,
+              evidence,
+              inputSummary,
+              outputSummary,
+            }).pipe(
+              Effect.as(true),
+              Effect.catchTag("GraphWorkflowState.RevisionConflict", () => Effect.succeed(false)),
+            )
+            if (!completion) {
+              yield* audit.tool.record({
+                projectID: session.projectID,
+                sessionID: session.sessionID,
+                nodeID: params.targetNodeID,
+                toolName: "graph.diagnostics.run",
+                toolType: "diagnostics",
+                status: "blocked",
+                inputSummary,
+                outputSummary: "workflow_revision_conflict",
+                evidence,
+              })
+              return {
+                title: "Diagnostics superseded by workflow change",
+                metadata: { gate: summarizeGate(gate), ran: true, passed: true, complete: true, verified: false, results: [] as CommandResult[] },
+                output: formatJson({ ran: true, passed: true, complete: true, verified: false, reason: "workflow_revision_conflict" }),
+              }
+            }
             const cp = yield* domain.currentPlan({ sessionID: session.sessionID })
             const newlyBuildable = buildableNodes(cp.nodes, cp.edges)
               .filter((n) => n.id !== params.targetNodeID)
@@ -220,16 +314,24 @@ export const GraphDiagnosticsRunTool = Tool.define(
             }
           }
 
-          yield* audit.tool.record({
-            projectID: session.projectID,
-            sessionID: session.sessionID,
-            nodeID: params.targetNodeID,
-            toolName: "graph.diagnostics.run",
-            toolType: "diagnostics",
-            status: allPassed ? "succeeded" : "failed",
-            inputSummary: cmds.map((c) => c.name).join("; "),
-            outputSummary: results.map((r) => `${r.name}:${r.failureReason ?? r.exitCode}`).join(", "),
-          })
+          if (!verified && !allPassed) {
+            yield* build.failVerification({
+              projectID: session.projectID, sessionID: session.sessionID, nodeID: params.targetNodeID,
+              expectedRevision: evaluation.workflowRevision, evidence, inputSummary, outputSummary,
+            }).pipe(Effect.catchTag("GraphWorkflowState.RevisionConflict", () => Effect.void))
+          } else if (!verified) {
+            yield* audit.tool.record({
+              projectID: session.projectID,
+              sessionID: session.sessionID,
+              nodeID: params.targetNodeID,
+              toolName: "graph.diagnostics.run",
+              toolType: "diagnostics",
+              status: allPassed ? "succeeded" : "failed",
+              inputSummary,
+              outputSummary,
+              evidence,
+            })
+          }
 
           return {
             title: verified ? "Diagnostics passed" : allPassed ? "Diagnostics passed - filtered subset" : "Diagnostics failed",
@@ -261,22 +363,14 @@ function diagnosticFailureReason(command: string, exit: ExitKind, output: string
   if (isBunRunUsageOutput(command, output)) return "bun_run_usage"
 }
 
+function changedTarget(command: NamedCommand): CommandResult {
+  return { name: command.name, command: command.command, exitCode: null, output: "Focused verification target changed", timedOut: false, passed: false, failureReason: "verification_target_changed" }
+}
+
 function isBunRunUsageOutput(command: string, output: string) {
   return (
     /\bbun\b/.test(command) &&
     /\brun\b/.test(command) &&
     output.includes("Usage: bun run [flags] <file or script>")
   )
-}
-
-async function detectDiagnosticsCommands(directory: string): Promise<NamedCommand[]> {
-  const pkg = await Bun.file(path.join(directory, "package.json"))
-    .json()
-    .catch(() => ({ scripts: {} }))
-  const scripts = (pkg as { scripts?: Record<string, string> }).scripts ?? {}
-  const commands: NamedCommand[] = []
-  if (scripts.test) commands.push({ name: "test", command: "bun run test" })
-  if (scripts.typecheck) commands.push({ name: "typecheck", command: "bun run typecheck" })
-  if (scripts.lint) commands.push({ name: "lint", command: "bun run lint" })
-  return commands.length > 0 ? commands : [{ name: "test", command: "bun test" }]
 }

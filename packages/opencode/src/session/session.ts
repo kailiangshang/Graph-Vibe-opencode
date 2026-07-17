@@ -44,6 +44,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 const parentTitlePrefix = "New session - "
 const childTitlePrefix = "Child session - "
@@ -423,49 +425,74 @@ export interface Interface {
     metadata?: typeof Metadata.Type
     permission?: PermissionV1.Ruleset
     workspaceID?: WorkspaceV2.ID
-  }) => Effect.Effect<Info>
-  readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
-  readonly touch: (sessionID: SessionID) => Effect.Effect<void>
+  }) => Effect.Effect<Info, ProductMigration.Required>
+  readonly fork: (input: {
+    sessionID: SessionID
+    messageID?: MessageID
+  }) => Effect.Effect<Info, NotFound | ProductMigration.Required>
+  readonly touch: (sessionID: SessionID) => Effect.Effect<void, ProductMigration.Required>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
-  readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
-  readonly setArchived: (input: { sessionID: SessionID; time?: number }) => Effect.Effect<void>
-  readonly setMetadata: (input: typeof SetMetadataInput.Type) => Effect.Effect<void>
+  readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void, ProductMigration.Required>
+  readonly setArchived: (input: {
+    sessionID: SessionID
+    time?: number
+  }) => Effect.Effect<void, ProductMigration.Required>
+  readonly setMetadata: (input: typeof SetMetadataInput.Type) => Effect.Effect<void, ProductMigration.Required>
   readonly setAgentModel: (input: {
     sessionID: SessionID
     agent: string
     model: NonNullable<Info["model"]>
     time: number
-  }) => Effect.Effect<void>
-  readonly setPermission: (input: { sessionID: SessionID; permission: PermissionV1.Ruleset }) => Effect.Effect<void>
+  }) => Effect.Effect<void, ProductMigration.Required>
+  readonly setPermission: (input: {
+    sessionID: SessionID
+    permission: PermissionV1.Ruleset
+  }) => Effect.Effect<void, ProductMigration.Required>
   readonly setRevert: (input: {
     sessionID: SessionID
     revert: Info["revert"]
     summary: Info["summary"]
-  }) => Effect.Effect<void>
-  readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
-  readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
-  readonly setShare: (input: { sessionID: SessionID; share: Info["share"] }) => Effect.Effect<void>
-  readonly setWorkspace: (input: { sessionID: SessionID; workspaceID: Info["workspaceID"] }) => Effect.Effect<void>
+  }) => Effect.Effect<void, ProductMigration.Required>
+  readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void, ProductMigration.Required>
+  readonly setSummary: (input: {
+    sessionID: SessionID
+    summary: Info["summary"]
+  }) => Effect.Effect<void, ProductMigration.Required>
+  readonly setShare: (input: {
+    sessionID: SessionID
+    share: Info["share"]
+  }) => Effect.Effect<void, ProductMigration.Required>
+  readonly setWorkspace: (input: {
+    sessionID: SessionID
+    workspaceID: Info["workspaceID"]
+  }) => Effect.Effect<void, ProductMigration.Required>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
-  readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
-  readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
-  readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
-  readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
+  readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound | ProductMigration.Required>
+  readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T, ProductMigration.Required>
+  readonly removeMessage: (input: {
+    sessionID: SessionID
+    messageID: MessageID
+  }) => Effect.Effect<MessageID, ProductMigration.Required>
+  readonly removePart: (input: {
+    sessionID: SessionID
+    messageID: MessageID
+    partID: PartID
+  }) => Effect.Effect<PartID, ProductMigration.Required>
   readonly getPart: (input: {
     sessionID: SessionID
     messageID: MessageID
     partID: PartID
   }) => Effect.Effect<SessionV1.Part | undefined>
-  readonly updatePart: <T extends SessionV1.Part>(part: T) => Effect.Effect<T>
+  readonly updatePart: <T extends SessionV1.Part>(part: T) => Effect.Effect<T, ProductMigration.Required>
   readonly updatePartDelta: (input: {
     sessionID: SessionID
     messageID: MessageID
     partID: PartID
     field: string
     delta: string
-  }) => Effect.Effect<void>
+  }) => Effect.Effect<void, ProductMigration.Required>
   /** Finds the first message matching the predicate, searching newest-first. */
   readonly findMessage: (
     sessionID: SessionID,
@@ -488,7 +515,11 @@ export type Patch = Omit<Partial<Info>, "time" | "share" | "summary" | "revert" 
 const layer: Layer.Layer<
   Service,
   never,
-  BackgroundJob.Service | RuntimeFlags.Service | Database.Service | EventV2Bridge.Service
+  | BackgroundJob.Service
+  | RuntimeFlags.Service
+  | Database.Service
+  | EventV2Bridge.Service
+  | ProductMigrationState.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -497,6 +528,8 @@ const layer: Layer.Layer<
     const background = yield* BackgroundJob.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const migration = yield* ProductMigrationState.Service
+    const mutationGate = migration.requireCompleted()
 
     const createNext = Effect.fn("Session.createNext")(function* (input: {
       id?: SessionID
@@ -510,6 +543,7 @@ const layer: Layer.Layer<
       metadata?: typeof Metadata.Type
       permission?: PermissionV1.Ruleset
     }) {
+      yield* migration.requireCompleted()
       const ctx = yield* InstanceState.context
       const result: Info = {
         id: SessionID.descending(input.id),
@@ -606,6 +640,7 @@ const layer: Layer.Layer<
     })
 
     const remove: Interface["remove"] = Effect.fnUntraced(function* (sessionID: SessionID) {
+      yield* mutationGate
       const session = yield* get(sessionID)
       try {
         // `remove` needs to work in all cases, such as broken sessions that
@@ -628,14 +663,16 @@ const layer: Layer.Layer<
       }
     })
 
-    const updateMessage = <T extends SessionV1.Info>(msg: T): Effect.Effect<T> =>
+    const updateMessage = <T extends SessionV1.Info>(msg: T): Effect.Effect<T, ProductMigration.Required> =>
       Effect.gen(function* () {
+        yield* mutationGate
         yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: msg.sessionID, info: msg })
         return msg
       }).pipe(Effect.withSpan("Session.updateMessage"))
 
-    const updatePart = <T extends SessionV1.Part>(part: T): Effect.Effect<T> =>
+    const updatePart = <T extends SessionV1.Part>(part: T): Effect.Effect<T, ProductMigration.Required> =>
       Effect.gen(function* () {
+        yield* mutationGate
         yield* events.publish(SessionV1.Event.PartUpdated, {
           sessionID: part.sessionID,
           part: structuredClone(part),
@@ -691,6 +728,7 @@ const layer: Layer.Layer<
     })
 
     const fork = Effect.fn("Session.fork")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
+      yield* migration.requireCompleted()
       const ctx = yield* InstanceState.context
       const original = yield* get(input.sessionID)
       const title = getForkedTitle(original.title)
@@ -735,6 +773,7 @@ const layer: Layer.Layer<
 
     const patch = (sessionID: SessionID, info: Patch) =>
       Effect.gen(function* () {
+        yield* mutationGate
         const current = yield* get(sessionID)
         const next = {
           ...current,
@@ -747,21 +786,23 @@ const layer: Layer.Layer<
         } as Info
         yield* events.publish(SessionV1.Event.Updated, { sessionID, info: next })
       })
+    const dieNotFound = <A, E, R>(self: Effect.Effect<A, NotFound | E, R>) =>
+      self.pipe(Effect.catchIf(NotFoundError.isInstance, Effect.die))
 
     const touch = Effect.fn("Session.touch")(function* (sessionID: SessionID) {
-      yield* patch(sessionID, { time: { updated: Date.now() } }).pipe(Effect.orDie)
+      yield* dieNotFound(patch(sessionID, { time: { updated: Date.now() } }))
     })
 
     const setTitle = Effect.fn("Session.setTitle")(function* (input: { sessionID: SessionID; title: string }) {
-      yield* patch(input.sessionID, { title: input.title }).pipe(Effect.orDie)
+      yield* dieNotFound(patch(input.sessionID, { title: input.title }))
     })
 
     const setArchived = Effect.fn("Session.setArchived")(function* (input: { sessionID: SessionID; time?: number }) {
-      yield* patch(input.sessionID, { time: { archived: input.time } }).pipe(Effect.orDie)
+      yield* dieNotFound(patch(input.sessionID, { time: { archived: input.time } }))
     })
 
     const setMetadata = Effect.fn("Session.setMetadata")(function* (input: typeof SetMetadataInput.Type) {
-      yield* patch(input.sessionID, { metadata: input.metadata, time: { updated: Date.now() } }).pipe(Effect.orDie)
+      yield* dieNotFound(patch(input.sessionID, { metadata: input.metadata, time: { updated: Date.now() } }))
     })
 
     const setAgentModel = Effect.fn("Session.setAgentModel")(function* (input: {
@@ -770,20 +811,20 @@ const layer: Layer.Layer<
       model: NonNullable<Info["model"]>
       time: number
     }) {
-      yield* patch(input.sessionID, {
-        agent: input.agent,
-        model: input.model,
-        time: { updated: input.time },
-      }).pipe(Effect.orDie)
+      yield* dieNotFound(
+        patch(input.sessionID, {
+          agent: input.agent,
+          model: input.model,
+          time: { updated: input.time },
+        }),
+      )
     })
 
     const setPermission = Effect.fn("Session.setPermission")(function* (input: {
       sessionID: SessionID
       permission: PermissionV1.Ruleset
     }) {
-      yield* patch(input.sessionID, { permission: [...input.permission], time: { updated: Date.now() } }).pipe(
-        Effect.orDie,
-      )
+      yield* dieNotFound(patch(input.sessionID, { permission: [...input.permission], time: { updated: Date.now() } }))
     })
 
     const setRevert = Effect.fn("Session.setRevert")(function* (input: {
@@ -791,35 +832,35 @@ const layer: Layer.Layer<
       revert: Info["revert"]
       summary: Info["summary"]
     }) {
-      yield* patch(input.sessionID, {
-        summary: input.summary,
-        time: { updated: Date.now() },
-        revert: input.revert,
-      }).pipe(Effect.orDie)
+      yield* dieNotFound(
+        patch(input.sessionID, {
+          summary: input.summary,
+          time: { updated: Date.now() },
+          revert: input.revert,
+        }),
+      )
     })
 
     const clearRevert = Effect.fn("Session.clearRevert")(function* (sessionID: SessionID) {
-      yield* patch(sessionID, { time: { updated: Date.now() }, revert: null }).pipe(Effect.orDie)
+      yield* dieNotFound(patch(sessionID, { time: { updated: Date.now() }, revert: null }))
     })
 
     const setSummary = Effect.fn("Session.setSummary")(function* (input: {
       sessionID: SessionID
       summary: Info["summary"]
     }) {
-      yield* patch(input.sessionID, { time: { updated: Date.now() }, summary: input.summary }).pipe(Effect.orDie)
+      yield* dieNotFound(patch(input.sessionID, { time: { updated: Date.now() }, summary: input.summary }))
     })
 
     const setShare = Effect.fn("Session.setShare")(function* (input: { sessionID: SessionID; share: Info["share"] }) {
-      yield* patch(input.sessionID, { share: input.share ?? null, time: { updated: Date.now() } }).pipe(Effect.orDie)
+      yield* dieNotFound(patch(input.sessionID, { share: input.share ?? null, time: { updated: Date.now() } }))
     })
 
     const setWorkspace = Effect.fn("Session.setWorkspace")(function* (input: {
       sessionID: SessionID
       workspaceID: Info["workspaceID"]
     }) {
-      yield* patch(input.sessionID, { workspaceID: input.workspaceID, time: { updated: Date.now() } }).pipe(
-        Effect.orDie,
-      )
+      yield* dieNotFound(patch(input.sessionID, { workspaceID: input.workspaceID, time: { updated: Date.now() } }))
     })
 
     const diff = Effect.fn("Session.diff")(function* (sessionID: SessionID) {
@@ -856,6 +897,7 @@ const layer: Layer.Layer<
       sessionID: SessionID
       messageID: MessageID
     }) {
+      yield* mutationGate
       yield* events.publish(SessionV1.Event.MessageRemoved, {
         sessionID: input.sessionID,
         messageID: input.messageID,
@@ -868,6 +910,7 @@ const layer: Layer.Layer<
       messageID: MessageID
       partID: PartID
     }) {
+      yield* mutationGate
       yield* events.publish(SessionV1.Event.PartRemoved, {
         sessionID: input.sessionID,
         messageID: input.messageID,
@@ -883,6 +926,7 @@ const layer: Layer.Layer<
       field: string
       delta: string
     }) {
+      yield* mutationGate
       yield* events.publish(MessageV2.Event.PartDelta, input)
     })
 
@@ -1012,7 +1056,7 @@ function listByProject(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [BackgroundJob.node, RuntimeFlags.node, Database.node, EventV2Bridge.node],
+  deps: [BackgroundJob.node, RuntimeFlags.node, Database.node, EventV2Bridge.node, ProductMigrationState.node],
 })
 
 export * as Session from "./session"

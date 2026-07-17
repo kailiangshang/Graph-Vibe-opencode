@@ -109,6 +109,26 @@ async function read(file: string) {
 }
 
 describe("plugin.install.task", () => {
+  test("Graph Vibe writes project plugin config under .graph-vibe", async () => {
+    await using tmp = await tmpdir()
+    const target = await plugin(tmp.path, ["server", "tui"])
+    const previous = process.env.OPENCODE_CLIENT
+    process.env.OPENCODE_CLIENT = "graph-vibe"
+    try {
+      const run = createPlugTask({ mod: "acme@1.2.3" }, deps(path.join(tmp.path, "global"), target))
+
+      expect(await run(ctx(tmp.path))).toBe(true)
+      expect((await read(path.join(tmp.path, ".graph-vibe", "graph-vibe.jsonc"))).plugin).toEqual([
+        "acme@1.2.3",
+      ])
+      expect((await read(path.join(tmp.path, ".graph-vibe", "tui.jsonc"))).plugin).toEqual(["acme@1.2.3"])
+      expect(await Filesystem.exists(path.join(tmp.path, ".opencode"))).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_CLIENT
+      else process.env.OPENCODE_CLIENT = previous
+    }
+  })
+
   test("writes both server and tui config entries", async () => {
     await using tmp = await tmpdir()
     const target = await plugin(tmp.path, ["server", "tui"])

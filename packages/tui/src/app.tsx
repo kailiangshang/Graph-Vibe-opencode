@@ -24,6 +24,7 @@ import {
   Show,
   on,
 } from "solid-js"
+import { createStore } from "solid-js/store"
 import { TuiPathsProvider, TuiStartupProvider, TuiTerminalEnvironmentProvider, useTuiStartup } from "./context/runtime"
 import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogProvider as DialogProviderList } from "./component/dialog-provider"
@@ -86,6 +87,28 @@ import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
+import { Product } from "@opencode-ai/core/product"
+import { DialogGraphGuide } from "./component/dialog-graph-guide"
+import { DialogGraphStatus } from "./component/dialog-graph-status"
+import { DialogGraphMode } from "./component/dialog-graph-mode"
+import {
+  migrationErrorMessage,
+  migrationProjectionIsCurrent,
+  pollMigrationProjection,
+  productMigrationGateRequired,
+  ProductMigrationView,
+} from "./component/dialog-product-migration"
+import type { ProductMigrationProjection } from "@opencode-ai/sdk/v2"
+import {
+  continueWorkflow,
+  graphWebAvailable,
+  graphWebUrl,
+  pauseWorkflow,
+  persistGraphStartMode,
+  startGraphPrompt,
+  type Workflow,
+  workflowActionFailure,
+} from "./graph/workflow"
 
 registerOpencodeSpinner()
 
@@ -141,6 +164,7 @@ const appBindingCommands = [
 
 export type TuiInput = {
   url: string
+  webUrl?: string
   args: Args
   config: TuiConfig.Resolved
   onSnapshot?: () => Promise<string[]>
@@ -297,6 +321,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                       <PluginRuntimeProvider value={pluginRuntime}>
                                         <SDKProvider
                                           url={input.url}
+                                          webUrl={input.webUrl}
                                           directory={input.directory}
                                           fetch={input.fetch}
                                           headers={input.headers}
@@ -363,6 +388,206 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
 })
 
 function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPluginHost }) {
+  if (!productMigrationGateRequired(Product.current())) return <RoutedApp {...props} />
+  return <ProductMigrationBoundary {...props} />
+}
+
+function ProductMigrationBoundary(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPluginHost }) {
+  const sdk = useSDK()
+  const dimensions = useTerminalDimensions()
+  const { theme } = useTheme()
+  const [migration, setMigration] = createStore({
+    projection: undefined as ProductMigrationProjection | undefined,
+    pending: 0,
+    executing: false,
+    conflict: undefined as string | undefined,
+    error: false,
+  })
+  let migrationDisposed = false
+  let migrationConcurrent = false
+  onCleanup(() => {
+    migrationDisposed = true
+    setMigration("executing", false)
+  })
+
+  const refresh = () =>
+    sdk.client.productMigration.get().then(
+      (response) => {
+        if (response.data) {
+          setMigration({ projection: response.data, error: false })
+          return response.data
+        }
+        setMigration("error", true)
+      },
+      () => setMigration("error", true),
+    )
+
+  onMount(() => {
+    void refresh()
+  })
+
+  useBindings(() => ({
+    bindings: migration.error
+      ? [{ key: "r", desc: "Retry migration checkpoint", group: "Migration", cmd: () => void refresh() }]
+      : [],
+  }))
+
+  const apply = (
+    action: () => Promise<{ data?: ProductMigrationProjection; error?: unknown }>,
+    options: { concurrent?: boolean; poll?: boolean } = {},
+  ) => {
+    if (
+      (migration.pending > 0 && !options.concurrent) ||
+      (options.concurrent && migrationConcurrent) ||
+      !migration.projection
+    )
+      return Promise.resolve()
+    if (options.concurrent) migrationConcurrent = true
+    setMigration({
+      pending: migration.pending + 1,
+      executing: options.poll || migration.executing,
+      conflict: undefined,
+    })
+    const request = action()
+    const polling = options.poll
+      ? pollMigrationProjection({
+          active: () => !migrationDisposed && migration.executing,
+          current: () => migration.projection,
+          get: () => sdk.client.productMigration.get().then((response) => response.data),
+          update: (projection) => setMigration("projection", projection),
+        })
+      : Promise.resolve()
+    const refreshFailure = async (error?: unknown) => {
+      await refresh()
+      setMigration("conflict", migrationErrorMessage(error))
+    }
+    return request
+      .then(async (response) => {
+        if (response.data) {
+          if (migration.projection && !migrationProjectionIsCurrent(response.data, migration.projection)) return
+          if (options.poll || response.data.status !== "copying") setMigration("executing", false)
+          setMigration({ projection: response.data, error: false })
+          return
+        }
+        const error = response.error
+        if (error && typeof error === "object" && "_tag" in error && error._tag === "ProductMigrationRevisionConflict") {
+          const projection = await refresh()
+          if (projection)
+            setMigration(
+              "conflict",
+              `Migration changed to revision ${projection.revision}. Review the refreshed plan.`,
+            )
+          return
+        }
+        await refreshFailure(response.error)
+      }, refreshFailure)
+      .finally(async () => {
+        if (options.poll) setMigration("executing", false)
+        if (options.concurrent) migrationConcurrent = false
+        setMigration("pending", Math.max(0, migration.pending - 1))
+        await polling
+      })
+  }
+
+  return (
+    <Show
+      when={migration.projection}
+      fallback={
+        <box
+          width={dimensions().width}
+          height={dimensions().height}
+          alignItems="center"
+          justifyContent="center"
+          backgroundColor={theme.background}
+        >
+          <text fg={migration.error ? theme.error : theme.textMuted}>
+            {migration.error
+              ? "Migration checkpoint unavailable. Press r to retry."
+              : "Loading migration checkpoint…"}
+          </text>
+        </box>
+      }
+    >
+      {(projection) => (
+        <Show when={projection().status !== "completed"} fallback={<RoutedApp {...props} />}>
+          <ProductMigrationView
+            projection={projection()}
+            pending={migration.pending > 0}
+            conflict={migration.conflict}
+            onDiscover={() =>
+              apply(() =>
+                sdk.client.productMigration.discover({
+                  productMigrationDiscoverPayload: {
+                    expectedRevision: projection().revision,
+                    currentProject: sdk.directory,
+                  },
+                }),
+              )
+            }
+            onUpdateDraft={(payload) =>
+              apply(() => sdk.client.productMigration.updateDraft({ productMigrationDraftPayload: payload }))
+            }
+            onExecute={() =>
+              apply(
+                () =>
+                  sdk.client.productMigration.execute({
+                    productMigrationRevisionPayload: { expectedRevision: projection().revision },
+                  }),
+                { poll: true },
+              )
+            }
+            onPause={() =>
+              apply(
+                () =>
+                  sdk.client.productMigration.pause({
+                    productMigrationRevisionPayload: { expectedRevision: projection().revision },
+                  }),
+                { concurrent: true },
+              )
+            }
+            onRetry={(itemID) =>
+              apply(() =>
+                sdk.client.productMigration.retry({
+                  productMigrationItemPayload: { expectedRevision: projection().revision, itemID },
+                }),
+              )
+            }
+            onSkip={(itemID) =>
+              apply(() =>
+                sdk.client.productMigration.skip({
+                  productMigrationItemPayload: { expectedRevision: projection().revision, itemID },
+                }),
+              )
+            }
+            onValidate={() =>
+              apply(() =>
+                sdk.client.productMigration.validate({
+                  productMigrationRevisionPayload: { expectedRevision: projection().revision },
+                }),
+              )
+            }
+            onFinalize={() =>
+              apply(() =>
+                sdk.client.productMigration.finalize({
+                  productMigrationRevisionPayload: { expectedRevision: projection().revision },
+                }),
+              )
+            }
+            onFreshStart={() =>
+              apply(() =>
+                sdk.client.productMigration.freshStart({
+                  productMigrationRevisionPayload: { expectedRevision: projection().revision },
+                }),
+              )
+            }
+          />
+        </Show>
+      )}
+    </Show>
+  )
+}
+
+function RoutedApp(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPluginHost }) {
   const startup = useTuiStartup()
   const tuiConfig = useTuiConfig()
   const route = useRoute()
@@ -454,24 +679,24 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (!terminalTitleEnabled() || Flag.OPENCODE_DISABLE_TERMINAL_TITLE) return
 
     if (route.data.type === "home") {
-      renderer.setTerminalTitle("OpenCode")
+      renderer.setTerminalTitle(Product.current().name)
       return
     }
 
     if (route.data.type === "session") {
       const session = sync.session.get(route.data.sessionID)
       if (!session || isDefaultTitle(session.title)) {
-        renderer.setTerminalTitle("OpenCode")
+        renderer.setTerminalTitle(Product.current().name)
         return
       }
 
       const title = session.title.length > 40 ? session.title.slice(0, 37) + "..." : session.title
-      renderer.setTerminalTitle(`OC | ${title}`)
+      renderer.setTerminalTitle(`${Product.current().name} | ${title}`)
       return
     }
 
     if (route.data.type === "plugin") {
-      renderer.setTerminalTitle(`OC | ${route.data.id}`)
+      renderer.setTerminalTitle(`${Product.current().name} | ${route.data.id}`)
     }
   })
 
@@ -556,6 +781,50 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (workspace?.type !== "worktree" || !workspace.directory) return
     return workspace
   })
+  let activeGraphStatus: string | undefined
+  const showGraphStatus = (sessionID: string, workflow: Workflow, conflict?: string) => {
+    const action = async (kind: "continue" | "pause") => {
+      const result =
+        kind === "continue"
+          ? await continueWorkflow(sdk.client, { session: sessionID, directory: sdk.directory })
+          : await pauseWorkflow(sdk.client, { session: sessionID, directory: sdk.directory })
+      if (!result.ok && result.conflict && result.workflow) {
+        showGraphStatus(sessionID, result.workflow, result.message)
+        return
+      }
+      dialog.clear()
+      toast.show({
+        variant: result.ok ? "info" : "warning",
+        message: result.ok
+          ? kind === "continue"
+            ? "Checkpoint approved. The authorized workflow scope can continue."
+            : "Workflow will pause before the next mutation boundary."
+          : result.message,
+      })
+    }
+    dialog.replace(
+      () => (
+        <DialogGraphStatus
+          workflow={workflow}
+          conflict={conflict}
+          onContinue={() => action("continue")}
+          onPause={() => action("pause")}
+        />
+      ),
+      () => {
+        if (activeGraphStatus === sessionID) activeGraphStatus = undefined
+      },
+    )
+    activeGraphStatus = sessionID
+  }
+  const stopGraphStatusUpdates = event.on("graph.plan.updated", async (_event, metadata) => {
+    const sessionID = activeGraphStatus
+    if (!sessionID || metadata.directory !== sdk.directory) return
+    const response = await sdk.client.graph.workflow({ session: sessionID, directory: sdk.directory })
+    if (!response.data || activeGraphStatus !== sessionID) return
+    showGraphStatus(sessionID, response.data)
+  })
+  onCleanup(stopGraphStatusUpdates)
   const appCommands = createMemo(() =>
     [
       {
@@ -592,6 +861,188 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           dialog.clear()
         },
       },
+      ...(Flag.OPENCODE_EXPERIMENTAL_GRAPH_MODE
+        ? [
+            {
+              name: "graph.guide",
+              title: "Graph Workflow guide",
+              category: "Graph Workflow",
+              slashName: "graph",
+              run: () => dialog.replace(() => <DialogGraphGuide />),
+            },
+            {
+              name: "graph.start",
+              title: "Start a graph-guided task",
+              category: "Graph Workflow",
+              slashName: "graph-start",
+              run: () => {
+                if (route.data.type !== "session") {
+                  toast.show({
+                    variant: "warning",
+                    message: "Create or select a session before /graph-start so execution mode can be saved.",
+                  })
+                  return
+                }
+                const sessionID = route.data.sessionID
+                dialog.replace(() => (
+                  <DialogGraphMode
+                    onSelect={async (mode) => {
+                      const result = await persistGraphStartMode(
+                        sdk.client,
+                        { session: sessionID, directory: sdk.directory, mode },
+                        () => startGraphPrompt(promptRef.current),
+                      )
+                      if (!result.ok) toast.show({ variant: "warning", message: result.message })
+                    }}
+                  />
+                ))
+              },
+            },
+            {
+              name: "graph.status",
+              title: "View Graph Workflow status",
+              category: "Graph Workflow",
+              slashName: "graph-status",
+              run: async () => {
+                if (route.data.type !== "session") {
+                  toast.show({
+                    variant: "info",
+                    message: "Start or select a session, then run /graph-status again.",
+                  })
+                  return
+                }
+                const sessionID = route.data.sessionID
+                const response = await sdk.client.graph.workflow({
+                  session: sessionID,
+                  directory: sdk.directory,
+                })
+                if (response.error || !response.data) {
+                  toast.show({ variant: "error", message: "Unable to load workflow status." })
+                  return
+                }
+                showGraphStatus(sessionID, response.data)
+              },
+            },
+            {
+              name: "graph.mode",
+              title: "Change Graph Workflow mode",
+              category: "Graph Workflow",
+              run: () =>
+                dialog.replace(() => (
+                  <DialogGraphMode
+                    onSelect={async (mode) => {
+                      if (route.data.type !== "session") {
+                        toast.show({ variant: "info", message: "Start or select a session before changing mode." })
+                        return
+                      }
+                      const current = await sdk.client.graph.workflow({
+                        session: route.data.sessionID,
+                        directory: sdk.directory,
+                      })
+                      if (!current.data)
+                        return toast.show({ variant: "error", message: "Unable to load workflow status." })
+                      const response = await sdk.client.graph.workflowMode({
+                        session: route.data.sessionID,
+                        directory: sdk.directory,
+                        graphWorkflowModePayload: { mode, expectedRevision: current.data.revision },
+                      })
+                      if (response.error) {
+                        const failure = workflowActionFailure("mode", response.error)
+                        if (failure.kind !== "revision-conflict")
+                          return toast.show({ variant: "warning", message: failure.message })
+                        const refreshed = await sdk.client.graph.workflow({
+                          session: route.data.sessionID,
+                          directory: sdk.directory,
+                        })
+                        if (refreshed.data) showGraphStatus(route.data.sessionID, refreshed.data, failure.message)
+                        return
+                      }
+                      toast.show({ variant: "info", message: `Execution mode changed to ${mode}.` })
+                    }}
+                  />
+                )),
+            },
+            {
+              name: "graph.continue",
+              title: "Continue Graph Workflow",
+              category: "Graph Workflow",
+              slashName: "graph-continue",
+              run: async () => {
+                if (route.data.type !== "session")
+                  return toast.show({ variant: "info", message: "Start or select a session before continuing." })
+                const result = await continueWorkflow(sdk.client, {
+                  session: route.data.sessionID,
+                  directory: sdk.directory,
+                })
+                if (!result.ok && result.conflict && result.workflow)
+                  return showGraphStatus(route.data.sessionID, result.workflow, result.message)
+                if (!result.ok) return toast.show({ variant: "warning", message: result.message })
+                toast.show({
+                  variant: "info",
+                  message: "Checkpoint approved. The authorized workflow scope can continue.",
+                })
+              },
+            },
+            {
+              name: "graph.pause",
+              title: "Pause Graph Workflow",
+              category: "Graph Workflow",
+              slashName: "graph-pause",
+              run: async () => {
+                if (route.data.type !== "session")
+                  return toast.show({ variant: "info", message: "Start or select a session before pausing." })
+                const result = await pauseWorkflow(sdk.client, {
+                  session: route.data.sessionID,
+                  directory: sdk.directory,
+                })
+                if (!result.ok && result.conflict && result.workflow)
+                  return showGraphStatus(route.data.sessionID, result.workflow, result.message)
+                if (!result.ok) return toast.show({ variant: "warning", message: result.message })
+                toast.show({ variant: "info", message: "Workflow will pause before the next mutation boundary." })
+              },
+            },
+            {
+              name: "graph.open",
+              title: "Open Graph in Web",
+              category: "Graph Workflow",
+              slashName: "graph-open",
+              run: async () => {
+                if (route.data.type !== "session") {
+                  toast.show({
+                    variant: "info",
+                    message: "Start or select a session, then run /graph-open again.",
+                  })
+                  return
+                }
+                const url = graphWebUrl({
+                  webUrl: sdk.webUrl,
+                  serverUrl: sdk.url,
+                  directory: sdk.directory ?? process.cwd(),
+                  sessionID: route.data.sessionID,
+                  preferDirectoryRoute: sdk.url === "http://opencode.internal",
+                })
+                if (!url) {
+                  toast.show({
+                    variant: "info",
+                    message: "Graph Vibe Web is unavailable. Run `graph-vibe web`, then retry /graph-open.",
+                  })
+                  return
+                }
+                if (!(await graphWebAvailable(sdk.webUrl, fetch, sdk.headers))) {
+                  toast.show({
+                    variant: "info",
+                    message: "Graph Vibe Web is unavailable. Run `graph-vibe web`, then retry /graph-open.",
+                  })
+                  return
+                }
+                open(url).catch(() =>
+                  toast.show({ variant: "warning", message: `Could not open the browser. Open ${url} manually.` }),
+                )
+                dialog.clear()
+              },
+            },
+          ]
+        : []),
       {
         name: "workspace.copy_path",
         title: "Copy worktree path",
@@ -1070,7 +1521,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     await DialogAlert.show(
       dialog,
       "Update Complete",
-      `Successfully updated to OpenCode v${result.data.version}. Please restart the application.`,
+      `Successfully updated to ${Product.current().name} v${result.data.version}. Please restart the application.`,
     )
 
     void exit()

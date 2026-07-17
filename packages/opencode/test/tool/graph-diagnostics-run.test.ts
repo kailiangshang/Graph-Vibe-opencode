@@ -1,5 +1,8 @@
 import { afterEach, describe, expect } from "bun:test"
 import path from "node:path"
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -7,6 +10,7 @@ import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
+import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -40,6 +44,7 @@ const it = testEffect(
       GraphDomain.node,
       GraphAudit.node,
       GraphBuild.node,
+      GraphWorkflowState.node,
       CrossSpawnSpawner.node,
       EventV2Bridge.node,
       Truncate.node,
@@ -52,6 +57,7 @@ const it = testEffect(
     ],
   ),
 )
+const symlinkInstance = symlinkAvailable() ? it.instance : it.instance.skip
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -90,7 +96,7 @@ function seed(directory: string) {
   )
 }
 
-function context(requests: PermissionRequest[] = []): Tool.Context {
+function context(requests: PermissionRequest[] = [], onAsk?: () => Effect.Effect<void>): Tool.Context {
   return {
     sessionID,
     messageID: MessageID.ascending(),
@@ -98,16 +104,27 @@ function context(requests: PermissionRequest[] = []): Tool.Context {
     abort: new AbortController().signal,
     messages: [],
     metadata: () => Effect.void,
-    ask: (input) =>
-      Effect.sync(() => {
+    ask: (input) => Effect.sync(() => {
         requests.push(input)
-      }),
+      }).pipe(Effect.andThen(onAsk?.() ?? Effect.void)),
   }
 }
 
 const init = Effect.fn("GraphDiagnosticsTest.init")(function* () {
   const info = yield* GraphDiagnosticsRunTool
   return yield* Tool.init(info)
+})
+
+const authorize = Effect.fn("GraphDiagnosticsTest.authorize")(function* (targetNodeID: GraphStorage.NodeID) {
+  const workflow = yield* GraphWorkflowState.Service
+  yield* workflow.setMode({ sessionID, projectID, mode: "atomic", expectedRevision: 0 })
+  const storage = yield* GraphStorage.Service
+  yield* workflow.resetPlan({
+    sessionID,
+    projectID,
+    graph: yield* storage.currentPlan({ sessionID }),
+  })
+  expect((yield* workflow.get(sessionID))?.currentNodeID).toBe(targetNodeID)
 })
 
 describe("graph_diagnostics_run", () => {
@@ -156,6 +173,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
       yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "true" } })))
 
       const permissionRequests: PermissionRequest[] = []
@@ -171,6 +189,273 @@ describe("graph_diagnostics_run", () => {
       expect(permissionRequests).toMatchObject([{ permission: "graph.diagnostics_run", patterns: ["bun run test"], always: ["bun run test"] }])
       expect(node.testStatus).toBe("passed")
       expect(node.status).toBe("verified")
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(sessionID))?.currentNodeID).toBeNull()
+    }),
+  )
+
+  it.instance("blocks a missing focused path before permission or command execution", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Focused",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["focused behavior passes"],
+          diagnostics: [{ name: "test", paths: ["test/missing.test.ts"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "true" } })))
+
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context(permissionRequests))
+
+      expect(JSON.parse(result.output)).toMatchObject({ ran: false, verified: false, reason: "verification_path_missing" })
+      expect(permissionRequests).toEqual([])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("implemented")
+    }),
+  )
+
+  it.instance("runs focused paths before complete diagnostics and advances only when both pass", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "test"), { recursive: true })
+        await Bun.write(path.join(test.directory, "test/focused.test.ts"), 'import { expect, test } from "bun:test"\ntest("focused", () => expect(true).toBe(true))\n')
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun test" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Focused pass",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["focused behavior passes"],
+          diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context(permissionRequests))
+      const records = yield* (yield* GraphAudit.Service).tool.list({ projectID, nodeID: targetNodeID })
+      const evidence = records.find((record) => record.toolName === "graph.diagnostics.run" && record.evidence?.kind === "diagnostics")?.evidence
+
+      expect(JSON.parse(result.output)).toMatchObject({ ran: true, complete: true, verified: true })
+      expect(permissionRequests[0]?.patterns).toEqual([`bun run test -- ${path.join(test.directory, "test/focused.test.ts")}`, "bun run test"])
+      expect(evidence).toMatchObject({ complete: true, passed: true, projectChecksOnly: false })
+      expect(evidence?.kind === "diagnostics" ? evidence.commands.map((command) => command.command) : []).toEqual([
+        `bun run test -- ${path.join(test.directory, "test/focused.test.ts")}`,
+        "bun run test",
+      ])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("verified")
+    }),
+  )
+
+  symlinkInstance("blocks a symlink escape before permission or command execution", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const outside = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "graph-diagnostics-outside-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => rm(outside, { recursive: true, force: true })))
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "test"), { recursive: true })
+        const target = path.join(outside, "escape.test.ts")
+        await Bun.write(target, "outside\n")
+        await symlink(target, path.join(test.directory, "test/escape.test.ts"))
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "true" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Symlink escape",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["focused behavior passes"],
+          diagnostics: [{ name: "test", paths: ["test/escape.test.ts"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context(permissionRequests))
+
+      expect(JSON.parse(result.output)).toMatchObject({ ran: false, reason: "verification_path_escape" })
+      expect(permissionRequests).toEqual([])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("implemented")
+    }),
+  )
+
+  symlinkInstance("rejects a canonical target changed during permission", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      const outside = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "graph-swap-outside-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => rm(outside, { recursive: true, force: true })))
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "test"), { recursive: true })
+        await mkdir(path.join(test.directory, "scripts"), { recursive: true })
+        await Bun.write(path.join(test.directory, "test/inside.txt"), "inside")
+        await Bun.write(path.join(outside, "outside.txt"), "outside")
+        await symlink(path.join(test.directory, "test/inside.txt"), path.join(test.directory, "test/focused.test.ts"))
+        await Bun.write(path.join(test.directory, "scripts/check.ts"), 'const file = process.argv[2]\nif (file) process.exit((await Bun.file(file).text()) === "inside" ? 0 : 1)\n')
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/check.ts" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({ projectID, sessionID, type: "atomic", name: "Swap", level: "L2", status: "implemented", verification: { criteria: ["canonical target"], diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }] } })
+      yield* authorize(targetNodeID)
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context([], () => Effect.promise(() =>
+        Bun.write(path.join(test.directory, "test/inside.txt"), "changed")
+      ).pipe(Effect.asVoid)))
+      expect(JSON.parse(result.output)).toMatchObject({ verified: false, passed: false })
+    }),
+  )
+
+  it.instance("rejects a canonical target changed during command execution", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "test"), { recursive: true })
+        await mkdir(path.join(test.directory, "scripts"), { recursive: true })
+        await Bun.write(path.join(test.directory, "test/focused.test.ts"), "original")
+        await Bun.write(path.join(test.directory, "scripts/change.ts"), 'const file = process.argv[2]\nif (file) await Bun.write(file, "changed")\n')
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/change.ts" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({ projectID, sessionID, type: "atomic", name: "Mutation", level: "L2", status: "implemented", verification: { criteria: ["stable target"], diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }] } })
+      yield* authorize(targetNodeID)
+      const result = yield* (yield* init()).execute({ targetNodeID }, context([]))
+      expect(JSON.parse(result.output)).toMatchObject({ verified: false, passed: false })
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("implemented")
+    }),
+  )
+
+  it.instance("blocks option-like focused paths before permission or command execution", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await Bun.write(path.join(test.directory, "--watch"), "sentinel\n")
+        await Bun.write(
+          path.join(test.directory, "package.json"),
+          JSON.stringify({ scripts: { test: 'bun -e \'await Bun.write("executed", "1")\'' } }),
+        )
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Option path",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["option-like paths never execute"],
+          diagnostics: [{ name: "test", paths: ["--watch"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+
+      const permissionRequests: PermissionRequest[] = []
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context(permissionRequests))
+
+      expect(JSON.parse(result.output)).toMatchObject({ ran: false, reason: "verification_path_option" })
+      expect(permissionRequests).toEqual([])
+      expect(yield* Effect.promise(() => Bun.file(path.join(test.directory, "executed")).exists())).toBe(false)
+    }),
+  )
+
+  it.instance("uses bun test for persisted no-spec Bun projects without recognized scripts", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await Bun.write(path.join(test.directory, "fallback.test.ts"), 'import { expect, test } from "bun:test"\ntest("fallback", () => expect(true).toBe(true))\n')
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ name: "fallback" }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Legacy fallback",
+        level: "L2",
+        status: "implemented",
+      })
+      yield* authorize(targetNodeID)
+
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context([]))
+      const records = yield* (yield* GraphAudit.Service).tool.list({ projectID, nodeID: targetNodeID })
+      const evidence = records.find((record) => record.toolName === "graph.diagnostics.run" && record.evidence?.kind === "diagnostics")?.evidence
+
+      expect(JSON.parse(result.output)).toMatchObject({ ran: true, complete: true, verified: true })
+      expect(evidence).toMatchObject({ projectChecksOnly: true, complete: true, passed: true })
+      expect(evidence?.kind === "diagnostics" ? evidence.commands.map((command) => command.command) : []).toEqual(["bun test"])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("verified")
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(sessionID))?.currentNodeID).toBeNull()
+    }),
+  )
+
+  it.instance("does not verify when a focused check fails even if the complete project check passes", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "scripts"), { recursive: true })
+        await mkdir(path.join(test.directory, "test"), { recursive: true })
+        await Bun.write(path.join(test.directory, "test/focused.test.ts"), "// focused sentinel\n")
+        await Bun.write(
+          path.join(test.directory, "scripts/check.ts"),
+          'process.exit(process.argv.some((item) => item.endsWith("/test/focused.test.ts")) ? 1 : 0)\n',
+        )
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/check.ts" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Focused failure",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["focused behavior passes"],
+          diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+
+      const tool = yield* init()
+      const result = yield* tool.execute({ targetNodeID }, context([]))
+      const parsed = JSON.parse(result.output)
+
+      expect(parsed).toMatchObject({ ran: true, passed: false, complete: true, verified: false })
+      expect(parsed.results.map((item: { passed: boolean }) => item.passed)).toEqual([false, true])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("implemented")
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(sessionID))?.currentNodeID).toBe(targetNodeID)
     }),
   )
 
@@ -187,6 +472,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
       yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "false" } })))
 
       const tool = yield* init()
@@ -214,6 +500,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
       yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "false" } })))
 
       const tool = yield* init()
@@ -227,6 +514,8 @@ describe("graph_diagnostics_run", () => {
       expect(JSON.parse(result.output)).toMatchObject({ ran: true, passed: false })
       expect(node.testStatus).toBe("failed")
       expect(node.status).toBe("implemented")
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(sessionID))?.currentNodeID).toBe(targetNodeID)
     }),
   )
 
@@ -243,6 +532,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
 
       yield* Effect.promise(() =>
         Bun.write(
@@ -283,6 +573,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
       yield* Effect.promise(() => Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { test: "sleep 10" } })))
 
       const tool = yield* init()
@@ -312,6 +603,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
 
       yield* Effect.promise(async () => {
         await Bun.write(
@@ -334,6 +626,8 @@ describe("graph_diagnostics_run", () => {
       const node = yield* storage.node.get(targetNodeID)
       expect(node.status).toBe("implemented")
       expect(node.testStatus).not.toBe("passed")
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(sessionID))?.currentNodeID).toBe(targetNodeID)
     }),
   )
 
@@ -351,6 +645,7 @@ describe("graph_diagnostics_run", () => {
         level: "L2",
         status: "implemented",
       })
+      yield* authorize(targetNodeID)
 
       yield* audit.tool.record({
         projectID,
@@ -382,6 +677,25 @@ describe("graph_diagnostics_run", () => {
       const parsed = JSON.parse(result.output)
       expect(parsed.ran).toBe(false)
       expect(parsed.reason).toContain("previous failed diagnostics")
+      const workflow = yield* GraphWorkflowState.Service
+      expect(yield* workflow.get(sessionID)).toMatchObject({
+        currentNodeID: targetNodeID,
+        checkpointKind: "failure",
+        checkpointStatus: "pending",
+      })
     }),
   )
 })
+
+function symlinkAvailable() {
+  const directory = mkdtempSync(path.join(tmpdir(), "graph-symlink-capability-"))
+  try {
+    writeFileSync(path.join(directory, "target"), "test")
+    symlinkSync(path.join(directory, "target"), path.join(directory, "link"))
+    return true
+  } catch {
+    return false
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+}

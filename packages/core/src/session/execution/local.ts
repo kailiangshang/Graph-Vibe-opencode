@@ -6,6 +6,7 @@ import { SessionRunner } from "../runner"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionExecution } from "../execution"
+import { ProductMigrationState } from "../../product-migration/state"
 
 /** Current-process routing for implicit-local Locations. Future remote placement belongs here. */
 const layer = Layer.effect(
@@ -13,6 +14,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
+    const migration = yield* ProductMigrationState.Service
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError>({
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, force) {
         const session = yield* store.get(sessionID)
@@ -31,8 +33,8 @@ const layer = Layer.effect(
     return SessionExecution.Service.of({
       active: coordinator.active,
       interrupt: coordinator.interrupt,
-      resume: coordinator.run,
-      wake: coordinator.wake,
+      resume: (sessionID) => migration.requireCompleted().pipe(Effect.andThen(coordinator.run(sessionID))),
+      wake: (sessionID) => migration.requireCompleted().pipe(Effect.andThen(coordinator.wake(sessionID))),
     })
   }),
 )
@@ -40,7 +42,7 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: SessionExecution.Service,
   layer,
-  deps: [SessionStore.node, LocationServiceMap.node],
+  deps: [SessionStore.node, LocationServiceMap.node, ProductMigrationState.node],
 })
 
 export * as SessionExecutionLocal from "./local"

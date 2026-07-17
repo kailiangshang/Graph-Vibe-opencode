@@ -20,6 +20,7 @@ import { handlers } from "./handlers"
 import { authorizationLayer } from "./middleware/authorization"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { PtyEnvironment } from "./pty-environment"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 import { layer as locationLayer } from "./location"
 import { sessionLocationLayer } from "./middleware/session-location"
 
@@ -33,6 +34,7 @@ const applicationServices = LayerNode.group([
   PtyTicket.node,
   Credential.node,
   PtyEnvironment.node,
+  ProductMigrationState.node,
   LocationServiceMap.node,
 ])
 

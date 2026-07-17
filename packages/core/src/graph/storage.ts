@@ -15,6 +15,7 @@ import type {
   TestStatus,
   EdgeRelation,
   NodeContent,
+  VerificationSpec,
 } from "@opencode-ai/schema/graph"
 
 export const NodeID = Graph.NodeID
@@ -41,6 +42,7 @@ export interface NodeRow {
   readonly status: NodeStatus
   readonly desc: string | null
   readonly content: NodeContent | null
+  readonly verification: VerificationSpec | null
   readonly codeHash: string | null
   readonly testStatus: TestStatus
   readonly confidence: number
@@ -86,6 +88,7 @@ export const NodeCreate = Schema.Struct({
   status: Graph.NodeStatus.pipe(Schema.optional),
   desc: Schema.String.pipe(Schema.optional),
   content: Graph.NodeContent.pipe(Schema.optional),
+  verification: Graph.VerificationSpec.pipe(Schema.optional),
   codeHash: Schema.String.pipe(Schema.optional),
   testStatus: Graph.TestStatus.pipe(Schema.optional),
   confidence: Schema.Number.pipe(Schema.optional),
@@ -99,6 +102,7 @@ export const NodePatch = Schema.Struct({
   status: Graph.NodeStatus.pipe(Schema.optional),
   desc: Schema.String.pipe(Schema.optional),
   content: Graph.NodeContent.pipe(Schema.optional),
+  verification: Graph.VerificationSpec.pipe(Schema.optional),
   codeHash: Schema.String.pipe(Schema.optional),
   testStatus: Graph.TestStatus.pipe(Schema.optional),
   confidence: Schema.Number.pipe(Schema.optional),
@@ -184,6 +188,7 @@ const nodeRow = (r: typeof GraphNodeTable.$inferSelect): NodeRow => ({
   status: r.status,
   desc: r.desc,
   content: r.content,
+  verification: r.verification,
   codeHash: r.code_hash,
   testStatus: r.test_status,
   confidence: r.confidence,
@@ -233,6 +238,7 @@ export const layer = Layer.effect(
           status: input.status ?? "pending",
           desc: input.desc ?? null,
           content: input.content ?? null,
+          verification: input.verification ?? null,
           code_hash: input.codeHash ?? null,
           test_status: input.testStatus ?? "none",
           confidence: input.confidence ?? 1,
@@ -256,6 +262,7 @@ export const layer = Layer.effect(
       if (patch.status !== undefined) set.status = patch.status
       if (patch.desc !== undefined) set.desc = patch.desc
       if (patch.content !== undefined) set.content = patch.content
+      if (patch.verification !== undefined) set.verification = patch.verification
       if (patch.codeHash !== undefined) set.code_hash = patch.codeHash
       if (patch.testStatus !== undefined) set.test_status = patch.testStatus
       if (patch.confidence !== undefined) set.confidence = patch.confidence

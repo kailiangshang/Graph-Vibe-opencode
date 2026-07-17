@@ -10,6 +10,10 @@ import { fileURLToPath } from "url"
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"))
+const bin = Object.entries(packageJson.bin ?? {})[0]
+if (!bin || typeof bin[1] !== "string") throw new Error(`${packageJson.name} must declare a package executable`)
+const packageName = packageJson.name
+const executable = bin[0]
 
 const platformMap = {
   darwin: "darwin",
@@ -24,9 +28,11 @@ const archMap = {
 
 const platform = platformMap[os.platform()] ?? os.platform()
 const arch = archMap[os.arch()] ?? os.arch()
-const base = `opencode-${platform}-${arch}`
-const sourceBinary = platform === "windows" ? "opencode.exe" : "opencode"
-const targetBinary = path.join(__dirname, "bin", "opencode.exe")
+const base = `${executable}-${platform}-${arch}`
+const sourceBinary = platform === "windows" ? `${executable}.exe` : executable
+const launcher = path.resolve(__dirname, bin[1])
+if (path.relative(__dirname, launcher).startsWith("..")) throw new Error(`${packageName} executable escapes its package`)
+const targetBinary = path.join(path.dirname(launcher), `${executable}.exe`)
 
 function supportsAvx2() {
   if (arch !== "x64") return false
@@ -95,39 +101,43 @@ function isMusl() {
 
 function packageNames() {
   const baseline = arch === "x64" && !supportsAvx2()
+  const dependencies = packageJson.optionalDependencies ?? {}
 
   if (platform === "linux") {
     if (isMusl()) {
       if (arch === "x64")
-        return baseline
+        return (baseline
           ? [`${base}-baseline-musl`, `${base}-musl`, `${base}-baseline`, base]
           : [`${base}-musl`, `${base}-baseline-musl`, base, `${base}-baseline`]
-      return [`${base}-musl`, base]
+        ).filter((name) => Object.hasOwn(dependencies, name))
+      return [`${base}-musl`, base].filter((name) => Object.hasOwn(dependencies, name))
     }
 
     if (arch === "x64")
-      return baseline
+      return (baseline
         ? [`${base}-baseline`, base, `${base}-baseline-musl`, `${base}-musl`]
         : [base, `${base}-baseline`, `${base}-musl`, `${base}-baseline-musl`]
-    return [base, `${base}-musl`]
+      ).filter((name) => Object.hasOwn(dependencies, name))
+    return [base, `${base}-musl`].filter((name) => Object.hasOwn(dependencies, name))
   }
 
-  if (arch === "x64") return baseline ? [`${base}-baseline`, base] : [base, `${base}-baseline`]
-  return [base]
+  if (arch === "x64")
+    return (baseline ? [`${base}-baseline`, base] : [base, `${base}-baseline`]).filter((name) =>
+      Object.hasOwn(dependencies, name),
+    )
+  return [base].filter((name) => Object.hasOwn(dependencies, name))
 }
 
 function resolveBinary(name) {
   const packageJsonPath = require.resolve(`${name}/package.json`)
-  const binaryPath = path.join(path.dirname(packageJsonPath), "bin", sourceBinary)
-  if (!fs.existsSync(binaryPath)) throw new Error(`Binary not found at ${binaryPath}`)
-  return binaryPath
+  return platformBinary(path.dirname(packageJsonPath), name, packageJson.optionalDependencies[name])
 }
 
 function installPackage(name) {
   const version = packageJson.optionalDependencies?.[name]
   if (!version) return
 
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-install-"))
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), `${executable}-install-`))
   try {
     const result = childProcess.spawnSync(
       "npm",
@@ -136,15 +146,33 @@ function installPackage(name) {
     )
     if (result.status !== 0) return
     const packageDir = path.join(temp, "node_modules", name)
-    copyBinary(path.join(packageDir, "bin", sourceBinary), targetBinary)
+    copyBinary(platformBinary(packageDir, name, version), targetBinary)
     return true
   } finally {
     fs.rmSync(temp, { recursive: true, force: true })
   }
 }
 
+function platformBinary(packageDir, name, version) {
+  const manifestPath = path.join(packageDir, "package.json")
+  const manifestStat = fs.lstatSync(manifestPath)
+  if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) {
+    throw new Error(`Package manifest must be a regular file at ${manifestPath}`)
+  }
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+  if (manifest.name !== name) throw new Error(`Package at ${packageDir} must be named ${name}`)
+  if (manifest.version !== version) throw new Error(`${name} must have version ${version}`)
+  const binaryPath = path.join(packageDir, "bin", sourceBinary)
+  const binaryStat = fs.lstatSync(binaryPath)
+  if (!binaryStat.isFile() || binaryStat.isSymbolicLink()) {
+    throw new Error(`Binary must be a regular file at ${binaryPath}`)
+  }
+  return binaryPath
+}
+
 function copyBinary(source, target) {
-  if (!fs.existsSync(source)) throw new Error(`Binary not found at ${source}`)
+  const sourceStat = fs.lstatSync(source)
+  if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) throw new Error(`Binary must be a regular file at ${source}`)
   fs.mkdirSync(path.dirname(target), { recursive: true })
   if (fs.existsSync(target)) fs.unlinkSync(target)
   try {
@@ -165,17 +193,24 @@ function verifyBinary() {
 }
 
 function main() {
-  for (const name of packageNames()) {
+  const candidates = packageNames()
+  for (const name of candidates) {
     try {
       copyBinary(resolveBinary(name), targetBinary)
       if (verifyBinary()) return
-    } catch {
+    } catch {}
+    try {
       if (installPackage(name) && verifyBinary()) return
-    }
+    } catch {}
   }
 
+  if (candidates.length === 0) {
+    throw new Error(
+      `${packageName} does not declare a compatible ${executable} platform package. Reinstall ${packageName} for this platform.`,
+    )
+  }
   throw new Error(
-    `It seems your package manager failed to install the right opencode CLI package. Try manually installing ${packageNames()
+    `It seems your package manager failed to install the right ${packageName} CLI package. Try manually installing ${candidates
       .map((name) => JSON.stringify(name))
       .join(" or ")}.`,
   )

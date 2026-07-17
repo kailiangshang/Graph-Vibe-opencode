@@ -12,6 +12,7 @@ import { Schema } from "effect"
 import type { ServerConnection } from "@/context/server"
 import { sessionHref } from "@/utils/session-route"
 import { useServerSync } from "@/context/server-sync"
+import { useSDK } from "@/context/sdk"
 
 export function DirectoryDataProvider(
   props: ParentProps<{
@@ -25,6 +26,7 @@ export function DirectoryDataProvider(
   const params = useParams()
   const sync = useSync()
   const serverSync = useServerSync()
+  const sdk = useSDK()
   const directory = () => (typeof props.directory === "function" ? props.directory() : props.directory)
   const slug = createMemo(() => base64Encode(directory()))
   const href = (sessionID: string) => {
@@ -50,6 +52,21 @@ export function DirectoryDataProvider(
         .catch(() => {}),
   )
 
+  const [workflow, workflowActions] = createResource(
+    () => params.id,
+    async (session) => {
+      const response = await sdk().client.graph.workflow({ session, directory: directory() })
+      return response.data
+    },
+  )
+
+  createEffect(() => {
+    const stop = sdk().event.listen((event) => {
+      if (event.details.type === "graph.plan.updated") void workflowActions.refetch()
+    })
+    onCleanup(stop)
+  })
+
   createEffect(() => {
     const sessionID = params.id
     if (!sessionID) return
@@ -61,7 +78,10 @@ export function DirectoryDataProvider(
     <Show when={directory()} keyed>
       {(directory) => (
         <DataProvider
-          data={sync().data}
+          data={{
+            ...sync().data,
+            graph_workflow: params.id && workflow() ? { [params.id]: workflow()! } : undefined,
+          }}
           directory={directory}
           onNavigateToSession={(sessionID: string) => navigate(href(sessionID))}
           onSessionHref={href}

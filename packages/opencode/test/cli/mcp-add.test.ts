@@ -5,6 +5,27 @@ import { cliIt } from "../lib/cli-process"
 
 describe("opencode mcp add (non-interactive subprocess)", () => {
   cliIt.concurrent(
+    "writes Graph Vibe MCP configuration to its isolated global config",
+    ({ home, opencode }) =>
+      Effect.gen(function* () {
+        const result = yield* opencode.spawn(
+          ["mcp", "add", "docs", "--url", "https://example.com/mcp"],
+          { env: { OPENCODE_CLIENT: "graph-vibe" } },
+        )
+        opencode.expectExit(result, 0)
+
+        const config = yield* Effect.promise(() =>
+          Bun.file(path.join(home, ".config", "graph-vibe", "graph-vibe.json")).json(),
+        )
+        expect(config.mcp.docs).toEqual({ type: "remote", url: "https://example.com/mcp" })
+        expect(yield* Effect.promise(() => Bun.file(path.join(home, ".config", "opencode", "opencode.json")).exists())).toBe(
+          false,
+        )
+      }),
+    60_000,
+  )
+
+  cliIt.concurrent(
     "adds a remote server with HTTP headers",
     ({ home, opencode }) =>
       Effect.gen(function* () {

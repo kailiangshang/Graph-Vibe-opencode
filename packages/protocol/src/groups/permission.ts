@@ -3,6 +3,7 @@ import { Location } from "@opencode-ai/schema/location"
 import { Permission } from "@opencode-ai/schema/permission"
 import { PermissionSaved } from "@opencode-ai/schema/permission-saved"
 import { Project } from "@opencode-ai/schema/project"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { Session } from "@opencode-ai/schema/session"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
@@ -49,6 +50,7 @@ export const makePermissionGroup = <
       HttpApiEndpoint.delete("permission.saved.remove", "/api/permission/saved/:id", {
         params: { id: PermissionSaved.ID },
         success: HttpApiSchema.NoContent,
+        error: ProductMigration.Required,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "v2.permission.saved.remove",
@@ -74,7 +76,7 @@ export const makePermissionGroup = <
         success: Schema.Struct({
           data: Schema.Struct({ id: Permission.ID, effect: Permission.Effect }),
         }),
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, ProductMigration.Required],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -123,7 +125,7 @@ export const makePermissionGroup = <
           message: Schema.String.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, PermissionNotFoundError],
+        error: [SessionNotFoundError, PermissionNotFoundError, ProductMigration.Required],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

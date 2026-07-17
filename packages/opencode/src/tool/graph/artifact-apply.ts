@@ -3,14 +3,14 @@ import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
-import { planArtifactApplication } from "@opencode-ai/core/graph/workflow/artifact"
+import { hashContent, planArtifactApplication } from "@opencode-ai/core/graph/workflow/artifact"
 import type { Artifact as CoreArtifact } from "@opencode-ai/core/graph/workflow/artifact"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { GraphArtifactDraft } from "@opencode-ai/core/graph/workflow/artifact-draft"
 import { buildableNodes } from "@opencode-ai/core/graph/build-order"
 import { Graph } from "@opencode-ai/schema/graph"
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Exit, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Session } from "@/session/session"
@@ -134,7 +134,7 @@ export const GraphArtifactApplyTool = Tool.define(
                 })
 
               yield* progress("preparing")
-              const gate = yield* build.evaluate({
+              const evaluation = yield* build.evaluateWithRevision({
                 projectID: session.projectID,
                 sessionID: session.sessionID,
                 targetNodeID: params.targetNodeID,
@@ -142,6 +142,7 @@ export const GraphArtifactApplyTool = Tool.define(
                 executor: "manual",
               })
 
+              const gate = evaluation.gate
               if (!gate.allowed) {
                 const cp = yield* domain.currentPlan({ sessionID: session.sessionID })
                 const buildable = buildableNodes(cp.nodes, cp.edges).map((n) => n.name)
@@ -173,7 +174,8 @@ export const GraphArtifactApplyTool = Tool.define(
               const existing = yield* Effect.forEach(paths, (item) =>
                 Effect.gen(function* () {
                   const content = yield* fs.readFileStringSafe(item.absolute)
-                  return { ...item, existed: content !== undefined, content: content ?? "" }
+                  const mode = content === undefined ? undefined : (yield* fs.stat(item.absolute)).mode & 0o7777
+                  return { ...item, existed: content !== undefined, content: content ?? "", mode }
                 }),
               )
 
@@ -227,46 +229,48 @@ export const GraphArtifactApplyTool = Tool.define(
                   ...draftMetadata(source.draftID),
                 },
               })
-
-              yield* Effect.forEach(existing, (item, index) =>
-                Effect.gen(function* () {
-                  const content = plan.files[item.relative]
-                  if (content === undefined)
-                    return yield* Effect.die(new Error(`Artifact did not produce ${item.relative}`))
-                  yield* fs.writeWithDirs(item.absolute, content)
-                  yield* events.publish(FileSystem.Event.Edited, { file: item.absolute })
-                  yield* events.publish(Watcher.Event.Updated, {
-                    file: item.absolute,
-                    event: item.existed ? "change" : "add",
-                  })
-                  yield* progress("writing", {
-                    bytesPlanned,
-                    bytesWritten: artifactPlannedBytes(
-                      plan.files,
-                      existing.slice(0, index + 1).map((file) => file.relative),
-                    ),
-                    currentFile: item.relative,
-                  })
-                }),
-              )
-              yield* progress("updating_graph", { bytesPlanned, bytesWritten: bytesPlanned })
-              yield* storage.node.update(params.targetNodeID, { status: "implemented", testStatus: "pending" })
+              const operationID = artifactOperationID({ messageID: ctx.messageID, callID: ctx.callID, targetNodeID: params.targetNodeID, ...source })
+              const reservation = yield* build.beginArtifactApply({ sessionID: session.sessionID, expectedRevision: evaluation.workflowRevision, operationID })
+              const artifactEvidence = { kind: "artifact" as const, nodeID: params.targetNodeID, artifactPaths: files }
+              yield* Effect.gen(function* () {
+                yield* Effect.forEach(existing, (item, index) =>
+                  Effect.gen(function* () {
+                    const content = plan.files[item.relative]
+                    if (content === undefined) return yield* Effect.die(new Error(`Artifact did not produce ${item.relative}`))
+                    const temporary = `${item.absolute}.opencode-${hashContent(operationID).slice(0, 16)}-${index}.tmp`
+                    yield* Effect.gen(function* () {
+                      yield* build.assertArtifactApplyOwner({ sessionID: session.sessionID, reservedRevision: reservation.revision, operationID })
+                      yield* fs.writeWithDirs(temporary, content, item.mode)
+                      yield* build.assertArtifactApplyOwner({ sessionID: session.sessionID, reservedRevision: reservation.revision, operationID })
+                      yield* fs.rename(temporary, item.absolute)
+                    }).pipe(Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore)))
+                    yield* events.publish(FileSystem.Event.Edited, { file: item.absolute })
+                    yield* events.publish(Watcher.Event.Updated, { file: item.absolute, event: item.existed ? "change" : "add" })
+                    yield* progress("writing", {
+                      bytesPlanned,
+                      bytesWritten: artifactPlannedBytes(plan.files, existing.slice(0, index + 1).map((file) => file.relative)),
+                      currentFile: item.relative,
+                    })
+                  }),
+                )
+                yield* progress("updating_graph", { bytesPlanned, bytesWritten: bytesPlanned })
+                yield* build.completeArtifactApply({
+                  projectID: session.projectID, sessionID: session.sessionID, nodeID: params.targetNodeID,
+                  reservedRevision: reservation.revision, operationID, evidence: artifactEvidence,
+                  inputSummary: summarizePaths(paths), outputSummary: `applied:${paths.length}`,
+                })
+              }).pipe(Effect.onExit((exit) => Exit.isFailure(exit)
+                ? Effect.uninterruptible(build.failArtifactApply({
+                    projectID: session.projectID, sessionID: session.sessionID, nodeID: params.targetNodeID,
+                    reservedRevision: reservation.revision, operationID, evidence: artifactEvidence, error: Cause.pretty(exit.cause),
+                  }).pipe(Effect.ignore))
+                : Effect.void))
               yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
               const completedProgress = {
                 bytesPlanned,
                 bytesWritten: bytesPlanned,
                 ...(files.length > 0 ? { currentFile: files[files.length - 1] } : {}),
               }
-              yield* audit.tool.record({
-                projectID: session.projectID,
-                sessionID: session.sessionID,
-                nodeID: params.targetNodeID,
-                toolName: "graph.artifact.apply",
-                toolType: "graph",
-                status: "succeeded",
-                inputSummary: summarizePaths(paths),
-                outputSummary: `applied:${paths.length}`,
-              })
               if (source.draftID !== undefined) yield* drafts.markApplied(source.draftID)
               yield* progress("completed", completedProgress)
               const metadata: Record<string, unknown> = {
@@ -291,6 +295,26 @@ export const GraphArtifactApplyTool = Tool.define(
     }
   }),
 )
+
+export function artifactOperationID(input: {
+  readonly messageID: string
+  readonly callID?: string
+  readonly targetNodeID: string
+  readonly artifact: CoreArtifact
+  readonly draftID?: string
+}) {
+  if (input.callID) return input.callID
+  return `graph-artifact-${hashContent(canonicalJson({ messageID: input.messageID, targetNodeID: input.targetNodeID, artifact: input.artifact, draftID: input.draftID }))}`
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().filter((key) => record[key] !== undefined).map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
 
 interface ApplySource {
   readonly artifact: CoreArtifact

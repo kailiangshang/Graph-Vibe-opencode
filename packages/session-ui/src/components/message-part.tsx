@@ -63,6 +63,11 @@ import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
 import { readPartText } from "./message-part-text"
 import { SessionProgressIndicatorV2 } from "../v2/components/session-progress-indicator-v2"
+import { graphActivityError, graphActivityInfo } from "./graph-activity"
+import { graphPlanCard } from "./graph-activity"
+import { GraphPlanCard } from "./graph-plan-card"
+import { groupParts, isContextGroupTool, sameGroups, type PartGroup, type PartRef } from "./message-part-groups"
+export { groupParts, sameGroups, type PartGroup, type PartRef } from "./message-part-groups"
 
 async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -458,6 +463,8 @@ export function getToolInfo(
   metadata: Record<string, unknown> | undefined = {},
 ): ToolInfo {
   const i18n = useI18n()
+  const graph = graphActivityInfo(tool, input)
+  if (graph) return { icon: "checklist", title: graph.title, subtitle: graph.summary }
   switch (tool) {
     case "read":
       return {
@@ -599,7 +606,6 @@ function taskSession(
     .sort((a, b) => (b.time.created ?? 0) - (a.time.created ?? 0))[0]?.id
 }
 
-const CONTEXT_GROUP_TOOLS = new Set(["read", "glob", "grep", "list"])
 const HIDDEN_TOOLS = new Set(["todowrite"])
 
 function list<T>(value: T[] | undefined | null, fallback: T[]) {
@@ -612,91 +618,6 @@ function same<T>(a: readonly T[] | undefined, b: readonly T[] | undefined) {
   if (!a || !b) return false
   if (a.length !== b.length) return false
   return a.every((x, i) => x === b[i])
-}
-
-export type PartRef = {
-  messageID: string
-  partID: string
-}
-
-export type PartGroup =
-  | {
-      key: string
-      type: "part"
-      ref: PartRef
-    }
-  | {
-      key: string
-      type: "context"
-      refs: PartRef[]
-    }
-
-function sameRef(a: PartRef, b: PartRef) {
-  return a.messageID === b.messageID && a.partID === b.partID
-}
-
-function sameGroup(a: PartGroup, b: PartGroup) {
-  if (a === b) return true
-  if (a.key !== b.key) return false
-  if (a.type !== b.type) return false
-  if (a.type === "part") {
-    if (b.type !== "part") return false
-    return sameRef(a.ref, b.ref)
-  }
-  if (b.type !== "context") return false
-  if (a.refs.length !== b.refs.length) return false
-  return a.refs.every((ref, i) => sameRef(ref, b.refs[i]!))
-}
-
-export function sameGroups(a: readonly PartGroup[] | undefined, b: readonly PartGroup[] | undefined) {
-  if (a === b) return true
-  if (!a || !b) return false
-  if (a.length !== b.length) return false
-  return a.every((item, i) => sameGroup(item, b[i]!))
-}
-
-export function groupParts(parts: { messageID: string; part: PartType }[]) {
-  const result: PartGroup[] = []
-  let start = -1
-
-  const flush = (end: number) => {
-    if (start < 0) return
-    const first = parts[start]
-    const last = parts[end]
-    if (!first || !last) {
-      start = -1
-      return
-    }
-    result.push({
-      key: `context:${first.part.id}`,
-      type: "context",
-      refs: parts.slice(start, end + 1).map((item) => ({
-        messageID: item.messageID,
-        partID: item.part.id,
-      })),
-    })
-    start = -1
-  }
-
-  parts.forEach((item, index) => {
-    if (isContextGroupTool(item.part)) {
-      if (start < 0) start = index
-      return
-    }
-
-    flush(index - 1)
-    result.push({
-      key: `part:${item.messageID}:${item.part.id}`,
-      type: "part",
-      ref: {
-        messageID: item.messageID,
-        partID: item.part.id,
-      },
-    })
-  })
-
-  flush(parts.length - 1)
-  return result
 }
 
 function index<T extends { id: string }>(items: readonly T[]) {
@@ -826,10 +747,6 @@ export function AssistantParts(props: {
       }}
     </Index>
   )
-}
-
-function isContextGroupTool(part: PartType): part is ToolPart {
-  return part.type === "tool" && CONTEXT_GROUP_TOOLS.has(part.tool)
 }
 
 function contextToolDetail(part: ToolPart): string | undefined {
@@ -1528,8 +1445,11 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
               return (
                 <ToolErrorCard
                   tool={part().tool}
-                  error={error()}
-                  title={part().tool === "websearch" ? webSearchProviderLabel(partMetadata().provider) : undefined}
+                  error={part().tool.startsWith("graph_") ? graphActivityError(error()) : error()}
+                  title={
+                    graphActivityInfo(part().tool, input(), "error")?.title ??
+                    (part().tool === "websearch" ? webSearchProviderLabel(partMetadata().provider) : undefined)
+                  }
                   defaultOpen={props.defaultOpen}
                   open={controlledOpen()}
                   onOpenChange={props.onToolOpenChange ? handleToolOpenChange : undefined}
@@ -1563,6 +1483,36 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
     </Show>
   )
 }
+
+function GraphActivityTool(props: ToolProps) {
+  const data = useData()
+  const activity = () => graphActivityInfo(props.tool, props.input, props.status)
+  const plan = () =>
+    props.tool === "graph_plan_admit"
+      ? graphPlanCard(props.input, props.sessionID ? data.store.graph_workflow?.[props.sessionID] : undefined)
+      : undefined
+  return (
+    <BasicTool
+      icon="checklist"
+      status={props.status}
+      trigger={{ title: activity()?.title ?? "Graph workflow activity", subtitle: activity()?.summary }}
+      defaultOpen={props.tool === "graph_plan_admit"}
+    >
+      <Show when={plan()}>{(card) => <GraphPlanCard card={card()} />}</Show>
+    </BasicTool>
+  )
+}
+
+for (const name of [
+  "graph_plan_admit",
+  "graph_build_gate",
+  "graph_artifact_begin",
+  "graph_artifact_chunk",
+  "graph_artifact_seal",
+  "graph_artifact_apply",
+  "graph_diagnostics_run",
+])
+  ToolRegistry.register({ name, render: GraphActivityTool })
 
 export function MessageDivider(props: { label: string }) {
   return (

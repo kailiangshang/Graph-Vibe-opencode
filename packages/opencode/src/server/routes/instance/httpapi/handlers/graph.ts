@@ -2,6 +2,7 @@ import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { graphDiff } from "@opencode-ai/core/graph/diff"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 import { Graph } from "@opencode-ai/schema"
 import type { ProjectV2 } from "@opencode-ai/core/project"
 import { Effect } from "effect"
@@ -12,7 +13,19 @@ import { Session } from "@/session/session"
 import type { SessionID } from "@/session/schema"
 import { InstanceHttpApi } from "../api"
 import { notFound } from "../errors"
-import { ProjectQuery, SessionRequiredQuery, SessionOptionalQuery, DiffQuery, PlanAdmitPayload, NodeStatusPayload, PromotePayload } from "../groups/graph"
+import {
+  DiffQuery,
+  GraphWorkflowRevisionConflict,
+  GraphWorkflowActiveOperation,
+  PlanAdmitPayload,
+  ProjectQuery,
+  PromotePayload,
+  SessionOptionalQuery,
+  SessionRequiredQuery,
+  WorkflowApprovePayload,
+  WorkflowModePayload,
+  WorkflowPausePayload,
+} from "../groups/graph"
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { mapStorageNotFound } from "./session-errors"
 
@@ -24,6 +37,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
     const sessionSvc = yield* Session.Service
     const projectSvc = yield* Project.Service
     const events = yield* EventV2Bridge.Service
+    const migration = yield* ProductMigrationState.Service
 
     const resolveProjectFromDirectory = Effect.fn("GraphHttpApi.resolveProjectFromDirectory")(function* () {
       const routeCtx = yield* WorkspaceRouteContext
@@ -31,8 +45,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       return result.project.id
     })
 
-    const resolveSession = (sessionID: string) =>
-      mapStorageNotFound(sessionSvc.get(sessionID as SessionID))
+    const resolveSession = (sessionID: string) => mapStorageNotFound(sessionSvc.get(sessionID as SessionID))
 
     const main = Effect.fn("GraphHttpApi.main")(function* () {
       const projectID = yield* resolveProjectFromDirectory()
@@ -48,15 +61,11 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       return { nodes: view.nodes, edges: view.edges }
     })
 
-    const node = Effect.fn("GraphHttpApi.node")(function* (ctx: {
-      params: { nodeID: string }
-    }) {
+    const node = Effect.fn("GraphHttpApi.node")(function* (ctx: { params: { nodeID: string } }) {
       return yield* domain.node
         .get(ctx.params.nodeID as Graph.NodeID)
         .pipe(
-          Effect.catchTag("GraphV2.NotFoundError", () =>
-            Effect.fail(notFound(`Node not found: ${ctx.params.nodeID}`)),
-          ),
+          Effect.catchTag("GraphV2.NotFoundError", () => Effect.fail(notFound(`Node not found: ${ctx.params.nodeID}`))),
         )
     })
 
@@ -71,20 +80,19 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       const plan = yield* domain.currentPlan({ sessionID })
       const planNode = plan.nodes.find((n) => n.id === nodeID)
 
-      const blockingEdges = plan.edges.filter(
-        (e) => e.targetID === nodeID && e.relation === "blocks",
-      )
-      const blockers = blockingEdges
-        .flatMap((edge) => {
-          const sourceNode = plan.nodes.find((n) => n.id === edge.sourceID)
-          if (!sourceNode) return []
-          if (sourceNode.status === "implemented" || sourceNode.status === "verified") return []
-          return [{
+      const blockingEdges = plan.edges.filter((e) => e.targetID === nodeID && e.relation === "blocks")
+      const blockers = blockingEdges.flatMap((edge) => {
+        const sourceNode = plan.nodes.find((n) => n.id === edge.sourceID)
+        if (!sourceNode) return []
+        if (sourceNode.status === "verified") return []
+        return [
+          {
             nodeID: edge.sourceID,
             nodeName: sourceNode.name,
             nodeStatus: sourceNode.status,
-          }]
-        })
+          },
+        ]
+      })
 
       const validationResult = yield* domain.validateSubgraph({
         projectID: session.projectID,
@@ -128,7 +136,11 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
           id: t.id,
           toolName: t.toolName,
           toolType: t.toolType,
+          inputSummary: t.inputSummary,
+          outputSummary: t.outputSummary,
           status: t.status,
+          error: t.error,
+          evidence: t.evidence,
           timeCreated: t.timeCreated,
         })),
         generationRuns: generationRuns.map((g) => ({
@@ -152,27 +164,23 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       }))
     })
 
-    const deleteNode = Effect.fn("GraphHttpApi.deleteNode")(function* (ctx: {
-      params: { nodeID: string }
-    }) {
+    const deleteNode = Effect.fn("GraphHttpApi.deleteNode")(function* (ctx: { params: { nodeID: string } }) {
+      yield* migration.requireCompleted()
       const projectID = yield* resolveProjectFromDirectory()
       yield* domain.node.delete(ctx.params.nodeID as Graph.NodeID)
       yield* events.publish(Graph.Event.PlanUpdated, { projectID })
       return true
     })
 
-    const deleteEdge = Effect.fn("GraphHttpApi.deleteEdge")(function* (ctx: {
-      params: { edgeID: string }
-    }) {
+    const deleteEdge = Effect.fn("GraphHttpApi.deleteEdge")(function* (ctx: { params: { edgeID: string } }) {
+      yield* migration.requireCompleted()
       const projectID = yield* resolveProjectFromDirectory()
       yield* domain.edge.delete(ctx.params.edgeID as Graph.EdgeID)
       yield* events.publish(Graph.Event.PlanUpdated, { projectID })
       return true
     })
 
-    const diff = Effect.fn("GraphHttpApi.diff")(function* (ctx: {
-      query: typeof DiffQuery.Type
-    }) {
+    const diff = Effect.fn("GraphHttpApi.diff")(function* (ctx: { query: typeof DiffQuery.Type }) {
       const routeCtx = yield* WorkspaceRouteContext
       const { project: proj } = yield* projectSvc.fromDirectory(routeCtx.directory)
       const projectID = proj.id
@@ -218,49 +226,139 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       query: typeof SessionRequiredQuery.Type
       payload: typeof PlanAdmitPayload.Type
     }) {
+      yield* migration.requireCompleted()
       const session = yield* resolveSession(ctx.query.session)
-      const result = yield* plan.admit({
-        projectID: session.projectID,
-        sessionID: session.id,
-        dryRun: ctx.payload.dryRun,
-        nodes: ctx.payload.nodes.map(planNodePayload),
-        edges: ctx.payload.edges,
-      }).pipe(
-        Effect.catchTag("GraphV2.ValidationError", () => Effect.fail(new HttpApiError.BadRequest({}))),
-        Effect.catchTag("GraphV2.NotFoundError", (error) => Effect.fail(notFound(error.id))),
-      )
+      const result = yield* plan
+        .admit({
+          projectID: session.projectID,
+          sessionID: session.id,
+          dryRun: ctx.payload.dryRun,
+          nodes: ctx.payload.nodes.map(planNodePayload),
+          edges: ctx.payload.edges,
+        })
+        .pipe(
+          Effect.catchTag("GraphV2.ValidationError", () => Effect.fail(new HttpApiError.BadRequest({}))),
+          Effect.catchTag("GraphV2.NotFoundError", (error) => Effect.fail(notFound(error.id))),
+          Effect.catchTag("GraphWorkflowState.ModuleScopeError", () => Effect.fail(new HttpApiError.BadRequest({}))),
+        )
       if (!ctx.payload.dryRun) yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
       return result
     })
 
-    const updateNodeStatus = Effect.fn("GraphHttpApi.updateNodeStatus")(function* (ctx: {
-      params: { nodeID: string }
-      payload: typeof NodeStatusPayload.Type
+    const workflow = Effect.fn("GraphHttpApi.workflow")(function* (ctx: { query: typeof SessionRequiredQuery.Type }) {
+      const session = yield* resolveSession(ctx.query.session)
+      return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
+    })
+
+    const workflowMode = Effect.fn("GraphHttpApi.workflowMode")(function* (ctx: {
+      query: typeof SessionRequiredQuery.Type
+      payload: typeof WorkflowModePayload.Type
     }) {
-      const nodeID = ctx.params.nodeID as Graph.NodeID
-      const projectID = yield* resolveProjectFromDirectory()
-      yield* domain.node
-        .update(nodeID, { status: ctx.payload.status })
+      yield* migration.requireCompleted()
+      const session = yield* resolveSession(ctx.query.session)
+      yield* plan.workflow
+        .setMode({
+          projectID: session.projectID,
+          sessionID: session.id,
+          mode: ctx.payload.mode,
+          expectedRevision: ctx.payload.expectedRevision,
+        })
         .pipe(
-          Effect.catchTag("GraphV2.ValidationError", () => Effect.fail(new HttpApiError.BadRequest({}))),
-          Effect.catchTag("GraphV2.NotFoundError", () => Effect.fail(notFound(`Node not found: ${nodeID}`))),
+          Effect.catchTag("GraphWorkflowState.RevisionConflict", (error) =>
+            Effect.fail(
+              new GraphWorkflowRevisionConflict({
+                expectedRevision: error.expectedRevision,
+                actualRevision: error.actualRevision,
+                message: `Workflow revision conflict: expected ${error.expectedRevision}, actual ${error.actualRevision}`,
+              }),
+            ),
+          ),
+          Effect.catchTag("GraphWorkflowState.ActiveWorkflowError", (error) =>
+            Effect.fail(
+              new GraphWorkflowActiveOperation({
+                operationKind: error.activeOperationKind,
+                message:
+                  "Workflow changes are active. Pause or wait for them to finish before changing execution mode.",
+              }),
+            ),
+          ),
+          Effect.catchTag("GraphWorkflowState.ModuleScopeError", () => Effect.fail(new HttpApiError.BadRequest({}))),
         )
-      yield* events.publish(Graph.Event.PlanUpdated, { projectID })
-      return yield* domain.node.get(nodeID).pipe(
-        Effect.catchTag("GraphV2.NotFoundError", () => Effect.fail(notFound(`Node not found: ${nodeID}`))),
-      )
+      yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
+      return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
+    })
+
+    const workflowApprove = Effect.fn("GraphHttpApi.workflowApprove")(function* (ctx: {
+      query: typeof SessionRequiredQuery.Type
+      payload: typeof WorkflowApprovePayload.Type
+    }) {
+      yield* migration.requireCompleted()
+      const session = yield* resolveSession(ctx.query.session)
+      yield* plan.workflow
+        .approve({
+          sessionID: session.id,
+          expectedRevision: ctx.payload.expectedRevision,
+        })
+        .pipe(
+          Effect.catchTag("GraphWorkflowState.RevisionConflict", (error) =>
+            Effect.fail(
+              new GraphWorkflowRevisionConflict({
+                expectedRevision: error.expectedRevision,
+                actualRevision: error.actualRevision,
+                message: `Workflow revision conflict: expected ${error.expectedRevision}, actual ${error.actualRevision}`,
+              }),
+            ),
+          ),
+          Effect.catchTag("GraphWorkflowState.CheckpointNotPending", () =>
+            Effect.fail(new HttpApiError.BadRequest({})),
+          ),
+        )
+      yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
+      return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
+    })
+
+    const workflowPause = Effect.fn("GraphHttpApi.workflowPause")(function* (ctx: {
+      query: typeof SessionRequiredQuery.Type
+      payload: typeof WorkflowPausePayload.Type
+    }) {
+      yield* migration.requireCompleted()
+      const session = yield* resolveSession(ctx.query.session)
+      yield* plan.workflow
+        .pause({
+          sessionID: session.id,
+          expectedRevision: ctx.payload.expectedRevision,
+          reason: ctx.payload.reason,
+        })
+        .pipe(
+          Effect.catchTag("GraphWorkflowState.RevisionConflict", (error) =>
+            Effect.fail(
+              new GraphWorkflowRevisionConflict({
+                expectedRevision: error.expectedRevision,
+                actualRevision: error.actualRevision,
+                message: `Workflow revision conflict: expected ${error.expectedRevision}, actual ${error.actualRevision}`,
+              }),
+            ),
+          ),
+        )
+      yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
+      return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
     })
 
     const promote = Effect.fn("GraphHttpApi.promote")(function* (ctx: {
       query: typeof SessionRequiredQuery.Type
       payload: void | typeof PromotePayload.Type
     }) {
+      yield* migration.requireCompleted()
       const session = yield* resolveSession(ctx.query.session)
-      const result = yield* domain.promote({
-        projectID: session.projectID,
-        sessionID: session.id,
-        message: ctx.payload?.message,
-      })
+      const result = yield* plan.workflow
+        .promote({
+          projectID: session.projectID,
+          sessionID: session.id,
+          message: ctx.payload?.message,
+        })
+        .pipe(
+          Effect.catchTag("GraphWorkflowState.PromotionBlocked", () => Effect.fail(new HttpApiError.BadRequest({}))),
+        )
       yield* events.publish(Graph.Event.MainUpdated, { projectID: session.projectID })
       return result
     })
@@ -276,7 +374,10 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       .handle("deleteEdge", deleteEdge)
       .handle("diff", diff)
       .handle("planAdmit", planAdmit)
-      .handle("updateNodeStatus", updateNodeStatus)
+      .handle("workflow", workflow)
+      .handle("workflowMode", workflowMode)
+      .handle("workflowApprove", workflowApprove)
+      .handle("workflowPause", workflowPause)
       .handle("promote", promote)
   }),
 )
@@ -291,6 +392,7 @@ function planNodePayload(node: (typeof PlanAdmitPayload.Type)["nodes"][number]):
     ...(node.category === undefined ? {} : { category: node.category }),
     ...(node.desc === undefined ? {} : { desc: node.desc }),
     ...(node.content === undefined ? {} : { content: node.content }),
+    ...(node.verification === undefined ? {} : { verification: node.verification }),
     ...(node.codeHash === undefined ? {} : { codeHash: node.codeHash }),
     ...(node.confidence === undefined ? {} : { confidence: node.confidence }),
   }

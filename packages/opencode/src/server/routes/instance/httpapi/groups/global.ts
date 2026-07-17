@@ -7,6 +7,7 @@ import "@/server/event"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
+import { ProductMigrationGroup } from "./product-migration"
 
 const GlobalHealth = Schema.Struct({
   healthy: Schema.Literal(true),
@@ -133,4 +134,4 @@ export const GlobalApi = HttpApi.make("global").add(
       ),
     )
     .annotateMerge(OpenApi.annotations({ title: "global", description: "Global server routes." })),
-)
+).add(ProductMigrationGroup)

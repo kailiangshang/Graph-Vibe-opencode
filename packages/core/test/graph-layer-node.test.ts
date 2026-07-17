@@ -5,12 +5,22 @@ import { GraphStorage } from "@opencode-ai/core/graph/storage"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
+import { GraphWorkflow } from "@opencode-ai/core/graph/workflow/projection"
+import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
 
 describe("graph LayerNode wiring", () => {
   test("graph workflow nodes compile", () => {
     expect(() =>
       LayerNode.compile(
-        LayerNode.group([GraphStorage.node, GraphDomain.node, GraphAudit.node, GraphPlan.node, GraphBuild.node]),
+        LayerNode.group([
+          GraphStorage.node,
+          GraphDomain.node,
+          GraphAudit.node,
+          GraphWorkflowState.node,
+          GraphWorkflow.node,
+          GraphPlan.node,
+          GraphBuild.node,
+        ]),
       ),
     ).not.toThrow()
   })

@@ -6,10 +6,14 @@ const path = require("path")
 const os = require("os")
 
 const forwardedSignals = ["SIGINT", "SIGTERM", "SIGHUP"]
+const graphVibe = path.basename(process.argv[1]).startsWith("graph-vibe")
 
 function run(target) {
   const child = childProcess.spawn(target, process.argv.slice(2), {
     stdio: "inherit",
+    env: graphVibe
+      ? { ...process.env, OPENCODE_CLIENT: "graph-vibe", OPENCODE_ENABLE_GRAPH_MODE: "1" }
+      : process.env,
   })
 
   child.on("error", (error) => {

@@ -1,5 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { Session } from "./session"
 import { SessionID, MessageID, PartID } from "./schema"
@@ -132,21 +133,21 @@ export interface Interface {
     tokens: SessionV1.Assistant["tokens"]
     model: Provider.Model
   }) => Effect.Effect<boolean>
-  readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void>
+  readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void, ProductMigration.Required>
   readonly process: (input: {
     parentID: MessageID
     messages: SessionV1.WithParts[]
     sessionID: SessionID
     auto: boolean
     overflow?: boolean
-  }) => Effect.Effect<"continue" | "stop">
+  }) => Effect.Effect<"continue" | "stop", ProductMigration.Required>
   readonly create: (input: {
     sessionID: SessionID
     agent: string
     model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
     auto: boolean
     overflow?: boolean
-  }) => Effect.Effect<void>
+  }) => Effect.Effect<void, ProductMigration.Required>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionCompaction") {}

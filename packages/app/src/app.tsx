@@ -24,9 +24,11 @@ import {
   For,
   type JSX,
   lazy,
+  Match,
   onCleanup,
   type ParentProps,
   Show,
+  Switch,
 } from "solid-js"
 import { Dynamic } from "solid-js/web"
 import { CommandProvider, useCommand, type CommandOption } from "@/context/command"
@@ -56,6 +58,7 @@ import { useCheckServerHealth } from "./utils/server-health"
 import { legacySessionHref, legacySessionServer, requireServerKey, sessionHref } from "./utils/session-route"
 import { createSessionLineage } from "@/pages/session/session-lineage"
 import { SessionPage, SessionRouteErrorBoundary, TargetSessionRouteContent } from "@/pages/session"
+import { ProductMigrationPage } from "@/pages/product-migration"
 
 import { NewHome, LegacyHome } from "@/pages/home"
 
@@ -112,7 +115,9 @@ function TargetServerRoute(props: ParentProps) {
     // re-resolves reactively instead); both rely on this key for server changes.
     <Show when={requireServerKey(params.serverKey)} keyed>
       <ServerSDKProvider server={conn}>
-        <ServerSyncProvider server={conn}>{props.children}</ServerSyncProvider>
+        <ServerSyncProvider server={conn}>
+          <ProductMigrationGate>{props.children}</ProductMigrationGate>
+        </ServerSyncProvider>
       </ServerSDKProvider>
     </Show>
   )
@@ -169,7 +174,9 @@ function SelectedServerProviders(props: ParentProps) {
 function LegacyServerLayout(props: ParentProps<{ serverScoped?: JSX.Element }>) {
   return (
     <SelectedServerProviders>
-      <LegacyServerScopedShell serverScoped={props.serverScoped}>{props.children}</LegacyServerScopedShell>
+      <ProductMigrationGate>
+        <LegacyServerScopedShell serverScoped={props.serverScoped}>{props.children}</LegacyServerScopedShell>
+      </ProductMigrationGate>
     </SelectedServerProviders>
   )
 }
@@ -206,18 +213,20 @@ function ResolvedDraftRoute(props: { draft: DraftTab }) {
 
   return (
     <Show when={`${props.draft.server}\0${props.draft.directory}`} keyed>
-      <ServerSDKProvider server={conn}>
-        <ServerSyncProvider server={conn}>
-          <DraftServerScopedProviders directory={directory}>
-            <SDKProvider directory={directory}>
-              <DirectoryDataProvider directory={directory} server={serverKey}>
-                <DraftProviders>
-                  <NewSession />
-                </DraftProviders>
-              </DirectoryDataProvider>
-            </SDKProvider>
-          </DraftServerScopedProviders>
-        </ServerSyncProvider>
+        <ServerSDKProvider server={conn}>
+          <ServerSyncProvider server={conn}>
+            <ProductMigrationGate>
+              <DraftServerScopedProviders directory={directory}>
+                <SDKProvider directory={directory}>
+                  <DirectoryDataProvider directory={directory} server={serverKey}>
+                    <DraftProviders>
+                      <NewSession />
+                    </DraftProviders>
+                  </DirectoryDataProvider>
+                </SDKProvider>
+              </DraftServerScopedProviders>
+            </ProductMigrationGate>
+          </ServerSyncProvider>
       </ServerSDKProvider>
     </Show>
   )
@@ -336,10 +345,59 @@ function LegacyServerScopedShell(props: ServerScopedShellProps) {
 function NewAppLayout(props: ParentProps<{ serverScoped?: JSX.Element }>) {
   return (
     <SelectedServerProviders>
-      <ServerScopedProviders serverScoped={props.serverScoped}>
-        <NewLayout>{props.children}</NewLayout>
-      </ServerScopedProviders>
+      <ProductMigrationGate>
+        <ServerScopedProviders serverScoped={props.serverScoped}>
+          <NewLayout>{props.children}</NewLayout>
+        </ServerScopedProviders>
+      </ProductMigrationGate>
     </SelectedServerProviders>
+  )
+}
+
+function ProductMigrationGate(props: ParentProps) {
+  const sync = useServerSync()
+  const migration = () => sync().productMigration
+  const unlocked = () =>
+    migration().status === "unavailable" ||
+    (migration().status === "required" && migration().projection?.status === "completed")
+
+  return (
+    <Switch>
+      <Match when={unlocked()}>{props.children}</Match>
+      <Match when={migration().status === "required" && migration().projection}>
+        <ProductMigrationPage
+          controller={{
+            projection: () => migration().projection!,
+            conflict: () => migration().conflict,
+            pending: () => migration().pending,
+            discover: migration().discover,
+            updateDraft: migration().updateDraft,
+            execute: migration().execute,
+            pause: migration().pause,
+            retry: migration().retry,
+            skip: migration().skip,
+            validate: migration().validate,
+            finalize: migration().finalize,
+            freshStart: migration().freshStart,
+            refresh: migration().refresh,
+          }}
+        />
+      </Match>
+      <Match when={migration().status === "error"}>
+        <main class="flex min-h-dvh items-center justify-center bg-background-base p-6" aria-label="Graph Vibe data transfer checkpoint">
+          <div role="alert" class="max-w-md border-l-2 border-icon-critical-base pl-5">
+            <h1 class="text-18-medium text-text-strong">Migration checkpoint unavailable</h1>
+            <p class="mt-2 text-13-regular text-text-base">Normal navigation remains locked because the migration service could not be verified.</p>
+            <button type="button" class="mt-5 min-h-11 border border-border-strong-base px-4 text-13-medium hover:bg-surface-base-hover" onClick={() => migration().refresh()}>Retry checkpoint</button>
+          </div>
+        </main>
+      </Match>
+      <Match when={true}>
+        <main class="flex min-h-dvh items-center justify-center bg-background-base" aria-label="Graph Vibe data transfer checkpoint">
+          <div role="status" class="font-mono text-11-medium uppercase tracking-wider text-text-weak">Loading transfer checkpoint…</div>
+        </main>
+      </Match>
+    </Switch>
   )
 }
 
@@ -648,7 +706,9 @@ function TargetGraphRoute() {
     <Show when={requireServerKey(params.serverKey)} keyed>
       <ServerSDKProvider server={conn}>
         <ServerSyncProvider server={conn}>
-          <TargetGraphRouteContent />
+          <ProductMigrationGate>
+            <TargetGraphRouteContent />
+          </ProductMigrationGate>
         </ServerSyncProvider>
       </ServerSDKProvider>
     </Show>

@@ -6,6 +6,7 @@ import { Snapshot } from "@/snapshot"
 import { Session } from "./session"
 import { SessionID, MessageID } from "./schema"
 import { Config } from "@/config/config"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 
 function unquoteGitPath(input: string) {
   if (!input.startsWith('"')) return input
@@ -64,7 +65,10 @@ function unquoteGitPath(input: string) {
 }
 
 export interface Interface {
-  readonly summarize: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void>
+  readonly summarize: (input: {
+    sessionID: SessionID
+    messageID: MessageID
+  }) => Effect.Effect<void, ProductMigration.Required>
   readonly diff: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Snapshot.FileDiff[]>
   readonly computeDiff: (input: { messages: SessionV1.WithParts[] }) => Effect.Effect<Snapshot.FileDiff[]>
 }

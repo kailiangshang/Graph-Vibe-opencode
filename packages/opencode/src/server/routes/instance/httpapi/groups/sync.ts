@@ -1,5 +1,6 @@
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { EventV2 } from "@opencode-ai/core/event"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { SessionID } from "@/session/schema"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
@@ -49,6 +50,7 @@ export const SyncApi = HttpApi.make("sync")
         HttpApiEndpoint.post("start", SyncPaths.start, {
           query: WorkspaceRoutingQuery,
           success: described(Schema.Boolean, "Workspace sync started"),
+          error: ProductMigration.Required,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "sync.start",
@@ -60,7 +62,7 @@ export const SyncApi = HttpApi.make("sync")
           query: WorkspaceRoutingQuery,
           payload: ReplayPayload,
           success: described(ReplayResponse, "Replayed sync events"),
-          error: HttpApiError.BadRequest,
+          error: [HttpApiError.BadRequest, ProductMigration.Required],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "sync.replay",
@@ -72,7 +74,7 @@ export const SyncApi = HttpApi.make("sync")
           query: WorkspaceRoutingQuery,
           payload: SessionPayload,
           success: described(SessionPayload, "Session stolen into workspace"),
-          error: HttpApiError.BadRequest,
+          error: [HttpApiError.BadRequest, ProductMigration.Required],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "sync.steal",

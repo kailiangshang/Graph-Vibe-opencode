@@ -4,11 +4,13 @@ import { makeLocationNode } from "./effect/app-node"
 import type { Disp, Proc } from "#pty"
 import { Context, Effect, Layer, Schema, Types } from "effect"
 import { Pty } from "@opencode-ai/schema/pty"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { Config } from "./config"
 import { EventV2 } from "./event"
 import { Location } from "./location"
 import { PtyID } from "./pty/schema"
 import { Shell } from "./shell"
+import { ProductMigrationState } from "./product-migration/state"
 import { lazy } from "./util/lazy"
 
 const BUFFER_LIMIT = 1024 * 1024 * 2
@@ -80,11 +82,17 @@ export class ExitedError extends Schema.TaggedErrorClass<ExitedError>()("Pty.Exi
 export interface Interface {
   readonly list: () => Effect.Effect<Info[]>
   readonly get: (id: PtyID) => Effect.Effect<Info, NotFoundError>
-  readonly create: (input: CreateInput) => Effect.Effect<Info>
-  readonly update: (id: PtyID, input: UpdateInput) => Effect.Effect<Info, NotFoundError>
-  readonly remove: (id: PtyID) => Effect.Effect<void, NotFoundError>
-  readonly write: (id: PtyID, data: string) => Effect.Effect<void, NotFoundError>
-  readonly attach: (id: PtyID, input: AttachInput) => Effect.Effect<Attachment, NotFoundError | ExitedError>
+  readonly create: (input: CreateInput) => Effect.Effect<Info, ProductMigration.Required>
+  readonly update: (
+    id: PtyID,
+    input: UpdateInput,
+  ) => Effect.Effect<Info, NotFoundError | ProductMigration.Required>
+  readonly remove: (id: PtyID) => Effect.Effect<void, NotFoundError | ProductMigration.Required>
+  readonly write: (id: PtyID, data: string) => Effect.Effect<void, NotFoundError | ProductMigration.Required>
+  readonly attach: (
+    id: PtyID,
+    input: AttachInput,
+  ) => Effect.Effect<Attachment, NotFoundError | ExitedError | ProductMigration.Required>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Pty") {}
@@ -95,6 +103,7 @@ const layer = Layer.effect(
     const events = yield* EventV2.Service
     const location = yield* Location.Service
     const config = yield* Config.Service
+    const migration = yield* ProductMigrationState.Service
     const context = yield* Effect.context()
     const runFork = Effect.runForkWith(context)
     const sessions = new Map<PtyID, Active>()
@@ -150,6 +159,7 @@ const layer = Layer.effect(
     })
 
     const remove = Effect.fn("Pty.remove")(function* (id: PtyID) {
+      yield* migration.requireCompleted()
       yield* requireSession(id)
       yield* removeSession(id)
     })
@@ -163,6 +173,7 @@ const layer = Layer.effect(
     })
 
     const create = Effect.fn("Pty.create")(function* (input: CreateInput) {
+      yield* migration.requireCompleted()
       const id = PtyID.ascending()
       const command = input.command || Shell.preferred(Config.latest(yield* config.entries(), "shell"))
       const args = Shell.login(command) ? [...(input.args ?? []), "-l"] : [...(input.args ?? [])]
@@ -244,6 +255,7 @@ const layer = Layer.effect(
     })
 
     const update = Effect.fn("Pty.update")(function* (id: PtyID, input: UpdateInput) {
+      yield* migration.requireCompleted()
       const session = yield* requireSession(id)
       if (input.title) session.info.title = input.title
       if (input.size && session.info.status === "running") session.process.resize(input.size.cols, input.size.rows)
@@ -252,11 +264,13 @@ const layer = Layer.effect(
     })
 
     const write = Effect.fn("Pty.write")(function* (id: PtyID, data: string) {
+      yield* migration.requireCompleted()
       const session = yield* requireSession(id)
       if (session.info.status === "running") session.process.write(data)
     })
 
     const attach = Effect.fn("Pty.attach")(function* (id: PtyID, input: AttachInput) {
+      yield* migration.requireCompleted()
       const session = yield* requireSession(id)
       if (session.info.status !== "running") return yield* new ExitedError({ ptyID: id })
       yield* Effect.logInfo("client attached to session", { id, directory: location.directory })
@@ -315,4 +329,8 @@ const layer = Layer.effect(
 
 export const locationLayer = layer.pipe(Layer.provide(Config.locationLayer))
 
-export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node, Location.node, Config.node] })
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [EventV2.node, Location.node, Config.node, ProductMigrationState.node],
+})

@@ -1,14 +1,20 @@
 import { describe, expect } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Layer, Queue } from "effect"
 import { Config } from "@opencode-ai/core/config"
+import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
+import { EventTable } from "@opencode-ai/core/event/sql"
 import { Location } from "@opencode-ai/core/location"
 import { Pty } from "@opencode-ai/core/pty"
 import type { PtyID } from "@opencode-ai/core/pty/schema"
+import { Product } from "@opencode-ai/core/product"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "../fixture/location"
+import { tmpdir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 
 type PtyEvent = { type: "created" | "exited" | "deleted"; id: PtyID }
@@ -18,13 +24,16 @@ const locationLayer = Layer.succeed(
   Location.Service.of(location({ directory: AbsolutePath.make("/tmp") })),
 )
 const configLayer = Layer.mock(Config.Service)({ entries: () => Effect.succeed([]) })
-const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Pty.node, EventV2.node]), [
+const ptyLayer = (profile: Product.Profile) =>
+  AppNodeBuilder.build(LayerNode.group([Pty.node, EventV2.node, Database.node, ProductMigrationState.node]), [
     [Config.node, configLayer],
     [Location.node, locationLayer],
-  ]),
-)
+    [Product.node, Product.layerWith(profile)],
+  ])
+const it = testEffect(ptyLayer(Product.OpenCode))
+const graphVibe = testEffect(ptyLayer(Product.GraphVibe))
 const ptyTest = process.platform === "win32" ? it.live.skip : it.live
+const graphVibePtyTest = process.platform === "win32" ? graphVibe.live.skip : graphVibe.live
 
 const subscribePtyEvents = Effect.fn("PtySessionTest.subscribePtyEvents")(function* () {
   const source = yield* EventV2.Service
@@ -91,6 +100,57 @@ const waitForOutput = (output: Queue.Queue<string>, text: string) =>
   )
 
 describe("pty", () => {
+  graphVibePtyTest("blocks process and PTY mutations until migration completion", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+      )
+      const marker = `${tmp.path}/child-ready`
+      const pty = yield* Pty.Service
+      const events = yield* subscribePtyEvents()
+      const missing = "pty_migration_gate" as PtyID
+      const failures = yield* Effect.all([
+        pty
+          .create({ command: "/bin/sh", args: ["-c", `printf child > '${marker}'; printf READY; exec cat`] })
+          .pipe(Effect.exit),
+        pty.update(missing, { title: "blocked", size: { cols: 80, rows: 24 } }).pipe(Effect.exit),
+        pty.remove(missing).pipe(Effect.exit),
+        pty.write(missing, "blocked\n").pipe(Effect.exit),
+        pty.attach(missing, { onData: () => {}, onEnd: () => {} }).pipe(Effect.exit),
+      ])
+
+      expect(
+        failures.every(
+          (exit: Exit.Exit<unknown, unknown>) =>
+            Exit.isFailure(exit) && Cause.squash(exit.cause) instanceof ProductMigration.Required,
+        ),
+      ).toBe(true)
+      expect(yield* pty.list()).toEqual([])
+      expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+      expect((yield* Queue.poll(events))._tag).toBe("None")
+      const { db } = yield* Database.Service
+      expect(yield* db.select().from(EventTable).all().pipe(Effect.orDie)).toEqual([])
+
+      yield* (yield* ProductMigrationState.Service).freshStart({ expectedRevision: 0 })
+      const info = yield* Effect.acquireRelease(
+        pty.create({ command: "/bin/sh", args: ["-c", `printf child > '${marker}'; printf READY; exec cat`] }),
+        (created) => pty.remove(created.id).pipe(Effect.ignore),
+      )
+      const attached = yield* attachCollecting(info.id)
+      const ready = attached.attachment.replay.includes("READY")
+        ? attached.attachment.replay
+        : yield* waitForOutput(attached.output, "READY")
+      expect(ready).toContain("READY")
+      expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(true)
+      expect((yield* pty.update(info.id, { title: "ready", size: { cols: 80, rows: 24 } })).title).toBe("ready")
+      yield* pty.write(info.id, "PING\n")
+      expect(yield* waitForOutput(attached.output, "PING")).toContain("PING")
+      yield* pty.remove(info.id)
+      expect(yield* waitForEvents(events, info.id, 2)).toEqual(["created", "deleted"])
+    }),
+  )
+
   it.live("returns typed not found errors for missing sessions", () =>
     Effect.gen(function* () {
       const pty = yield* Pty.Service

@@ -1,4 +1,5 @@
 import { Graph } from "@opencode-ai/schema"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
@@ -50,6 +51,7 @@ const PlanNodePayload = Schema.Struct({
   status: Schema.optional(Graph.NodeStatus),
   desc: Schema.optional(Schema.String),
   content: Schema.optional(Graph.NodeContent),
+  verification: Schema.optional(Graph.VerificationSpec),
   codeHash: Schema.optional(Schema.String),
   testStatus: Schema.optional(Graph.TestStatus),
   confidence: Schema.optional(Schema.Number),
@@ -73,9 +75,38 @@ export const PromotePayload = Schema.Struct({
   message: Schema.optional(Schema.String),
 }).annotate({ identifier: "GraphPromotePayload" })
 
-export const NodeStatusPayload = Schema.Struct({
-  status: Graph.NodeStatus,
-}).annotate({ identifier: "GraphNodeStatusPayload" })
+export const WorkflowModePayload = Schema.Struct({
+  mode: Graph.ExecutionMode,
+  expectedRevision: Schema.Number,
+}).annotate({ identifier: "GraphWorkflowModePayload" })
+
+export const WorkflowApprovePayload = Schema.Struct({
+  expectedRevision: Schema.Number,
+}).annotate({ identifier: "GraphWorkflowApprovePayload" })
+
+export const WorkflowPausePayload = Schema.Struct({
+  expectedRevision: Schema.Number,
+  reason: Schema.optional(Schema.String),
+}).annotate({ identifier: "GraphWorkflowPausePayload" })
+
+export class GraphWorkflowRevisionConflict extends Schema.TaggedErrorClass<GraphWorkflowRevisionConflict>()(
+  "GraphWorkflowRevisionConflict",
+  {
+    expectedRevision: Schema.Number,
+    actualRevision: Schema.Number,
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+
+export class GraphWorkflowActiveOperation extends Schema.TaggedErrorClass<GraphWorkflowActiveOperation>()(
+  "GraphWorkflowActiveOperation",
+  {
+    operationKind: Schema.Literal("artifact_apply"),
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
 
 const AdmitResultResponse = Schema.Struct({
   nodesCreated: Schema.Number,
@@ -120,7 +151,11 @@ const ToolRunItem = Schema.Struct({
   id: Schema.String,
   toolName: Schema.String,
   toolType: Schema.String,
+  inputSummary: Schema.NullOr(Schema.String),
+  outputSummary: Schema.NullOr(Schema.String),
   status: Schema.String,
+  error: Schema.NullOr(Schema.String),
+  evidence: Schema.NullOr(Graph.ToolEvidence),
   timeCreated: Schema.Number,
 }).annotate({ identifier: "GraphToolRun" })
 
@@ -136,6 +171,61 @@ const NodeAuditResponse = Schema.Struct({
   toolRuns: Schema.Array(ToolRunItem),
   generationRuns: Schema.Array(GenerationRunItem),
 }).annotate({ identifier: "GraphNodeAudit" })
+
+const WorkflowTaskResponse = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  order: Schema.Number,
+  moduleID: Schema.NullOr(Schema.String),
+  moduleName: Schema.NullOr(Schema.String),
+  status: Graph.NodeStatus,
+  testStatus: Graph.TestStatus,
+  buildable: Schema.Boolean,
+  current: Schema.Boolean,
+  verification: Schema.NullOr(Graph.VerificationSpec),
+  latestEvidence: Schema.NullOr(Graph.VerificationEvidence),
+}).annotate({ identifier: "GraphWorkflowTask" })
+
+const WorkflowRollupResponse = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  type: Schema.Literals(["prd", "composite"]),
+  status: Schema.Literals(["pending", "implemented", "verified", "failed"]),
+  taskIDs: Schema.Array(Schema.String),
+}).annotate({ identifier: "GraphWorkflowRollup" })
+
+const WorkflowModuleResponse = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  type: Schema.Literal("composite"),
+  status: Schema.Literals(["pending", "implemented", "verified", "failed"]),
+  taskIDs: Schema.Array(Schema.String),
+  tasks: Schema.Array(WorkflowTaskResponse),
+}).annotate({ identifier: "GraphWorkflowModule" })
+
+const WorkflowResponse = Schema.Struct({
+  mode: Schema.NullOr(Graph.ExecutionMode),
+  revision: Schema.Number,
+  activeOperationKind: Schema.NullOr(Schema.Literal("artifact_apply")),
+  phase: Schema.Literals(["planning", "building", "verifying", "checkpoint", "complete", "failed"]),
+  checkpoint: Schema.Struct({
+    status: Graph.CheckpointStatus,
+    kind: Schema.NullOr(Graph.CheckpointKind),
+    scopeNodeID: Schema.NullOr(Schema.String),
+    scopeName: Schema.NullOr(Schema.String),
+    reason: Schema.NullOr(Schema.String),
+  }),
+  currentTask: Schema.NullOr(WorkflowTaskResponse),
+  modules: Schema.Array(WorkflowModuleResponse),
+  tasks: Schema.Array(WorkflowTaskResponse),
+  rollups: Schema.Array(WorkflowRollupResponse),
+  progress: Schema.Struct({
+    total: Schema.Number,
+    verified: Schema.Number,
+    failed: Schema.Number,
+    percent: Schema.Number,
+  }),
+}).annotate({ identifier: "GraphWorkflow" })
 
 export const ProjectQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
@@ -161,10 +251,12 @@ const DiffResponse = Schema.Struct({
   }),
   nodesAdded: Schema.Array(Schema.String),
   nodesRemoved: Schema.Array(Schema.String),
-  nodesModified: Schema.Array(Schema.Struct({
-    id: Schema.String,
-    fields: Schema.Array(Schema.String),
-  })),
+  nodesModified: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      fields: Schema.Array(Schema.String),
+    }),
+  ),
   edgesAdded: Schema.Number,
   edgesRemoved: Schema.Number,
 }).annotate({ identifier: "GraphDiff" })
@@ -187,7 +279,10 @@ export const GraphPaths = {
   deleteEdge: "/graph/edge/:edgeID",
   diff: "/graph/diff",
   planAdmit: "/graph/plan/admit",
-  nodeStatus: "/graph/node/:nodeID/status",
+  workflow: "/graph/workflow",
+  workflowMode: "/graph/workflow/mode",
+  workflowApprove: "/graph/workflow/approve",
+  workflowPause: "/graph/workflow/pause",
   promote: "/graph/current-plan/promote",
 } as const
 
@@ -203,8 +298,7 @@ export const GraphApi = HttpApi.make("graph")
           OpenApi.annotations({
             identifier: "graph.main",
             summary: "Get project main graph",
-            description:
-              "Retrieve the project main graph (committed nodes and edges with session_id IS NULL).",
+            description: "Retrieve the project main graph (committed nodes and edges with session_id IS NULL).",
           }),
         ),
         HttpApiEndpoint.get("currentPlan", GraphPaths.currentPlan, {
@@ -215,8 +309,7 @@ export const GraphApi = HttpApi.make("graph")
           OpenApi.annotations({
             identifier: "graph.currentPlan",
             summary: "Get session CurrentPlan",
-            description:
-              "Retrieve the session-scoped CurrentPlan graph (nodes and edges with session_id = session).",
+            description: "Retrieve the session-scoped CurrentPlan graph (nodes and edges with session_id = session).",
           }),
         ),
         HttpApiEndpoint.get("node", GraphPaths.node, {
@@ -240,8 +333,7 @@ export const GraphApi = HttpApi.make("graph")
           OpenApi.annotations({
             identifier: "graph.nodeReadiness",
             summary: "Get node build readiness",
-            description:
-              "Check whether a node is ready to build: blockers, dependency status, validation issues.",
+            description: "Check whether a node is ready to build: blockers, dependency status, validation issues.",
           }),
         ),
         HttpApiEndpoint.get("nodeAudit", GraphPaths.nodeAudit, {
@@ -271,7 +363,7 @@ export const GraphApi = HttpApi.make("graph")
           params: { nodeID: Schema.String },
           query: ProjectQuery,
           success: described(Schema.Boolean, "Node deleted"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ProductMigration.Required],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.deleteNode",
@@ -283,7 +375,7 @@ export const GraphApi = HttpApi.make("graph")
           params: { edgeID: Schema.String },
           query: ProjectQuery,
           success: described(Schema.Boolean, "Edge deleted"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ProductMigration.Required],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.deleteEdge",
@@ -306,33 +398,82 @@ export const GraphApi = HttpApi.make("graph")
           query: SessionRequiredQuery,
           payload: PlanAdmitPayload,
           success: described(AdmitResultResponse, "CurrentPlan admission result"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ProductMigration.Required],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.planAdmit",
             summary: "Admit nodes and edges into the CurrentPlan",
-            description:
-              "Admit nodes and edges into the session-scoped CurrentPlan graph before implementation.",
+            description: "Admit nodes and edges into the session-scoped CurrentPlan graph before implementation.",
           }),
         ),
-        HttpApiEndpoint.patch("updateNodeStatus", GraphPaths.nodeStatus, {
-          params: { nodeID: Schema.String },
-          query: ProjectQuery,
-          payload: NodeStatusPayload,
-          success: described(GraphNodeResponse, "Refreshed graph node"),
+        HttpApiEndpoint.get("workflow", GraphPaths.workflow, {
+          query: SessionRequiredQuery,
+          success: described(WorkflowResponse, "Session workflow projection"),
           error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
-            identifier: "graph.updateNodeStatus",
-            summary: "Update a graph node status",
-            description: "Update the status of a single graph node and return the refreshed node.",
+            identifier: "graph.workflow",
+            summary: "Get session workflow",
+            description: "Retrieve durable workflow mode, revision, checkpoints, tasks, modules, and progress.",
+          }),
+        ),
+        HttpApiEndpoint.patch("workflowMode", GraphPaths.workflowMode, {
+          query: SessionRequiredQuery,
+          payload: WorkflowModePayload,
+          success: described(WorkflowResponse, "Updated session workflow projection"),
+          error: [
+            HttpApiError.BadRequest,
+            ApiNotFoundError,
+            GraphWorkflowRevisionConflict,
+            GraphWorkflowActiveOperation,
+            ProductMigration.Required,
+          ],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.workflowMode",
+            summary: "Select workflow execution mode",
+            description: "Select execution mode using the exact current workflow revision.",
+          }),
+        ),
+        HttpApiEndpoint.patch("workflowApprove", GraphPaths.workflowApprove, {
+          query: SessionRequiredQuery,
+          payload: WorkflowApprovePayload,
+          success: described(WorkflowResponse, "Updated session workflow projection"),
+          error: [
+            HttpApiError.BadRequest,
+            ApiNotFoundError,
+            GraphWorkflowRevisionConflict,
+            ProductMigration.Required,
+          ],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.workflowApprove",
+            summary: "Approve the pending workflow checkpoint",
+            description: "Approve a pending checkpoint using its exact workflow revision.",
+          }),
+        ),
+        HttpApiEndpoint.patch("workflowPause", GraphPaths.workflowPause, {
+          query: SessionRequiredQuery,
+          payload: WorkflowPausePayload,
+          success: described(WorkflowResponse, "Updated session workflow projection"),
+          error: [
+            HttpApiError.BadRequest,
+            ApiNotFoundError,
+            GraphWorkflowRevisionConflict,
+            ProductMigration.Required,
+          ],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.workflowPause",
+            summary: "Pause the workflow",
+            description: "Create a pause checkpoint using the exact current workflow revision.",
           }),
         ),
         HttpApiEndpoint.post("promote", GraphPaths.promote, {
           query: SessionRequiredQuery,
           payload: [HttpApiSchema.NoContent, PromotePayload],
           success: described(PromoteResultResponse, "CurrentPlan promotion result"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ProductMigration.Required],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.promote",

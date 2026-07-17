@@ -10,6 +10,7 @@ import { EOL } from "os"
 import type { Argv } from "yargs"
 import { Effect } from "effect"
 import { effectCmd } from "../effect-cmd"
+import { Product } from "@opencode-ai/core/product"
 
 type AgentMode = "all" | "primary" | "subagent"
 
@@ -29,6 +30,16 @@ const AVAILABLE_PERMISSIONS = [
   "lsp",
   "skill",
 ]
+
+export function agentConfigDirectory(
+  worktree: string,
+  scope: "global" | "project",
+  profile = Product.current(),
+  global = Global.Path.config,
+) {
+  if (scope === "global") return path.join(global, "agents")
+  return path.join(worktree, profile === Product.GraphVibe ? ".graph-vibe" : ".opencode", "agents")
+}
 
 const AgentCreateCommand = effectCmd({
   command: "create",
@@ -108,7 +119,7 @@ const AgentCreateCommand = effectCmd({
           if (prompts.isCancel(scopeResult)) throw new UI.CancelledError()
           scope = scopeResult
         }
-        targetPath = path.join(scope === "global" ? Global.Path.config : path.join(ctx.worktree, ".opencode"), "agents")
+        targetPath = agentConfigDirectory(ctx.worktree, scope)
       }
 
       // Get description

@@ -1,6 +1,7 @@
 import { Pty } from "@opencode-ai/schema/pty"
 import { PtyTicket } from "@opencode-ai/schema/pty-ticket"
 import { Location } from "@opencode-ai/schema/location"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { ForbiddenError, PtyNotFoundError } from "../errors"
@@ -38,6 +39,7 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
       query: LocationQuery,
       payload: Pty.CreateInput,
       success: Location.response(Pty.Info),
+      error: ProductMigration.Required,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -70,7 +72,7 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
       query: LocationQuery,
       payload: Pty.UpdateInput,
       success: Location.response(Pty.Info),
-      error: PtyNotFoundError,
+      error: [PtyNotFoundError, ProductMigration.Required],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -86,7 +88,7 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
       params: { ptyID: Pty.ID },
       query: LocationQuery,
       success: HttpApiSchema.NoContent,
-      error: PtyNotFoundError,
+      error: [PtyNotFoundError, ProductMigration.Required],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -102,7 +104,7 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
       params: { ptyID: Pty.ID },
       query: LocationQuery,
       success: Location.response(PtyTicket.ConnectToken),
-      error: [ForbiddenError, PtyNotFoundError],
+      error: [ForbiddenError, PtyNotFoundError, ProductMigration.Required],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -119,7 +121,7 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
     HttpApiEndpoint.get("pty.connect", "/api/pty/:ptyID/connect", {
       params: { ptyID: Pty.ID },
       success: Schema.Boolean,
-      error: [ForbiddenError, PtyNotFoundError],
+      error: [ForbiddenError, PtyNotFoundError, ProductMigration.Required],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.pty.connect",

@@ -6,6 +6,9 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import * as GraphDomain from "@opencode-ai/core/graph/domain"
 import * as GraphStorage from "@opencode-ai/core/graph/storage"
 import * as GraphPlan from "@opencode-ai/core/graph/workflow/plan"
+import * as GraphWorkflowState from "@opencode-ai/core/graph/workflow/state"
+import * as GraphAudit from "@opencode-ai/core/graph/workflow/audit"
+import * as GraphWorkflow from "@opencode-ai/core/graph/workflow/projection"
 
 const storageLayer = GraphStorage.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:"))) as Layer.Layer<
   Database.Service | GraphStorage.Service
@@ -13,14 +16,24 @@ const storageLayer = GraphStorage.layer.pipe(Layer.provideMerge(Database.layerFr
 const domainLayer = GraphDomain.layer.pipe(Layer.provideMerge(storageLayer)) as Layer.Layer<
   Database.Service | GraphStorage.Service | GraphDomain.Service
 >
-const planLayer = GraphPlan.layer.pipe(Layer.provideMerge(domainLayer)) as Layer.Layer<
-  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphPlan.Service
+const auditLayer = GraphAudit.layer.pipe(Layer.provideMerge(domainLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service
+>
+const workflowLayer = GraphWorkflowState.layer.pipe(Layer.provideMerge(auditLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service | GraphWorkflowState.Service
+>
+const projectionLayer = GraphWorkflow.layer.pipe(Layer.provideMerge(workflowLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service | GraphWorkflowState.Service | GraphWorkflow.Service
+>
+const planLayer = GraphPlan.layer.pipe(Layer.provideMerge(projectionLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service | GraphWorkflowState.Service | GraphWorkflow.Service | GraphPlan.Service
 >
 
 const PID = "proj_test" as any
 const SID = "ses_test"
 const A = "gnd_plan_a" as GraphStorage.NodeID
 const B = "gnd_plan_b" as GraphStorage.NodeID
+const verification = { criteria: ["observable result"], diagnostics: [{ name: "test" }] } as const
 
 const seed = Effect.gen(function* () {
   const { db } = yield* Database.Service
@@ -28,7 +41,11 @@ const seed = Effect.gen(function* () {
   yield* db.insert(SessionTable).values({ id: SID, project_id: PID, slug: "test", directory: "/tmp/test" as any, title: "test", version: "0", time_created: 0, time_updated: 0 } as any).run().pipe(Effect.orDie)
 })
 
-const run = <A, E>(effect: Effect.Effect<A, E, Database.Service | GraphStorage.Service | GraphDomain.Service | GraphPlan.Service>) =>
+const run = <A, E>(effect: Effect.Effect<
+  A,
+  E,
+  Database.Service | GraphStorage.Service | GraphDomain.Service | GraphAudit.Service | GraphWorkflowState.Service | GraphWorkflow.Service | GraphPlan.Service
+>) =>
   Effect.runPromise(Effect.gen(function* () { yield* seed; return yield* effect }).pipe(Effect.provide(planLayer), Effect.scoped))
 
 describe("GraphPlan.admit", () => {
@@ -40,8 +57,8 @@ describe("GraphPlan.admit", () => {
         sessionID: SID,
         dryRun: true,
         nodes: [
-          { id: A, type: "atomic", name: "A", level: "L2" },
-          { id: B, type: "atomic", name: "B", level: "L2" },
+          { id: A, type: "atomic", name: "A", level: "L2", verification },
+          { id: B, type: "atomic", name: "B", level: "L2", verification },
         ],
         edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
       })
@@ -61,8 +78,8 @@ describe("GraphPlan.admit", () => {
         projectID: PID,
         sessionID: SID,
         nodes: [
-          { id: A, type: "atomic", name: "A", level: "L2" },
-          { id: B, type: "atomic", name: "B", level: "L2" },
+          { id: A, type: "atomic", name: "A", level: "L2", verification },
+          { id: B, type: "atomic", name: "B", level: "L2", verification },
         ],
         edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
       })
@@ -75,13 +92,148 @@ describe("GraphPlan.admit", () => {
     }))
   })
 
+  test("resets workflow authority after admission while preserving mode", async () => {
+    await run(Effect.gen(function* () {
+      const workflow = yield* GraphWorkflowState.Service
+      yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "atomic", expectedRevision: 0 })
+      const plan = yield* GraphPlan.Service
+      yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [
+          { id: A, type: "atomic", name: "A", level: "L2", verification },
+          { id: B, type: "atomic", name: "B", level: "L2", verification },
+        ],
+        edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
+      })
+
+      expect(yield* workflow.get(SID)).toMatchObject({
+        mode: "atomic",
+        currentNodeID: A,
+        checkpointKind: "atomic",
+        checkpointScopeNodeID: A,
+        checkpointStatus: "approved",
+        revision: 2,
+      })
+    }))
+  })
+
+  test("re-admission resumes the first unfinished buildable task", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [
+          { id: A, type: "atomic", name: "A", level: "L2", verification },
+          { id: B, type: "atomic", name: "B", level: "L2", verification },
+        ],
+        edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
+      })
+      const storage = yield* GraphStorage.Service
+      yield* storage.node.update(A, { status: "verified", testStatus: "passed" })
+      yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [{ id: "gnd_plan_c" as GraphStorage.NodeID, type: "atomic", name: "C", level: "L2", verification }],
+        edges: [],
+      })
+
+      const workflow = yield* GraphWorkflowState.Service
+      expect((yield* workflow.get(SID))?.currentNodeID).toBe(B)
+    }))
+  })
+
+  test("persists verification specs on atomic nodes", async () => {
+    await run(Effect.gen(function* () {
+      const focusedVerification = {
+        criteria: ["observable result"],
+        diagnostics: [{ name: "test", paths: ["test/result.test.ts"] }],
+      } as const
+      const plan = yield* GraphPlan.Service
+      yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [
+          { id: A, type: "composite", name: "Module", level: "L1" },
+          { id: B, type: "atomic", name: "Task", level: "L2", verification: focusedVerification },
+        ],
+        edges: [{ sourceID: A, targetID: B, relation: "contains" }],
+      })
+
+      const storage = yield* GraphStorage.Service
+      expect((yield* storage.node.get(A)).verification).toBeNull()
+      expect((yield* storage.node.get(B)).verification).toEqual(focusedVerification)
+    }))
+  })
+
+  test("rejects newly admitted atomic nodes without verification", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const exit = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [{ id: A, type: "atomic", name: "Task", level: "L2" }],
+        edges: [],
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const storage = yield* GraphStorage.Service
+      expect((yield* storage.currentPlan({ sessionID: SID })).nodes).toEqual([])
+    }))
+  })
+
+  test("rejects verification specs on non-atomic nodes", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const exit = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [{
+          id: A,
+          type: "composite",
+          name: "Module",
+          level: "L1",
+          verification: { criteria: ["observable result"], diagnostics: [{ name: "test", paths: ["test/result.test.ts"] }] },
+        }],
+        edges: [],
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const storage = yield* GraphStorage.Service
+      expect((yield* storage.currentPlan({ sessionID: SID })).nodes).toEqual([])
+    }))
+  })
+
+  test("rejects option-like verification paths at admission", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const exit = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [{
+          id: A,
+          type: "atomic",
+          name: "Task",
+          level: "L2",
+          verification: { criteria: ["observable result"], diagnostics: [{ name: "test", paths: ["--watch"] }] },
+        }],
+        edges: [],
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const storage = yield* GraphStorage.Service
+      expect((yield* storage.currentPlan({ sessionID: SID })).nodes).toEqual([])
+    }))
+  })
+
   test("does not persist partial CurrentPlan when edge validation fails", async () => {
     await run(Effect.gen(function* () {
       const plan = yield* GraphPlan.Service
       const exit = yield* plan.admit({
         projectID: PID,
         sessionID: SID,
-        nodes: [{ id: A, type: "atomic", name: "A", level: "L2" }],
+        nodes: [{ id: A, type: "atomic", name: "A", level: "L2", verification }],
         edges: [{ sourceID: A, targetID: B, relation: "blocks" }],
       }).pipe(Effect.exit)
 
@@ -93,6 +245,30 @@ describe("GraphPlan.admit", () => {
     }))
   })
 
+  test("rejects cyclic plans before persistence or workflow reset", async () => {
+    await run(Effect.gen(function* () {
+      const plan = yield* GraphPlan.Service
+      const exit = yield* plan.admit({
+        projectID: PID,
+        sessionID: SID,
+        nodes: [
+          { id: A, type: "atomic", name: "A", level: "L2", verification },
+          { id: B, type: "atomic", name: "B", level: "L2", verification },
+        ],
+        edges: [
+          { sourceID: A, targetID: B, relation: "blocks" },
+          { sourceID: B, targetID: A, relation: "blocks" },
+        ],
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const storage = yield* GraphStorage.Service
+      expect((yield* storage.currentPlan({ sessionID: SID })).nodes).toEqual([])
+      const workflow = yield* GraphWorkflowState.Service
+      expect(yield* workflow.get(SID)).toBeUndefined()
+    }))
+  })
+
   test("index-based edge references (@N) resolve to created node IDs", async () => {
     await run(Effect.gen(function* () {
       const plan = yield* GraphPlan.Service
@@ -101,7 +277,7 @@ describe("GraphPlan.admit", () => {
         sessionID: SID,
         nodes: [
           { type: "composite", name: "Parent", level: "L1" },
-          { type: "atomic", name: "Child", level: "L2" },
+          { type: "atomic", name: "Child", level: "L2", verification },
         ],
         edges: [{ sourceID: "@0", targetID: "@1", relation: "contains" }],
       })

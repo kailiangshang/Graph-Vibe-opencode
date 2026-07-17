@@ -10,6 +10,144 @@
   font-style: normal;
 }
 
+.graph-page {
+  --graph-glass-solid: var(--background-base);
+  --graph-glass: color-mix(in srgb, var(--background-base) 84%, #b8cbd4 16%);
+  --graph-canvas: color-mix(in srgb, var(--background-base) 94%, #78909c 6%);
+  --graph-text: var(--text-strong);
+  --graph-edge: color-mix(in srgb, var(--border-base) 72%, #6f8791 28%);
+  --graph-current: #4f8f8d;
+  --graph-selected: #6688aa;
+  --graph-verified: #657f6c;
+  --graph-checkpoint: #9a7d4c;
+  --graph-failed: #a75e62;
+  --graph-pending: #687985;
+  position: relative;
+  background:
+    radial-gradient(circle at 48% 18%, color-mix(in srgb, var(--graph-current) 8%, transparent), transparent 38%),
+    var(--background-base);
+}
+
+.graph-glass {
+  background: var(--graph-glass-solid);
+  background: var(--graph-glass);
+  border-color: color-mix(in srgb, var(--border-base) 78%, white 22%);
+  backdrop-filter: blur(16px) saturate(112%);
+}
+
+.graph-grid {
+  display: grid;
+  grid-template-columns: 288px minmax(320px, 1fr) 344px;
+}
+
+.graph-mobile-tabs {
+  display: none;
+}
+.graph-field,
+.graph-control {
+  background: var(--graph-glass-solid);
+  border: 1px solid var(--border-base);
+  color: var(--text-strong);
+}
+.graph-control {
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 7px;
+  padding: 0 9px;
+}
+.graph-action {
+  min-height: 44px;
+  border-radius: 7px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.graph-action.primary {
+  background: var(--graph-current);
+  color: #f7fbfb;
+}
+.graph-action.secondary {
+  border: 1px solid var(--border-base);
+  background: var(--graph-glass-solid);
+  color: var(--text-strong);
+}
+.graph-action:disabled {
+  opacity: 0.5;
+}
+.graph-task {
+  border: 1px solid transparent;
+}
+.graph-task:hover {
+  background: color-mix(in srgb, var(--graph-current) 8%, transparent);
+}
+.graph-task.current {
+  border-color: color-mix(in srgb, var(--graph-current) 60%, transparent);
+  background: color-mix(in srgb, var(--graph-current) 12%, transparent);
+}
+.graph-task.selected {
+  outline: 2px solid color-mix(in srgb, var(--graph-selected) 70%, transparent);
+  outline-offset: -2px;
+}
+
+@media (max-width: 767px) {
+  .graph-source-switch {
+    top: 70px;
+  }
+  .graph-mobile-tabs {
+    display: flex;
+  }
+  .graph-grid {
+    display: block;
+    overflow: hidden;
+  }
+  .graph-rail,
+  .graph-stage,
+  .graph-inspector {
+    height: 100%;
+    border: 0;
+  }
+  .graph-mobile-hidden {
+    display: none;
+  }
+  .graph-cockpit > header {
+    padding-right: 92px;
+  }
+  .graph-action,
+  .graph-control,
+  .graph-field {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-page *,
+  .graph-page *::before,
+  .graph-page *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .graph-glass {
+    background: var(--graph-glass-solid);
+    backdrop-filter: none;
+  }
+}
+
+.graph-page[data-reduced-transparency="true"] .graph-glass {
+  background: var(--graph-glass-solid);
+  backdrop-filter: none;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .graph-glass {
+    background: var(--graph-glass-solid);
+    backdrop-filter: none;
+  }
+}
+
 @font-face {
   font-family: "Inter";
   src: url("/assets/Inter.ttf") format("truetype");

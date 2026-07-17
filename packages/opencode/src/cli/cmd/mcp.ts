@@ -17,6 +17,7 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import path from "path"
 import { Global } from "@opencode-ai/core/global"
+import { Product } from "@opencode-ai/core/product"
 import { modify, applyEdits } from "jsonc-parser"
 import { Filesystem } from "@/util/filesystem"
 import { Effect } from "effect"
@@ -392,10 +393,18 @@ export const McpLogoutCommand = effectCmd({
 })
 
 async function resolveConfigPath(baseDir: string, global = false) {
-  // Check for existing config files (prefer .jsonc over .json, check .opencode/ subdirectory too)
-  const candidates = [path.join(baseDir, "opencode.json"), path.join(baseDir, "opencode.jsonc")]
+  const profile = Product.current()
+  const name = profile.config
+  const candidates = global
+    ? [path.join(baseDir, `${name}.json`), path.join(baseDir, `${name}.jsonc`)]
+    : profile === Product.GraphVibe
+      ? [
+          path.join(baseDir, ".graph-vibe", "graph-vibe.json"),
+          path.join(baseDir, ".graph-vibe", "graph-vibe.jsonc"),
+        ]
+      : [path.join(baseDir, "opencode.json"), path.join(baseDir, "opencode.jsonc")]
 
-  if (!global) {
+  if (!global && profile !== Product.GraphVibe) {
     candidates.push(path.join(baseDir, ".opencode", "opencode.json"), path.join(baseDir, ".opencode", "opencode.jsonc"))
   }
 
@@ -405,7 +414,6 @@ async function resolveConfigPath(baseDir: string, global = false) {
     }
   }
 
-  // Default to opencode.json if none exist
   return candidates[0]
 }
 

@@ -1,7 +1,7 @@
 export * as TuiConfig from "./tui"
 
 import path from "path"
-import { mergeDeep, unique } from "remeda"
+import { mergeDeep } from "remeda"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Cause, Context, Effect, Fiber, Layer } from "effect"
@@ -23,6 +23,7 @@ import { ConfigVariable } from "@/config/variable"
 import { Npm } from "@opencode-ai/core/npm"
 import { FormatError, FormatUnknownError } from "@/cli/error"
 import { TuiConfig } from "@opencode-ai/tui/config"
+import { Product } from "@opencode-ai/core/product"
 
 export const Info = TuiConfig.Info
 export type Info = TuiConfig.Info
@@ -171,7 +172,12 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
   // Every config dir we may read from: global config dir, any `.opencode`
   // folders between cwd and home, and OPENCODE_CONFIG_DIR.
   const directories = yield* ConfigPaths.directories(ctx.directory)
-  yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
+  yield* Effect.promise(() =>
+    migrateTuiConfig({
+      directories: directories.filter((directory) => directory.writable).map((directory) => directory.path),
+      cwd: ctx.directory,
+    }),
+  )
 
   const projectFiles = Flag.OPENCODE_DISABLE_PROJECT_CONFIG ? [] : yield* ConfigPaths.files("tui", ctx.directory)
 
@@ -200,11 +206,16 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
   // 4. `.opencode` directories (and OPENCODE_CONFIG_DIR) discovered while
   // walking up the tree. Also returned below so callers can install plugin
   // dependencies from each location.
-  const dirs = unique(directories).filter((dir) => dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR)
+  const explicitConfigDir = Product.current() === Product.GraphVibe ? Flag.GRAPH_VIBE_CONFIG_DIR : Flag.OPENCODE_CONFIG_DIR
+  const dirs = directories.filter(
+    (directory) =>
+      directory.path.endsWith(".opencode") ||
+      directory.path.endsWith(".graph-vibe") ||
+      directory.path === explicitConfigDir,
+  )
 
-  for (const dir of dirs) {
-    if (!dir.endsWith(".opencode") && dir !== Flag.OPENCODE_CONFIG_DIR) continue
-    for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
+  for (const directory of dirs) {
+    for (const file of ConfigPaths.fileInDirectory(directory.path, "tui")) {
       yield* mergeFile(acc, file)
     }
   }
@@ -221,7 +232,7 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
   return {
     config: result,
     pluginOrigins: acc.plugin_origins,
-    dirs: result.plugin?.length ? dirs : [],
+    dirs: result.plugin?.length ? dirs.filter((directory) => directory.writable).map((directory) => directory.path) : [],
   }
 })
 

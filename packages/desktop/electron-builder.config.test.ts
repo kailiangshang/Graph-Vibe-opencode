@@ -46,3 +46,24 @@ test("keeps a hidden prod launcher for old Linux pins", async () => {
   expect(desktop).toContain("StartupWMClass=ai.opencode.desktop")
   expect(desktop).toContain("NoDisplay=true")
 })
+
+test("Graph Vibe desktop has an independent package identity", async () => {
+  const previousChannel = process.env.OPENCODE_CHANNEL
+  const previousClient = process.env.OPENCODE_CLIENT
+  process.env.OPENCODE_CHANNEL = "prod"
+  process.env.OPENCODE_CLIENT = "graph-vibe"
+
+  const module = await import("./electron-builder.config.ts?product=graph-vibe")
+  const config = module.default as Configuration
+
+  if (previousChannel === undefined) delete process.env.OPENCODE_CHANNEL
+  else process.env.OPENCODE_CHANNEL = previousChannel
+  if (previousClient === undefined) delete process.env.OPENCODE_CLIENT
+  else process.env.OPENCODE_CLIENT = previousClient
+
+  expect(config.appId).toBe("ai.graph-vibe.desktop")
+  expect(config.productName).toBe("Graph Vibe")
+  expect(config.artifactName).toStartWith("graph-vibe-")
+  expect(config.protocols).toEqual({ name: "Graph Vibe", schemes: ["graph-vibe"] })
+  expect(config.publish).toBeUndefined()
+})

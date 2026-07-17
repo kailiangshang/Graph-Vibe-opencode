@@ -278,9 +278,9 @@ describe("PublicApi OpenAPI v2 errors", () => {
   test("documents permission and question not-found errors", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
 
-    expect(
-      componentName(responseRef(spec.paths["/permission/{requestID}/reply"]?.post?.responses?.["404"]) ?? ""),
-    ).toBe("PermissionNotFoundError")
+    expect(componentNames(spec.paths["/permission/{requestID}/reply"]?.post?.responses?.["404"])).toEqual(
+      expect.arrayContaining(["PermissionNotFoundError", "ProductMigrationRequired"]),
+    )
     for (const route of [
       ["post", "/question/{requestID}/reply"],
       ["post", "/question/{requestID}/reject"],
@@ -320,14 +320,16 @@ describe("PublicApi OpenAPI v2 errors", () => {
   test("documents PTY resource and ticket errors", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
 
+    expect(componentName(responseRef(spec.paths["/pty/{ptyID}"]?.get?.responses?.["404"]) ?? "")).toBe(
+      "PtyNotFoundError",
+    )
     for (const route of [
-      ["get", "/pty/{ptyID}"],
       ["put", "/pty/{ptyID}"],
       ["delete", "/pty/{ptyID}"],
       ["post", "/pty/{ptyID}/connect-token"],
     ] as const) {
-      expect(componentName(responseRef(spec.paths[route[1]]?.[route[0]]?.responses?.["404"]) ?? "")).toBe(
-        "PtyNotFoundError",
+      expect(componentNames(spec.paths[route[1]]?.[route[0]]?.responses?.["404"])).toEqual(
+        expect.arrayContaining(["PtyNotFoundError", "ProductMigrationRequired"]),
       )
     }
     expect(componentName(responseRef(spec.paths["/pty/{ptyID}/connect-token"]?.post?.responses?.["403"]) ?? "")).toBe(

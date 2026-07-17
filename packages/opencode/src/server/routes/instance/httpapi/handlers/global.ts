@@ -5,13 +5,14 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
-import { Effect, Queue, Schema } from "effect"
+import { Effect, Layer, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
+import { productMigrationHandlers } from "./product-migration"
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -65,7 +66,7 @@ function eventResponse() {
   })
 }
 
-export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handlers) =>
+const globalGroupHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handlers) =>
   Effect.gen(function* () {
     const config = yield* Config.Service
     const installation = yield* Installation.Service
@@ -154,3 +155,6 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handleRaw("upgrade", upgradeRaw)
   }),
 )
+
+export const globalHandlers = Layer.merge(globalGroupHandlers, productMigrationHandlers)
+export const globalHandlerLayers = [globalHandlers] as const

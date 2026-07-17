@@ -16,6 +16,8 @@ import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
 import { InstanceState } from "@/effect/instance-state"
@@ -59,6 +61,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
+    const migration = yield* ProductMigrationState.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -176,6 +179,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* migration.requireCompleted()
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
       return true
     })
@@ -184,6 +188,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof UpdatePayload.Type
     }) {
+      yield* migration.requireCompleted()
       const current = yield* requireSession(ctx.params.sessionID)
       if (ctx.payload.title !== undefined) {
         yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
@@ -230,6 +235,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* migration.requireCompleted()
       yield* promptSvc.cancel(ctx.params.sessionID)
       return true
     })
@@ -238,6 +244,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof InitPayload.Type
     }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       yield* promptSvc
         .command({
@@ -247,7 +254,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           command: Command.Default.INIT,
           arguments: "",
         })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof ProductMigration.Required ? error : new HttpApiError.BadRequest({}),
+          ),
+        )
       return true
     })
 
@@ -257,12 +268,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     // ErrorMiddleware → NamedError.Unknown 500) instead of blanket-mapping
     // every failure to a 400 BadRequest.
     const share = Effect.fn("SessionHttpApi.share")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       yield* shareSvc.share(ctx.params.sessionID).pipe(Effect.mapError(() => new HttpApiError.InternalServerError({})))
       return yield* requireSession(ctx.params.sessionID)
     })
 
     const unshare = Effect.fn("SessionHttpApi.unshare")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       yield* shareSvc
         .unshare(ctx.params.sessionID)
@@ -274,6 +287,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof SummarizePayload.Type
     }) {
+      yield* migration.requireCompleted()
       yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
       const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       const defaultAgent = yield* agentSvc.defaultAgent()
@@ -296,13 +310,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       const message = yield* promptSvc
         .prompt({
           ...ctx.payload,
           sessionID: ctx.params.sessionID,
         })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof ProductMigration.Required ? error : new HttpApiError.BadRequest({}),
+          ),
+        )
       return HttpServerResponse.stream(Stream.make(JSON.stringify(message)).pipe(Stream.encodeText), {
         contentType: "application/json",
       })
@@ -312,6 +331,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
         Effect.catchCause((cause) =>
@@ -332,10 +352,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof CommandPayload.Type
     }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       return yield* promptSvc
         .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof ProductMigration.Required ? error : new HttpApiError.BadRequest({}),
+          ),
+        )
     })
 
     const shell = Effect.fn("SessionHttpApi.shell")(function* (ctx: {
@@ -350,11 +375,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof RevertPayload.Type
     }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       return yield* SessionError.mapBusy(revertSvc.revert({ sessionID: ctx.params.sessionID, ...ctx.payload }))
     })
 
     const unrevert = Effect.fn("SessionHttpApi.unrevert")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       return yield* SessionError.mapBusy(revertSvc.unrevert({ sessionID: ctx.params.sessionID }))
     })
@@ -363,6 +390,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID; permissionID: PermissionV1.ID }
       payload: typeof PermissionResponsePayload.Type
     }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       yield* permissionSvc.reply({ requestID: ctx.params.permissionID, reply: ctx.payload.response }).pipe(
         Effect.catchTag("Permission.NotFoundError", (error) =>
@@ -380,6 +408,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const deleteMessage = Effect.fn("SessionHttpApi.deleteMessage")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       yield* SessionError.mapBusy(runState.assertNotBusy(ctx.params.sessionID))
       yield* session.removeMessage(ctx.params)
@@ -389,6 +418,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const deletePart = Effect.fn("SessionHttpApi.deletePart")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
     }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       yield* session.removePart(ctx.params)
       return true
@@ -398,6 +428,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
       payload: typeof SessionV1.Part.Type
     }) {
+      yield* migration.requireCompleted()
       yield* requireSession(ctx.params.sessionID)
       const payload = ctx.payload as SessionV1.Part
       if (

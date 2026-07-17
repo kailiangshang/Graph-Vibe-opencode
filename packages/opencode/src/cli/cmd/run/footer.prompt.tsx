@@ -28,6 +28,7 @@ import { realignEditorPromptParts, resolveEditorSlashValue } from "./prompt.edit
 import { FOOTER_MENU_ROWS, createFooterMenuState, type RunFooterMenuItem } from "./footer.menu"
 import type { RunFooterTheme } from "./theme"
 import type { FooterState, RunAgent, RunCommand, RunPrompt, RunPromptPart, RunResource, RunTuiConfig } from "./types"
+import { Product } from "@opencode-ai/core/product"
 
 const AUTOCOMPLETE_ROWS = FOOTER_MENU_ROWS
 const AUTOCOMPLETE_BOTTOM_ROWS = 1
@@ -417,7 +418,12 @@ export function createPromptState(input: PromptInput): PromptState {
         description: "compose in your external editor",
       } satisfies SlashOption,
       { kind: "slash", name: "new", display: "/new", description: "start a new session" } satisfies SlashOption,
-      { kind: "slash", name: "exit", display: "/exit", description: "close OpenCode" } satisfies SlashOption,
+      {
+        kind: "slash",
+        name: "exit",
+        display: "/exit",
+        description: `close ${Product.current().name}`,
+      } satisfies SlashOption,
     ]
     const hidden = new Set(builtins.map((item) => item.name))
     const showSkillMenu = !shell() && skillCommands().length > 0 && !hasSkillsCommand()

@@ -15,6 +15,7 @@ import eventSourcedSessionInputMigration from "@opencode-ai/core/database/migrat
 import contextEpochAgentMigration from "@opencode-ai/core/database/migration/20260605042240_add_context_epoch_agent"
 import simplifyIntegrationCredentialsMigration from "@opencode-ai/core/database/migration/20260611192811_lush_chimera"
 import simplifySessionInputMigration from "@opencode-ai/core/database/migration/20260622202450_simplify_session_input"
+import recoverLegacyArtifactOwnersMigration from "@opencode-ai/core/database/migration/20260712140000_recover_legacy_artifact_owners"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -76,6 +77,15 @@ describe("DatabaseMigration", () => {
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_context_epoch'`),
         ).toEqual({ name: "session_context_epoch" })
         expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'graph_workflow_state'`),
+        ).toEqual({ name: "graph_workflow_state" })
+        expect(
+          yield* db.all(sql`SELECT name FROM pragma_table_info('graph_node') WHERE name = 'verification'`),
+        ).toEqual([{ name: "verification" }])
+        expect(
+          yield* db.all(sql`SELECT name FROM pragma_table_info('graph_tool_run') WHERE name = 'evidence'`),
+        ).toEqual([{ name: "evidence" }])
+        expect(
           yield* db.get(
             sql`SELECT name FROM pragma_table_info('session_context_epoch') WHERE name IN ('agent', 'replacement_seq', 'revision')`,
           ),
@@ -97,6 +107,41 @@ describe("DatabaseMigration", () => {
         ])
       }),
     )
+  })
+
+  test("recovers only pre-PID active artifact reservations", async () => {
+    await run(Effect.gen(function* () {
+      const db = yield* makeDb
+      yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY)`)
+      yield* db.run(sql`CREATE TABLE graph_workflow_state (
+        session_id text PRIMARY KEY, current_node_id text, checkpoint_kind text, checkpoint_scope_node_id text,
+        checkpoint_status text NOT NULL DEFAULT 'none', checkpoint_reason text, revision integer NOT NULL DEFAULT 0,
+        active_operation_id text, active_operation_kind text, active_operation_started_at integer,
+        active_operation_process_id integer, active_operation_runtime_id text
+      )`)
+      yield* db.run(sql`INSERT INTO graph_workflow_state
+        (session_id, current_node_id, checkpoint_status, revision, active_operation_id, active_operation_kind, active_operation_started_at)
+        VALUES ('legacy', 'node-legacy', 'none', 4, 'apply-legacy', 'artifact_apply', 100)`)
+      yield* db.run(sql`INSERT INTO graph_workflow_state
+        (session_id, current_node_id, checkpoint_status, revision, active_operation_id, active_operation_kind, active_operation_process_id, active_operation_runtime_id)
+        VALUES ('owned', 'node-owned', 'none', 7, 'apply-owned', 'artifact_apply', 123, 'runtime')`)
+      yield* DatabaseMigration.applyOnly(db, [recoverLegacyArtifactOwnersMigration])
+      expect(yield* db.get(sql`SELECT active_operation_id, checkpoint_kind, checkpoint_scope_node_id, checkpoint_status, checkpoint_reason, revision FROM graph_workflow_state WHERE session_id = 'legacy'`)).toEqual({
+        active_operation_id: null,
+        checkpoint_kind: "failure",
+        checkpoint_scope_node_id: "node-legacy",
+        checkpoint_status: "pending",
+        checkpoint_reason: "legacy artifact apply reservation recovered during owner fencing upgrade",
+        revision: 5,
+      })
+      expect(yield* db.get(sql`SELECT active_operation_id, active_operation_process_id, active_operation_runtime_id, checkpoint_status, revision FROM graph_workflow_state WHERE session_id = 'owned'`)).toEqual({
+        active_operation_id: "apply-owned",
+        active_operation_process_id: 123,
+        active_operation_runtime_id: "runtime",
+        checkpoint_status: "none",
+        revision: 7,
+      })
+    }))
   })
 
   test("rejects a non-empty database without a session table", async () => {

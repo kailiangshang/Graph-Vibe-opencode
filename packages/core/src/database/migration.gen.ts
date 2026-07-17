@@ -43,5 +43,10 @@ export const migrations = (
     import("./migration/20260630062453_graph"),
     import("./migration/20260702022948_graph_workflow"),
     import("./migration/20260707090730_graph_artifact_draft"),
+    import("./migration/20260710153207_graph_collaboration"),
+    import("./migration/20260712132753_serious_blue_shield"),
+    import("./migration/20260712134131_lazy_skin"),
+    import("./migration/20260712140000_recover_legacy_artifact_owners"),
+    import("./migration/20260714041509_graph-vibe-product-migration"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

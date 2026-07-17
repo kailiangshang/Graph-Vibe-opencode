@@ -3,6 +3,10 @@ import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode-ai/script"
 import { fileURLToPath } from "url"
+import { chmod, readdir } from "node:fs/promises"
+import path from "node:path"
+import { isOpenCodePlatformPackage, packageManifests } from "./package-manifest"
+import { materializeGraphVibeArtifacts } from "./package-artifacts"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
@@ -14,7 +18,17 @@ async function published(name: string, version: string) {
 async function publish(dir: string, name: string, version: string) {
   // GitHub artifact downloads can drop the executable bit, and Docker uses the
   // unpacked dist binaries directly rather than the published tarball.
-  if (process.platform !== "win32") await $`chmod -R 755 .`.cwd(dir)
+  await Promise.all(
+    (await readdir(path.join(dir, "bin"), { withFileTypes: true }))
+      .filter((entry) => entry.isFile())
+      .map((entry) => chmod(path.join(dir, "bin", entry.name), 0o755)),
+  )
+  await Promise.all(
+    ["package.json", "LICENSE", "postinstall.mjs"].map(async (file) => {
+      const target = path.join(dir, file)
+      if (await Bun.file(target).exists()) await chmod(target, 0o644)
+    }),
+  )
   if (await published(name, version)) {
     console.log(`already published ${name}@${version}`)
     return
@@ -25,58 +39,47 @@ async function publish(dir: string, name: string, version: string) {
 
 const binaries: Record<string, string> = {}
 for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" })) {
-  const pkg = await Bun.file(`./dist/${filepath}`).json()
-  binaries[pkg.name] = pkg.version
+  const platform = await Bun.file(`./dist/${filepath}`).json()
+  const directory = filepath.slice(0, -"/package.json".length)
+  if (platform.name === directory && isOpenCodePlatformPackage(platform.name)) binaries[platform.name] = platform.version
 }
-console.log("binaries", binaries)
-const version = Object.values(binaries)[0]
+const graphVibeBinaries = await materializeGraphVibeArtifacts("./dist", Script.version)
+console.log("binaries", { ...binaries, ...graphVibeBinaries })
+const version = Script.version
 
-await $`mkdir -p ./dist/${pkg.name}`
-await $`mkdir -p ./dist/${pkg.name}/bin`
-await $`cp ./script/postinstall.mjs ./dist/${pkg.name}/postinstall.mjs`
-await Bun.file(`./dist/${pkg.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
-await Bun.file(`./dist/${pkg.name}/bin/${pkg.name}.exe`).write(
-  [
-    `echo "Error: ${pkg.name}-ai's postinstall script was not run." >&2`,
+const manifests = packageManifests(version, binaries, pkg.license)
+for (const manifest of Object.values(manifests)) {
+  const target = `./dist/${manifest.name}`
+  const executable = Object.keys(manifest.bin)[0]
+  await $`mkdir -p ${target}/bin`
+  await $`cp ./script/postinstall.mjs ${target}/postinstall.mjs`
+  await Bun.file(`${target}/LICENSE`).write(await Bun.file("../../LICENSE").text())
+  await Bun.file(`${target}/bin/${executable}.exe`).write(
+    [
+    `echo "Error: ${manifest.name}'s postinstall script was not run." >&2`,
     'echo "" >&2',
     'echo "This occurs when using --ignore-scripts during installation, or when using a" >&2',
     'echo "package manager like pnpm that does not run postinstall scripts by default." >&2',
     'echo "" >&2',
     'echo "To fix this, run the postinstall script manually:" >&2',
-    `echo "  cd node_modules/${pkg.name}-ai && node postinstall.mjs" >&2`,
+    `echo "  cd node_modules/${manifest.name} && node postinstall.mjs" >&2`,
     'echo "" >&2',
-    `echo "Or reinstall ${pkg.name}-ai without the --ignore-scripts flag." >&2`,
+    `echo "Or reinstall ${manifest.name} without the --ignore-scripts flag." >&2`,
     "exit 1",
     "",
-  ].join("\n"),
-)
+    ].join("\n"),
+  )
+  if (manifest.name === "graph-vibe") await $`cp ./bin/graph-vibe.cjs ${target}/bin/graph-vibe.cjs`
+  await Bun.file(`${target}/package.json`).write(JSON.stringify(manifest, null, 2))
+}
 
-await Bun.file(`./dist/${pkg.name}/package.json`).write(
-  JSON.stringify(
-    {
-      name: pkg.name + "-ai",
-      bin: {
-        [pkg.name]: `./bin/${pkg.name}.exe`,
-      },
-      scripts: {
-        postinstall: "node ./postinstall.mjs",
-      },
-      version: version,
-      license: pkg.license,
-      os: ["darwin", "linux", "win32"],
-      cpu: ["arm64", "x64"],
-      optionalDependencies: binaries,
-    },
-    null,
-    2,
-  ),
-)
-
-const tasks = Object.entries(binaries).map(async ([name]) => {
-  await publish(`./dist/${name}`, name, binaries[name])
+const platformBinaries = { ...binaries, ...graphVibeBinaries }
+const tasks = Object.entries(platformBinaries).map(async ([name, platformVersion]) => {
+  await publish(`./dist/${name}`, name, platformVersion)
 })
 await Promise.all(tasks)
-await publish(`./dist/${pkg.name}`, `${pkg.name}-ai`, version)
+await publish(`./dist/${manifests.opencode.name}`, manifests.opencode.name, version)
+await publish(`./dist/${manifests.graphVibe.name}`, manifests.graphVibe.name, version)
 
 const image = "ghcr.io/anomalyco/opencode"
 const platforms = "linux/amd64,linux/arm64"

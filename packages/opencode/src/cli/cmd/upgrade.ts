@@ -3,10 +3,11 @@ import { UI } from "../ui"
 import * as prompts from "@clack/prompts"
 import { Installation } from "../../installation"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { Product } from "@opencode-ai/core/product"
 
 export const UpgradeCommand = {
   command: "upgrade [target]",
-  describe: "upgrade opencode to the latest or a specific version",
+  describe: `upgrade ${Product.commandName()} to the latest or a specific version`,
   builder: (yargs: Argv) => {
     return yargs
       .positional("target", {
@@ -25,6 +26,12 @@ export const UpgradeCommand = {
     UI.println(UI.logo("  "))
     UI.empty()
     prompts.intro("Upgrade")
+    if (!Installation.releaseAvailable(Product.current())) {
+      prompts.log.error("Graph Vibe upgrades are unavailable until its release channel is configured")
+      prompts.outro("Done")
+      process.exitCode = 1
+      return
+    }
     const detectedMethod = await Installation.method()
     const method = (args.method as Installation.Method) ?? detectedMethod
     if (method === "unknown") {

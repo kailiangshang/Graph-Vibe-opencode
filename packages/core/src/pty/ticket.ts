@@ -2,6 +2,8 @@ export * as PtyTicket from "./ticket"
 
 import { WorkspaceV2 } from "../workspace"
 import { PtyTicket } from "@opencode-ai/schema/pty-ticket"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
+import { ProductMigrationState } from "../product-migration/state"
 import { PtyID } from "./schema"
 import { Cache, Context, Duration, Effect, Layer } from "effect"
 import { makeGlobalNode } from "../effect/app-node"
@@ -18,8 +20,8 @@ export type Scope = {
 }
 
 export interface Interface {
-  issue(input: Scope): Effect.Effect<typeof ConnectToken.Type>
-  consume(input: Scope & { readonly ticket: string }): Effect.Effect<boolean>
+  issue(input: Scope): Effect.Effect<typeof ConnectToken.Type, ProductMigration.Required>
+  consume(input: Scope & { readonly ticket: string }): Effect.Effect<boolean, ProductMigration.Required>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/PtyTicket") {}
@@ -37,15 +39,18 @@ const noLookup = () => Effect.die("PtyTicket cache must be used via set/invalida
 // Visible for tests so the TTL can be shortened. Production uses `layer` with the default TTL.
 export const make = (ttl: Duration.Input = DEFAULT_TTL) =>
   Effect.gen(function* () {
+    const migration = yield* ProductMigrationState.Service
     const cache = yield* Cache.make<string, Scope>({ capacity: CAPACITY, lookup: noLookup, timeToLive: ttl })
     const expiresIn = Math.max(1, Math.round(Duration.toSeconds(Duration.fromInputUnsafe(ttl))))
     return Service.of({
       issue: Effect.fn("PtyTicket.issue")(function* (input) {
+        yield* migration.requireCompleted()
         const ticket = crypto.randomUUID()
         yield* Cache.set(cache, ticket, input)
         return { ticket, expires_in: expiresIn }
       }),
       consume: Effect.fn("PtyTicket.consume")(function* (input) {
+        yield* migration.requireCompleted()
         return yield* Cache.invalidateWhen(cache, input.ticket, (stored) => matches(stored, input))
       }),
     })
@@ -53,4 +58,4 @@ export const make = (ttl: Duration.Input = DEFAULT_TTL) =>
 
 const layer = Layer.effect(Service, make())
 
-export const node = makeGlobalNode({ service: Service, layer: layer, deps: [] })
+export const node = makeGlobalNode({ service: Service, layer: layer, deps: [ProductMigrationState.node] })

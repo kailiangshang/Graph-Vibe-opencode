@@ -4,6 +4,8 @@ import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { useSync } from "../context/sync"
 import { For, Match, Switch, Show, createMemo } from "solid-js"
+import { Flag } from "@opencode-ai/core/flag/flag"
+import { Product } from "@opencode-ai/core/product"
 
 export type DialogStatusProps = {}
 
@@ -50,6 +52,17 @@ export function DialogStatus() {
           esc
         </text>
       </box>
+      {Flag.OPENCODE_EXPERIMENTAL_GRAPH_MODE && (
+        <box flexDirection="row" gap={1}>
+          <text fg={theme.text} attributes={TextAttributes.BOLD}>
+            Graph Workflow
+          </text>
+          <text fg={theme.success}>Active</text>
+        </box>
+      )}
+      {Product.current() === Product.GraphVibe && !Flag.OPENCODE_EXPERIMENTAL_GRAPH_MODE && (
+        <text fg={theme.warning}>Graph Workflow disabled. Start with `graph-vibe` to enable it.</text>
+      )}
       <Show when={Object.keys(sync.data.mcp).length > 0} fallback={<text fg={theme.text}>No MCP Servers</text>}>
         <box>
           <text fg={theme.text}>{Object.keys(sync.data.mcp).length} MCP Servers</text>

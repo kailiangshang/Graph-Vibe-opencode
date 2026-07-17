@@ -1482,6 +1482,34 @@ it.instance("local .opencode config can override MCP from project config", () =>
   }),
 )
 
+it.instance("Graph Vibe reads .opencode without writing and overlays .graph-vibe", () =>
+  withProcessEnv(
+    "OPENCODE_CLIENT",
+    "graph-vibe",
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const openDir = path.join(test.directory, ".opencode")
+      const graphDir = path.join(test.directory, ".graph-vibe")
+      yield* FSUtil.use.ensureDir(openDir)
+      yield* FSUtil.use.ensureDir(graphDir)
+      const openFile = path.join(openDir, "opencode.json")
+      const source = JSON.stringify({ model: "open/model" }, null, 2)
+      yield* FSUtil.use.writeFileString(openFile, source)
+      yield* FSUtil.use.writeFileString(
+        path.join(graphDir, "graph-vibe.json"),
+        JSON.stringify({ model: "graph/model" }, null, 2),
+      )
+
+      const config = yield* Config.use.get()
+
+      expect(config.model).toBe("graph/model")
+      expect(yield* FSUtil.use.readFileString(openFile)).toBe(source)
+      expect(yield* FSUtil.use.existsSafe(path.join(openDir, ".gitignore"))).toBe(false)
+      expect(yield* FSUtil.use.existsSafe(path.join(openDir, "package.json"))).toBe(false)
+    }),
+  ),
+)
+
 const remoteProjectOverride = wellKnown({
   config: {
     mcp: { jira: { type: "remote", url: "https://jira.example.com/mcp", enabled: false } },

@@ -14,6 +14,7 @@ const original = {
   OPENCODE_SERVER_USERNAME: Flag.OPENCODE_SERVER_USERNAME,
   envPassword: process.env.OPENCODE_SERVER_PASSWORD,
   envUsername: process.env.OPENCODE_SERVER_USERNAME,
+  client: process.env.OPENCODE_CLIENT,
 }
 const auth = { username: "opencode", password: "listen-secret" }
 const testPty = process.platform === "win32" ? test.skip : test
@@ -25,6 +26,8 @@ afterEach(async () => {
   else process.env.OPENCODE_SERVER_PASSWORD = original.envPassword
   if (original.envUsername === undefined) delete process.env.OPENCODE_SERVER_USERNAME
   else process.env.OPENCODE_SERVER_USERNAME = original.envUsername
+  if (original.client === undefined) delete process.env.OPENCODE_CLIENT
+  else process.env.OPENCODE_CLIENT = original.client
   await disposeAllInstances()
   await resetDatabase()
 })
@@ -355,6 +358,7 @@ describe("HttpApi Server.listen", () => {
 
   test("port 0 prefers 4096 when free", async () => {
     if (!(await isPortFree(4096))) return
+    delete process.env.OPENCODE_CLIENT
     const listener = await startListener()
     try {
       expect(listener.port).toBe(4096)
@@ -363,7 +367,19 @@ describe("HttpApi Server.listen", () => {
     }
   })
 
+  test("Graph Vibe port 0 prefers 4097 when free", async () => {
+    if (!(await isPortFree(4096)) || !(await isPortFree(4097))) return
+    process.env.OPENCODE_CLIENT = "graph-vibe"
+    const listener = await startListener()
+    try {
+      expect(listener.port).toBe(4097)
+    } finally {
+      await stop(listener, "timed out cleaning up Graph Vibe preferred-port listener")
+    }
+  })
+
   test("port 0 falls back when 4096 is taken", async () => {
+    delete process.env.OPENCODE_CLIENT
     const blocker = await occupyPort(4096)
     if (!blocker) return
     try {
@@ -373,6 +389,25 @@ describe("HttpApi Server.listen", () => {
         expect(listener.port).toBeGreaterThan(0)
       } finally {
         await stop(listener, "timed out cleaning up port-0 fallback listener")
+      }
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()))
+    }
+  })
+
+  test("Graph Vibe port 0 falls back to an ephemeral port when 4097 is taken", async () => {
+    if (!(await isPortFree(4096))) return
+    const blocker = await occupyPort(4097)
+    if (!blocker) return
+    process.env.OPENCODE_CLIENT = "graph-vibe"
+    try {
+      const listener = await startListener()
+      try {
+        expect(listener.port).not.toBe(4096)
+        expect(listener.port).not.toBe(4097)
+        expect(listener.port).toBeGreaterThan(0)
+      } finally {
+        await stop(listener, "timed out cleaning up Graph Vibe fallback listener")
       }
     } finally {
       await new Promise<void>((resolve) => blocker.close(() => resolve()))

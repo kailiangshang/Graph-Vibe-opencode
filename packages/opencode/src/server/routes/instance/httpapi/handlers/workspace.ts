@@ -3,6 +3,7 @@ import { Workspace } from "@/control-plane/workspace"
 import * as InstanceState from "@/effect/instance-state"
 import { Vcs } from "@/project/vcs"
 import { Cause, Effect } from "effect"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { notFound } from "../errors"
@@ -12,6 +13,7 @@ import { ApiWorkspaceCreateError, ApiWorkspaceWarpError, CreatePayload, WarpPayl
 export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspace", (handlers) =>
   Effect.gen(function* () {
     const workspace = yield* Workspace.Service
+    const migration = yield* ProductMigrationState.Service
 
     const adapters = Effect.fn("WorkspaceHttpApi.adapters")(function* () {
       const instance = yield* InstanceState.context
@@ -23,6 +25,7 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
     })
 
     const create = Effect.fn("WorkspaceHttpApi.create")(function* (ctx: { payload: typeof CreatePayload.Type }) {
+      yield* migration.requireCompleted()
       const instance = yield* InstanceState.context
       return yield* workspace
         .create({
@@ -49,6 +52,7 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
     })
 
     const syncList = Effect.fn("WorkspaceHttpApi.syncList")(function* () {
+      yield* migration.requireCompleted()
       yield* workspace.syncList((yield* InstanceState.context).project)
     })
 
@@ -58,10 +62,12 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
     })
 
     const remove = Effect.fn("WorkspaceHttpApi.remove")(function* (ctx: { params: { id: Workspace.Info["id"] } }) {
+      yield* migration.requireCompleted()
       return yield* workspace.remove(ctx.params.id)
     })
 
     const warp = Effect.fn("WorkspaceHttpApi.warp")(function* (ctx: { payload: typeof WarpPayload.Type }) {
+      yield* migration.requireCompleted()
       yield* workspace
         .sessionWarp({
           workspaceID: ctx.payload.id,

@@ -77,13 +77,24 @@ export function serveEmbeddedUIEffect(
 
 export function serveUIEffect(
   request: HttpServerRequest.HttpServerRequest,
-  services: { fs: FSUtil.Interface; client: HttpClient.HttpClient; disableEmbeddedWebUi: boolean },
+  services: {
+    fs: FSUtil.Interface
+    client: HttpClient.HttpClient
+    disableEmbeddedWebUi: boolean
+    allowUpstreamFallback: boolean
+  },
 ) {
   return Effect.gen(function* () {
     const embeddedWebUI = yield* Effect.promise(() => embeddedUI(services.disableEmbeddedWebUi))
     const path = new URL(request.url, "http://localhost").pathname
 
     if (embeddedWebUI) return yield* serveEmbeddedUIEffect(path, services.fs, embeddedWebUI)
+    if (!services.allowUpstreamFallback) {
+      return HttpServerResponse.text(
+        "Graph Vibe Web assets are unavailable. Rebuild Graph Vibe with embedded Web assets or run it from the source launcher.",
+        { status: 503 },
+      )
+    }
 
     const response = yield* services.client.execute(
       HttpClientRequest.make(request.method)(upstreamURL(path), {

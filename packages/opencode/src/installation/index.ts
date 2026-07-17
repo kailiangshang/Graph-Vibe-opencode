@@ -14,10 +14,32 @@ import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { NpmConfig } from "@opencode-ai/core/npm-config"
 import { InstallationEvent } from "@opencode-ai/schema/installation-event"
+import { Product } from "@opencode-ai/core/product"
 
 export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "unknown"
 
 export type ReleaseType = "patch" | "minor" | "major"
+
+export function packageName(profile: Product.Profile, method: Method) {
+  if (method === "npm" || method === "yarn" || method === "pnpm" || method === "bun") return profile.package
+  return profile === Product.GraphVibe ? "graph-vibe" : "opencode"
+}
+
+export function methodProbeCommands(profile: Product.Profile): Array<{ name: Method; command: string[] }> {
+  return [
+    { name: "npm", command: ["npm", "list", "-g", "--depth=0"] },
+    { name: "yarn", command: ["yarn", "global", "list"] },
+    { name: "pnpm", command: ["pnpm", "list", "-g", "--depth=0"] },
+    { name: "bun", command: ["bun", "pm", "ls", "-g"] },
+    { name: "brew", command: ["brew", "list", "--formula", packageName(profile, "brew")] },
+    { name: "scoop", command: ["scoop", "list", packageName(profile, "scoop")] },
+    { name: "choco", command: ["choco", "list", "--limit-output", packageName(profile, "choco")] },
+  ]
+}
+
+export function releaseAvailable(profile: Product.Profile) {
+  return profile === Product.OpenCode
+}
 
 export const Event = InstallationEvent
 
@@ -74,7 +96,7 @@ const ScoopManifest = NpmPackage
 
 export interface Interface {
   readonly info: () => Effect.Effect<Info>
-  readonly method: () => Effect.Effect<Method>
+  readonly method: (profile?: Product.Profile) => Effect.Effect<Method>
   readonly latest: (method?: Method) => Effect.Effect<string>
   readonly upgrade: (method: Method, target: string) => Effect.Effect<void, UpgradeFailedError>
 }
@@ -171,20 +193,15 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
           latest: yield* result.latest(),
         }
       }),
-      method: Effect.fn("Installation.method")(function* () {
+      method: Effect.fn("Installation.method")(function* (profile = Product.current()) {
         if (process.execPath.includes(path.join(".opencode", "bin"))) return "curl" as Method
         if (process.execPath.includes(path.join(".local", "bin"))) return "curl" as Method
         const exec = process.execPath.toLowerCase()
 
-        const checks: Array<{ name: Method; command: () => Effect.Effect<string> }> = [
-          { name: "npm", command: () => text(["npm", "list", "-g", "--depth=0"]) },
-          { name: "yarn", command: () => text(["yarn", "global", "list"]) },
-          { name: "pnpm", command: () => text(["pnpm", "list", "-g", "--depth=0"]) },
-          { name: "bun", command: () => text(["bun", "pm", "ls", "-g"]) },
-          { name: "brew", command: () => text(["brew", "list", "--formula", "opencode"]) },
-          { name: "scoop", command: () => text(["scoop", "list", "opencode"]) },
-          { name: "choco", command: () => text(["choco", "list", "--limit-output", "opencode"]) },
-        ]
+        const checks = methodProbeCommands(profile).map((probe) => ({
+          name: probe.name,
+          command: () => text(probe.command),
+        }))
 
         checks.sort((a, b) => {
           const aMatches = exec.includes(a.name)
@@ -196,8 +213,7 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
 
         for (const check of checks) {
           const output = yield* check.command()
-          const installedName =
-            check.name === "brew" || check.name === "choco" || check.name === "scoop" ? "opencode" : "opencode-ai"
+          const installedName = packageName(profile, check.name)
           if (output.includes(installedName)) {
             return check.name
           }
@@ -206,6 +222,7 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
         return "unknown" as Method
       }),
       latest: Effect.fn("Installation.latest")(function* (installMethod?: Method) {
+        if (!releaseAvailable(Product.current())) return InstallationVersion
         const detectedMethod = installMethod || (yield* result.method())
 
         if (detectedMethod === "brew") {
@@ -263,6 +280,9 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
         return data.tag_name.replace(/^v/, "")
       }, Effect.orDie),
       upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {
+        if (!releaseAvailable(Product.current())) {
+          return yield* new UpgradeFailedError({ stderr: "Graph Vibe upgrades are unavailable until its release channel is configured" })
+        }
         let upgradeResult: { code: number; stdout: string; stderr: string } | undefined
         switch (m) {
           case "curl":
@@ -330,7 +350,7 @@ export const node = LayerNode.make({ service: Service, layer: layer, deps: [http
 const { runPromise } = makeRuntime(Service, AppNodeBuilder.build(node))
 
 export const latest = (...args: Parameters<Interface["latest"]>) => runPromise((s) => s.latest(...args))
-export const method = () => runPromise((s) => s.method())
+export const method = (profile?: Product.Profile) => runPromise((s) => s.method(profile))
 export const upgrade = (...args: Parameters<Interface["upgrade"]>) => runPromise((s) => s.upgrade(...args))
 
 export * as Installation from "."

@@ -91,7 +91,7 @@ import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
 import { graphHandlers } from "./handlers/graph"
-import { globalHandlers } from "./handlers/global"
+import { globalHandlerLayers } from "./handlers/global"
 import { instanceHandlers } from "./handlers/instance"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
@@ -119,6 +119,9 @@ import { corsVaryFix } from "./middleware/cors-vary"
 import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
+import { Product } from "@opencode-ai/core/product"
+import { ProductMigrationService } from "@opencode-ai/core/product-migration/service"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -143,7 +146,7 @@ const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provi
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.layer))
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
-  Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
+  Layer.provide([controlHandlers, controlPlaneHandlers, ...globalHandlerLayers]),
   Layer.provide(schemaErrorLayer),
   Layer.provide(httpApiAuthLayer),
 )
@@ -196,13 +199,27 @@ const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effe
   Layer.provide(authOnlyRouterLayer),
 )
 
+const sourceWebReadyRoute = HttpRouter.use((router) =>
+  router.add("GET", "/__graph-vibe/source-ready", (request) => {
+    const token = process.env.OPENCODE_GRAPH_VIBE_SOURCE_TOKEN
+    const requested = new URL(request.url, "http://localhost").searchParams.get("token")
+    if (!token || requested !== token) return Effect.succeed(HttpServerResponse.empty({ status: 404 }))
+    return Effect.succeed(HttpServerResponse.text(token))
+  }),
+)
+
 const uiRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
     const client = yield* HttpClient.HttpClient
     const flags = yield* RuntimeFlags.Service
     yield* router.add("*", "/*", (request) =>
-      serveUIEffect(request, { fs, client, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
+      serveUIEffect(request, {
+        fs,
+        client,
+        disableEmbeddedWebUi: flags.disableEmbeddedWebUi,
+        allowUpstreamFallback: Product.current() !== Product.GraphVibe,
+      }),
     )
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
@@ -274,6 +291,9 @@ const app = LayerNode.group([
   ProjectV2.node,
   ProjectCopy.node,
   PtyTicket.node,
+  ProductMigrationService.node,
+  ProductMigrationState.node,
+  Product.node,
 ])
 
 export function createRoutes(
@@ -288,6 +308,7 @@ export function createRoutes(
     instanceRoutes,
     serverRoutes,
     docRoute,
+    sourceWebReadyRoute,
     uiRoute,
   ).pipe(
     Layer.provide([

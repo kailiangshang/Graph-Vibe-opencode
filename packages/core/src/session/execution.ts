@@ -5,14 +5,17 @@ import { LayerNode } from "../effect/layer-node"
 import { Node } from "../effect/app-node"
 import { SessionRunner } from "./runner/index"
 import { SessionSchema } from "./schema"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 
 export interface Interface {
   /** Snapshots active execution owned by this process. */
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   /** Starts execution while idle or joins the active execution. */
-  readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>
+  readonly resume: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<void, SessionRunner.RunError | ProductMigration.Required>
   /** Registers newly recorded work. Repeated wakeups may coalesce. */
-  readonly wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly wake: (sessionID: SessionSchema.ID) => Effect.Effect<void, ProductMigration.Required>
   /** Interrupt active work owned by this process. Idle interruption is a no-op. */
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
 }

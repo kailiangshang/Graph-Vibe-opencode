@@ -17,7 +17,7 @@
   },
   "bin": {
     "opencode": "./bin/opencode",
-    "graph-vibe": "./bin/opencode"
+    "graph-vibe": "./bin/graph-vibe.cjs"
   },
   "exports": {
     "./*": "./src/*.ts"

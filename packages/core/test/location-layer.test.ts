@@ -1,10 +1,13 @@
 import fs from "fs/promises"
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import os from "node:os"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, Equal, Hash, Schema } from "effect"
+import { DateTime, Effect, Equal, Fiber, Hash, Schema } from "effect"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { define } from "@opencode-ai/plugin/v2/effect"
+import type { VerificationSpec } from "@opencode-ai/schema/graph"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -32,6 +35,9 @@ import { EventV2 } from "../src/event"
 import { Global } from "../src/global"
 import { GraphStorage } from "../src/graph/storage"
 import { GraphNodeTable } from "../src/graph/sql"
+import { GraphToolRunTable } from "../src/graph/workflow/audit.sql"
+import { GraphWorkflowStateTable } from "../src/graph/workflow/state.sql"
+import { GraphDiagnostics } from "../src/graph/workflow/diagnostics"
 import { ModelsDev } from "../src/models-dev"
 import { Npm } from "../src/npm"
 import { Project } from "../src/project"
@@ -44,8 +50,33 @@ import { ApplicationTools } from "../src/tool/application-tools"
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node])),
 )
+const symlinkLive = symlinkAvailable() ? it.live : it.live.skip
+const unixLive = process.platform === "win32" ? it.live.skip : it.live
 
 describe("LocationServiceMap", () => {
+  symlinkLive("invalidates focused execution when the canonical target changes", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
+    ).pipe(Effect.flatMap(([root, outside]) => Effect.gen(function* () {
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(root.path, "test"), { recursive: true })
+        await fs.mkdir(path.join(root.path, "scripts"), { recursive: true })
+        await fs.writeFile(path.join(root.path, "test/inside.txt"), "inside")
+        await fs.writeFile(path.join(outside.path, "outside.txt"), "outside")
+        await fs.symlink(path.join(root.path, "test/inside.txt"), path.join(root.path, "test/focused.test.ts"))
+        await fs.writeFile(path.join(root.path, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/check.ts" } }))
+        await fs.writeFile(path.join(root.path, "scripts/check.ts"), 'const file = process.argv[2]\nif (file) process.exit((await Bun.file(file).text()) === "inside" ? 0 : 1)\n')
+      })
+      const resolution = yield* Effect.promise(() => GraphDiagnostics.resolve({ directory: root.path, verification: { criteria: ["canonical"], diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }] } }))
+      if (!resolution.ok) return yield* Effect.die(new Error(resolution.reason))
+      yield* Effect.promise(() => fs.writeFile(path.join(root.path, "test/inside.txt"), "changed"))
+      const focused = resolution.commands[0]
+      if (!focused) return yield* Effect.die(new Error("missing focused command"))
+      expect(yield* Effect.promise(() => GraphDiagnostics.targetsUnchanged(focused))).toBe(false)
+      expect(focused.args.at(-1)).toBe(path.join(root.path, "test/inside.txt"))
+    }))),
+  )
   it.live("materializes graph tools instead of raw write tools when graph mode is enabled", () =>
     withGraphMode(
       Effect.acquireRelease(
@@ -124,6 +155,7 @@ describe("LocationServiceMap", () => {
                       type: "atomic",
                       name: "Plan status bypass",
                       level: "L2",
+                      verification: { criteria: ["observable result"], diagnostics: [{ name: "test" }] },
                       status: "verified",
                       testStatus: "passed",
                     },
@@ -288,10 +320,541 @@ describe("LocationServiceMap", () => {
                   .pipe(Effect.orDie)
                 expect(node?.status).not.toBe("verified")
                 expect(node?.test_status).not.toBe("passed")
+                const workflow = yield* state.db
+                  .select()
+                  .from(GraphWorkflowStateTable)
+                  .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                const evidence = yield* state.db
+                  .select()
+                  .from(GraphToolRunTable)
+                  .where(eq(GraphToolRunTable.node_id, state.targetNodeID))
+                  .all()
+                  .pipe(Effect.orDie)
+                expect(workflow?.current_node_id).toBe(state.targetNodeID)
+                expect(evidence.find((record) => record.evidence?.kind === "diagnostics")?.evidence).toMatchObject({ complete: false })
               }),
             ),
           ),
         ),
+      ),
+    ),
+  )
+
+  it.live("advances atomic workflow only after complete successful diagnostics and records evidence", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(() =>
+            fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { test: "bun -e 'process.exit(0)'" } })),
+          ).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ]).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-complete",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(
+                    LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) })),
+                  ),
+                )
+                const workflow = yield* state.db
+                  .select()
+                  .from(GraphWorkflowStateTable)
+                  .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                const audit = yield* state.db
+                  .select()
+                  .from(GraphToolRunTable)
+                  .where(eq(GraphToolRunTable.node_id, state.targetNodeID))
+                  .all()
+                  .pipe(Effect.orDie)
+
+                expect(workflow?.current_node_id).toBeNull()
+                expect(workflow?.checkpoint_status).toBe("none")
+                expect(audit.find((record) => record.tool_name === "graph.diagnostics.run")?.evidence).toMatchObject({
+                  kind: "diagnostics",
+                  nodeID: state.targetNodeID,
+                  projectChecksOnly: true,
+                  complete: true,
+                  passed: true,
+                })
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("runs focused paths before complete diagnostics in the current adapter", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(async () => {
+            await fs.mkdir(path.join(dir.path, "test"), { recursive: true })
+            await fs.writeFile(path.join(dir.path, "test/focused.test.ts"), 'import { expect, test } from "bun:test"\ntest("focused", () => expect(true).toBe(true))\n')
+            await fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { test: "bun test" } }))
+          }).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const verification = {
+                  criteria: ["focused behavior passes"],
+                  diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }],
+                } as const
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ], verification).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-focused",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+                )
+                const node = yield* state.db.select().from(GraphNodeTable).where(eq(GraphNodeTable.id, state.targetNodeID)).get().pipe(Effect.orDie)
+                const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
+                const evidence = audit.find((record) => record.tool_name === "graph.diagnostics.run" && record.evidence?.kind === "diagnostics")?.evidence
+                expect(node).toMatchObject({ status: "verified", test_status: "passed" })
+                expect(evidence).toMatchObject({ projectChecksOnly: false, complete: true, passed: true })
+                expect(evidence?.kind === "diagnostics" ? evidence.commands.map((command) => command.command) : []).toEqual([
+                  `bun run test -- ${path.join(dir.path, "test/focused.test.ts")}`,
+                  "bun run test",
+                ])
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("rejects a focused parent directory replaced during current-adapter execution", () =>
+    withGraphMode(
+      Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
+        Effect.flatMap((dir) => Effect.promise(async () => {
+          await fs.mkdir(path.join(dir.path, "test"), { recursive: true })
+          await fs.mkdir(path.join(dir.path, "scripts"), { recursive: true })
+          await fs.writeFile(path.join(dir.path, "test/focused.test.ts"), "original")
+          await fs.writeFile(path.join(dir.path, "scripts/change-parent.ts"), [
+            'import { mkdir, rename, writeFile } from "node:fs/promises"',
+            'import path from "node:path"',
+            "const target = process.argv[2]",
+            "if (target) {",
+            '  const parent = path.dirname(target)',
+            '  await rename(parent, `${parent}-old`)',
+            '  await mkdir(parent)',
+            '  await writeFile(target, "replacement")',
+            "}",
+          ].join("\n"))
+          await fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { test: "bun scripts/change-parent.ts" } }))
+        }).pipe(Effect.andThen(Effect.gen(function* () {
+          const state = yield* setupGraphDiagnostics(dir.path, [
+            { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+          ], { criteria: ["stable parent"], diagnostics: [{ name: "test", paths: ["test/focused.test.ts"] }] }).pipe(
+            Effect.flatMap((state) => executeTool(state.registry, {
+              sessionID: state.sessionID,
+              ...toolIdentity,
+              call: { type: "tool-call", id: "call-diagnostics-parent-swap", name: "graph_diagnostics_run", input: { targetNodeID: state.targetNodeID } },
+            }).pipe(Effect.as(state))),
+            Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+          )
+          const node = yield* state.db.select().from(GraphNodeTable).where(eq(GraphNodeTable.id, state.targetNodeID)).get().pipe(Effect.orDie)
+          const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
+          expect(node).toMatchObject({ status: "implemented", test_status: "failed" })
+          expect(audit.find((record) => record.tool_name === "graph.diagnostics.run")?.evidence).toMatchObject({ kind: "diagnostics", passed: false })
+        }))),
+        ),
+      ),
+    ),
+  )
+
+  it.live("blocks a missing focused path before current-adapter command execution", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(() => fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { test: "true" } }))).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ], {
+                  criteria: ["focused behavior passes"],
+                  diagnostics: [{ name: "test", paths: ["test/missing.test.ts"] }],
+                }).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-missing-focused",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+                )
+                const node = yield* state.db.select().from(GraphNodeTable).where(eq(GraphNodeTable.id, state.targetNodeID)).get().pipe(Effect.orDie)
+                const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
+                expect(node?.status).toBe("implemented")
+                expect(audit.find((record) => record.tool_name === "graph.diagnostics.run")).toMatchObject({
+                  status: "blocked",
+                  output_summary: "verification_path_missing",
+                })
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("blocks option-like focused paths before current-adapter command execution", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(async () => {
+            await fs.writeFile(path.join(dir.path, "--watch"), "sentinel\n")
+            await fs.writeFile(
+              path.join(dir.path, "package.json"),
+              JSON.stringify({ scripts: { test: 'bun -e \'await Bun.write("executed", "1")\'' } }),
+            )
+          }).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ], {
+                  criteria: ["option-like paths never execute"],
+                  diagnostics: [{ name: "test", paths: ["--watch"] }],
+                }).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-option-focused",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+                )
+                const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
+                expect(yield* Effect.promise(() => fileExists(path.join(dir.path, "executed")))).toBe(false)
+                expect(audit.find((record) => record.tool_name === "graph.diagnostics.run")).toMatchObject({
+                  status: "blocked",
+                  output_summary: "verification_path_option",
+                })
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("uses bun test for current persisted no-spec projects without recognized scripts", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(async () => {
+            await fs.writeFile(path.join(dir.path, "fallback.test.ts"), 'import { expect, test } from "bun:test"\ntest("fallback", () => expect(true).toBe(true))\n')
+            await fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ name: "fallback" }))
+          }).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ]).pipe(
+                  Effect.flatMap((state) =>
+                    executeTool(state.registry, {
+                      sessionID: state.sessionID,
+                      ...toolIdentity,
+                      call: {
+                        type: "tool-call",
+                        id: "call-diagnostics-fallback",
+                        name: "graph_diagnostics_run",
+                        input: { targetNodeID: state.targetNodeID },
+                      },
+                    }).pipe(Effect.as(state)),
+                  ),
+                  Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+                )
+                const node = yield* state.db.select().from(GraphNodeTable).where(eq(GraphNodeTable.id, state.targetNodeID)).get().pipe(Effect.orDie)
+                const audit = yield* state.db.select().from(GraphToolRunTable).where(eq(GraphToolRunTable.node_id, state.targetNodeID)).all().pipe(Effect.orDie)
+                const evidence = audit.find((record) => record.tool_name === "graph.diagnostics.run" && record.evidence?.kind === "diagnostics")?.evidence
+                const workflow = yield* state.db.select().from(GraphWorkflowStateTable).where(eq(GraphWorkflowStateTable.session_id, state.sessionID)).get().pipe(Effect.orDie)
+                expect(node).toMatchObject({ status: "verified", test_status: "passed" })
+                expect(evidence).toMatchObject({ projectChecksOnly: true, complete: true, passed: true })
+                expect(evidence?.kind === "diagnostics" ? evidence.commands.map((command) => command.command) : []).toEqual(["bun test"])
+                expect(workflow?.current_node_id).toBeNull()
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("preserves a pause created while diagnostics are running", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.promise(() =>
+            fs.writeFile(
+              path.join(dir.path, "package.json"),
+              JSON.stringify({ scripts: { test: "bun -e 'await Bun.write(\"diagnostics-started\", \"1\"); await Bun.sleep(500)'" } }),
+            ),
+          ).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const state = yield* setupGraphDiagnostics(dir.path, [
+                  { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+                ]).pipe(
+                  Effect.flatMap((state) =>
+                    Effect.gen(function* () {
+                      const run = yield* executeTool(state.registry, {
+                        sessionID: state.sessionID,
+                        ...toolIdentity,
+                        call: {
+                          type: "tool-call",
+                          id: "call-diagnostics-concurrent-pause",
+                          name: "graph_diagnostics_run",
+                          input: { targetNodeID: state.targetNodeID },
+                        },
+                      }).pipe(Effect.forkChild)
+                      yield* waitForFile(path.join(dir.path, "diagnostics-started")).pipe(Effect.timeout("2 seconds"))
+                      const workflow = yield* state.db
+                        .select()
+                        .from(GraphWorkflowStateTable)
+                        .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                        .get()
+                        .pipe(Effect.orDie)
+                      yield* state.db
+                        .update(GraphWorkflowStateTable)
+                        .set({
+                          checkpoint_kind: "pause",
+                          checkpoint_status: "pending",
+                          checkpoint_reason: "user review",
+                          revision: (workflow?.revision ?? 0) + 1,
+                        })
+                        .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                        .run()
+                        .pipe(Effect.orDie)
+                      yield* Fiber.join(run)
+                      return state
+                    }),
+                  ),
+                  Effect.provide(
+                    LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) })),
+                  ),
+                )
+                const node = yield* state.db
+                  .select()
+                  .from(GraphNodeTable)
+                  .where(eq(GraphNodeTable.id, state.targetNodeID))
+                  .get()
+                  .pipe(Effect.orDie)
+                const workflow = yield* state.db
+                  .select()
+                  .from(GraphWorkflowStateTable)
+                  .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                expect(node?.status).toBe("implemented")
+                expect(node?.test_status).not.toBe("passed")
+                expect(workflow).toMatchObject({
+                  current_node_id: state.targetNodeID,
+                  checkpoint_kind: "pause",
+                  checkpoint_status: "pending",
+                  checkpoint_reason: "user review",
+                })
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("creates a durable failure checkpoint when the diagnostics repair budget is exhausted", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            const state = yield* setupGraphDiagnostics(dir.path, [
+              { action: "graph.diagnostics_run", resource: "*", effect: "allow" },
+            ]).pipe(
+              Effect.flatMap((state) =>
+                Effect.gen(function* () {
+                  yield* state.db.insert(GraphToolRunTable).values([
+                    {
+                      id: "gtr_failed_1",
+                      project_id: ProjectV2.ID.global,
+                      session_id: state.sessionID,
+                      node_id: state.targetNodeID,
+                      tool_name: "graph.diagnostics.run",
+                      tool_type: "diagnostics",
+                      status: "failed",
+                    },
+                    {
+                      id: "gtr_failed_2",
+                      project_id: ProjectV2.ID.global,
+                      session_id: state.sessionID,
+                      node_id: state.targetNodeID,
+                      tool_name: "graph.diagnostics.run",
+                      tool_type: "diagnostics",
+                      status: "failed",
+                    },
+                  ]).run().pipe(Effect.orDie)
+                  yield* executeTool(state.registry, {
+                    sessionID: state.sessionID,
+                    ...toolIdentity,
+                    call: {
+                      type: "tool-call",
+                      id: "call-diagnostics-budget-exhausted",
+                      name: "graph_diagnostics_run",
+                      input: { targetNodeID: state.targetNodeID },
+                    },
+                  })
+                  return state
+                }),
+              ),
+              Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+            )
+            const workflow = yield* state.db
+              .select()
+              .from(GraphWorkflowStateTable)
+              .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+              .get()
+              .pipe(Effect.orDie)
+            expect(workflow?.checkpoint_kind).toBe("failure")
+            expect(workflow?.checkpoint_status).toBe("pending")
+            expect(workflow?.checkpoint_reason).toContain("previous failed diagnostics")
+          }),
+        ),
+      ),
+    ),
+  )
+
+  it.live("blocks artifact apply before write permission or filesystem mutation at a checkpoint", () =>
+    withGraphMode(
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            const outputPath = path.join(dir.path, "src", "blocked.ts")
+            yield* setupGraphDiagnostics(dir.path, [
+              { action: "graph.artifact_write", resource: "*", effect: "deny" },
+            ]).pipe(
+              Effect.flatMap((state) =>
+                Effect.gen(function* () {
+                  yield* state.db
+                    .update(GraphWorkflowStateTable)
+                    .set({ checkpoint_kind: "pause", checkpoint_status: "pending", revision: 3 })
+                    .where(eq(GraphWorkflowStateTable.session_id, state.sessionID))
+                    .run()
+                    .pipe(Effect.orDie)
+                  yield* executeTool(state.registry, {
+                    sessionID: state.sessionID,
+                    ...toolIdentity,
+                    call: {
+                      type: "tool-call",
+                      id: "call-artifact-blocked-checkpoint",
+                      name: "graph_artifact_apply",
+                      input: {
+                        targetNodeID: state.targetNodeID,
+                        artifact: { mode: "full", path: "src/blocked.ts", code: "export const blocked = true\n", test: "test\n" },
+                      },
+                    },
+                  })
+                }),
+              ),
+              Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+            )
+
+            expect(yield* Effect.promise(() => fileExists(outputPath))).toBe(false)
+          }),
+        ),
+      ),
+    ),
+  )
+
+  unixLive("preserves executable mode in the current artifact adapter", () =>
+    withGraphMode(
+      Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
+        Effect.flatMap((dir) => Effect.gen(function* () {
+          const destination = path.join(dir.path, "bin/run.sh")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.dirname(destination), { recursive: true })
+            await fs.writeFile(destination, "#!/bin/sh\nexit 0\n")
+            await fs.chmod(destination, 0o755)
+          })
+          yield* setupGraphDiagnostics(dir.path, [
+            { action: "graph.artifact_write", resource: "*", effect: "allow" },
+          ]).pipe(
+            Effect.flatMap((state) => executeTool(state.registry, {
+              sessionID: state.sessionID,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-artifact-mode",
+                name: "graph_artifact_apply",
+                input: { targetNodeID: state.targetNodeID, artifact: { mode: "full", path: "bin/run.sh", code: "#!/bin/sh\necho replaced\n", test: "test\n" } },
+              },
+            })),
+            Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+          )
+          expect((yield* Effect.promise(() => fs.stat(destination))).mode & 0o777).toBe(0o755)
+        })),
       ),
     ),
   )
@@ -499,7 +1062,7 @@ function withGraphMode<A, E, R>(effect: Effect.Effect<A, E, R>) {
   )
 }
 
-function setupGraphDiagnostics(directory: string, permissions: PermissionV2.Ruleset) {
+function setupGraphDiagnostics(directory: string, permissions: PermissionV2.Ruleset, verification?: VerificationSpec) {
   return Effect.gen(function* () {
     const state = yield* setupGraphSession(directory)
     yield* (yield* AgentV2.Service).transform((editor) =>
@@ -519,12 +1082,50 @@ function setupGraphDiagnostics(directory: string, permissions: PermissionV2.Rule
         level: "L2",
         status: "implemented",
         test_status: "pending",
+        verification,
         confidence: 1,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* state.db
+      .insert(GraphWorkflowStateTable)
+      .values({
+        session_id: state.sessionID,
+        project_id: ProjectV2.ID.global,
+        mode: "atomic",
+        current_node_id: targetNodeID,
+        checkpoint_kind: "atomic",
+        checkpoint_scope_node_id: targetNodeID,
+        checkpoint_status: "approved",
+        revision: 2,
       })
       .run()
       .pipe(Effect.orDie)
     return { ...state, targetNodeID }
   })
+}
+
+async function fileExists(file: string) {
+  return fs.access(file).then(() => true, () => false)
+}
+
+function symlinkAvailable() {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "graph-symlink-capability-"))
+  try {
+    writeFileSync(path.join(directory, "target"), "test")
+    symlinkSync(path.join(directory, "target"), path.join(directory, "link"))
+    return true
+  } catch {
+    return false
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+}
+
+function waitForFile(file: string): Effect.Effect<void> {
+  return Effect.promise(() => fileExists(file)).pipe(
+    Effect.flatMap((exists) => exists ? Effect.void : Effect.sleep("10 millis").pipe(Effect.andThen(waitForFile(file)))),
+  )
 }
 
 function setupGraphSession(directory: string) {

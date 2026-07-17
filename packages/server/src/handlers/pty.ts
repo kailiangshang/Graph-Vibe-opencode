@@ -16,6 +16,7 @@ import {
 } from "@opencode-ai/protocol/groups/pty"
 import { response } from "../location"
 import { PtyEnvironment } from "../pty-environment"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 const ticketScope = Effect.gen(function* () {
   const location = yield* Location.Service
@@ -27,6 +28,7 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
     const tickets = yield* PtyTicket.Service
     const cors = yield* CorsConfig
     const environment = yield* PtyEnvironment.Service
+    const migration = yield* ProductMigrationState.Service
 
     return handlers
       .handle(
@@ -38,6 +40,7 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
       .handle(
         "pty.create",
         Effect.fn(function* (ctx) {
+          yield* migration.requireCompleted()
           const pty = yield* Pty.Service
           const location = yield* Location.Service
           const cwd = ctx.payload.cwd || location.directory
@@ -75,6 +78,7 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
       .handle(
         "pty.update",
         Effect.fn(function* (ctx) {
+          yield* migration.requireCompleted()
           const pty = yield* Pty.Service
           return yield* response(
             pty
@@ -98,6 +102,7 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
       .handle(
         "pty.remove",
         Effect.fn(function* (ctx) {
+          yield* migration.requireCompleted()
           const pty = yield* Pty.Service
           yield* pty.remove(ctx.params.ptyID).pipe(
             Effect.catchTag(
@@ -115,6 +120,7 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
       .handle(
         "pty.connectToken",
         Effect.fn(function* (ctx) {
+          yield* migration.requireCompleted()
           const request = yield* HttpServerRequest.HttpServerRequest
           // The custom header forces a CORS preflight, so cross-origin browser pages cannot
           // mint tickets without passing the server's origin policy.
@@ -140,6 +146,7 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
       .handleRaw(
         "pty.connect",
         Effect.fn("PtyHandler.connect")(function* (ctx) {
+          yield* migration.requireCompleted()
           const pty = yield* Pty.Service
           const exists = yield* pty.get(ctx.params.ptyID).pipe(
             Effect.as(true),

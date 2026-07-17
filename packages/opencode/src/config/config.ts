@@ -35,6 +35,7 @@ import { ConfigPlugin } from "./plugin"
 import { ConfigVariable } from "./variable"
 import { Npm } from "@opencode-ai/core/npm"
 import { withTransientReadRetry } from "@/util/effect-http-client"
+import { Product } from "@opencode-ai/core/product"
 
 // Custom merge function that concatenates array fields instead of replacing them
 // Keep remeda's deep conditional merge type out of hot config-loading paths; TS profiling showed it dominates here.
@@ -137,7 +138,8 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Co
 export const use = serviceUse(Service)
 
 function globalConfigFile() {
-  const candidates = ["opencode.jsonc", "opencode.json", "config.json"].map((file) =>
+  const name = Product.current().config
+  const candidates = [`${name}.jsonc`, `${name}.json`, ...(name === "opencode" ? ["config.json"] : [])].map((file) =>
     path.join(Global.Path.config, file),
   )
   for (const file of candidates) {
@@ -212,7 +214,7 @@ const layer = Layer.effect(
 
     const loadConfig = Effect.fnUntraced(function* (
       text: string,
-      options: { path: string } | { dir: string; source: string },
+      options: { path: string; writable?: boolean } | { dir: string; source: string },
       env?: Record<string, string>,
     ) {
       const source = "path" in options ? options.path : options.source
@@ -228,7 +230,7 @@ const layer = Layer.effect(
       if (!("path" in options)) return data
 
       yield* Effect.promise(() => resolveLoadedPlugins(data, options.path))
-      if (!data.$schema) {
+      if (!data.$schema && options.writable !== false) {
         data.$schema = "https://opencode.ai/config.json"
         const updated = text.replace(/^\s*\{/, '{\n  "$schema": "https://opencode.ai/config.json",')
         yield* fs.writeFileString(options.path, updated).pipe(Effect.catch(() => Effect.void))
@@ -236,11 +238,15 @@ const layer = Layer.effect(
       return data
     })
 
-    const loadFile = Effect.fnUntraced(function* (filepath: string, env?: Record<string, string>) {
+    const loadFile = Effect.fnUntraced(function* (
+      filepath: string,
+      env?: Record<string, string>,
+      writable = true,
+    ) {
       yield* Effect.logInfo("loading", { path: filepath })
       const text = yield* readConfigFile(filepath)
       if (!text) return {} as Info
-      return yield* loadConfig(text, { path: filepath }, env)
+      return yield* loadConfig(text, { path: filepath, writable }, env)
     })
 
     const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>) {
@@ -255,12 +261,15 @@ const layer = Layer.effect(
             .pipe(Effect.catch(() => Effect.void))
         }
       }
-      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "config.json"), env))
-      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "opencode.json"), env))
-      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "opencode.jsonc"), env))
+      const name = Product.current().config
+      if (name === "opencode") {
+        result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "config.json"), env))
+      }
+      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, `${name}.json`), env))
+      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, `${name}.jsonc`), env))
 
       const legacy = path.join(Global.Path.config, "config")
-      if (existsSync(legacy)) {
+      if (name === "opencode" && existsSync(legacy)) {
         yield* Effect.promise(() =>
           import(pathToFileURL(legacy).href, { with: { type: "toml" } })
             .then(async (mod) => {
@@ -403,9 +412,15 @@ const layer = Layer.effect(
           yield* Effect.logDebug("loaded custom config", { path: Flag.OPENCODE_CONFIG })
         }
 
+        const graph = Product.current() === Product.GraphVibe
         if (!Flag.OPENCODE_DISABLE_PROJECT_CONFIG) {
           for (const file of yield* ConfigPaths.files("opencode", ctx.directory, ctx.worktree).pipe(Effect.orDie)) {
-            yield* merge(file, yield* loadFile(file, authEnv), "local")
+            yield* merge(file, yield* loadFile(file, authEnv, !graph), "local")
+          }
+          if (graph) {
+            for (const file of yield* ConfigPaths.files("graph-vibe", ctx.directory, ctx.worktree).pipe(Effect.orDie)) {
+              yield* merge(file, yield* loadFile(file, authEnv), "local")
+            }
           }
         }
 
@@ -415,46 +430,50 @@ const layer = Layer.effect(
 
         const directories = yield* ConfigPaths.directories(ctx.directory, ctx.worktree)
 
-        if (Flag.OPENCODE_CONFIG_DIR) {
-          yield* Effect.logDebug("loading config from OPENCODE_CONFIG_DIR", { path: Flag.OPENCODE_CONFIG_DIR })
+        const explicitConfigDir = graph ? Flag.GRAPH_VIBE_CONFIG_DIR : Flag.OPENCODE_CONFIG_DIR
+        if (explicitConfigDir) {
+          yield* Effect.logDebug("loading config from explicit directory", { path: explicitConfigDir })
         }
 
         const deps: Fiber.Fiber<void>[] = []
 
-        for (const dir of directories) {
-          if (dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR) {
-            for (const file of ["opencode.json", "opencode.jsonc"]) {
-              const source = path.join(dir, file)
+        for (const directory of directories) {
+          const dir = directory.path
+          if (dir.endsWith(".opencode") || dir.endsWith(".graph-vibe") || dir === explicitConfigDir) {
+            for (const file of [`${directory.name}.json`, `${directory.name}.jsonc`]) {
+              const source = path.join(directory.path, file)
               yield* Effect.logDebug(`loading config from ${source}`)
-              yield* merge(source, yield* loadFile(source, authEnv))
+              yield* merge(source, yield* loadFile(source, authEnv, directory.writable))
               result.agent ??= {}
               result.mode ??= {}
               result.plugin ??= []
             }
           }
 
-          yield* ensureGitignore(dir).pipe(Effect.orDie)
+          if (directory.writable) {
+            yield* ensureGitignore(dir).pipe(Effect.orDie)
 
-          const dep = yield* npmSvc
-            .install(dir, {
-              add: [
-                {
-                  name: "@opencode-ai/plugin",
-                  version: InstallationLocal ? undefined : InstallationVersion,
-                },
-              ],
-            })
-            .pipe(
-              Effect.exit,
-              Effect.tap((exit) =>
-                Exit.isFailure(exit)
-                  ? Effect.logWarning("background dependency install failed", { dir, error: String(exit.cause) })
-                  : Effect.void,
-              ),
-              Effect.asVoid,
-              Effect.forkDetach,
-            )
-          deps.push(dep)
+            const dep = yield* npmSvc
+              .install(dir, {
+                add: [
+                  {
+                    name: "@opencode-ai/plugin",
+                    version: InstallationLocal ? undefined : InstallationVersion,
+                  },
+                ],
+              })
+              .pipe(
+                Effect.exit,
+                Effect.tap((exit) =>
+                  Exit.isFailure(exit)
+                    ? Effect.logWarning("background dependency install failed", { dir, error: String(exit.cause) })
+                    : Effect.void,
+                ),
+                Effect.asVoid,
+                Effect.forkDetach,
+              )
+            deps.push(dep)
+          }
 
           result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
           result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.load(dir)))
@@ -585,7 +604,7 @@ const layer = Layer.effect(
 
         return {
           config: result,
-          directories,
+          directories: directories.map((directory) => directory.path),
           deps,
           consoleState: {
             consoleManagedProviders: Array.from(consoleManagedProviders),

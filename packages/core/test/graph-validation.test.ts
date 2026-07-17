@@ -10,6 +10,7 @@ function makeNode(over: Partial<Omit<NodeRow, "id">> & { id: NodeID | string }):
     level: "L2", priority: null, category: null, status: "pending", desc: null,
     content: null, codeHash: null, testStatus: "none", confidence: 1,
     timeCreated: 0, timeUpdated: 0, ...over,
+    verification: over.verification ?? null,
     id: over.id as NodeID,
   }
 }
