@@ -3,6 +3,7 @@ import * as InstanceState from "@/effect/instance-state"
 import { Session } from "@/session/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventTable } from "@opencode-ai/core/event/sql"
 import { asc } from "drizzle-orm"
@@ -23,8 +24,10 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
     const scope = yield* Scope.Scope
     const events = yield* EventV2Bridge.Service
     const { db } = yield* Database.Service
+    const migration = yield* ProductMigrationState.Service
 
     const start = Effect.fn("SyncHttpApi.start")(function* () {
+      yield* migration.requireCompleted()
       yield* workspace
         .startWorkspaceSyncing((yield* InstanceState.context).project.id)
         .pipe(Effect.ignore, Effect.forkIn(scope))
@@ -32,6 +35,7 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
     })
 
     const replay = Effect.fn("SyncHttpApi.replay")(function* (ctx: { payload: typeof ReplayPayload.Type }) {
+      yield* migration.requireCompleted()
       const payload: EventV2.SerializedEvent[] = ctx.payload.events.map((event) => ({
         id: event.id,
         aggregateID: event.aggregateID,
@@ -59,6 +63,7 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
     })
 
     const steal = Effect.fn("SyncHttpApi.steal")(function* (ctx: { payload: typeof SessionPayload.Type }) {
+      yield* migration.requireCompleted()
       const workspaceID = yield* InstanceState.workspaceID
       if (!workspaceID) return yield* new HttpApiError.BadRequest({})
 

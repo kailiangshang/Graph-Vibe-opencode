@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { effectCmd } from "../../effect-cmd"
+import { effectCmd, fail } from "../../effect-cmd"
 
 export const AgentCommand = effectCmd({
   command: "agent <name>",
@@ -22,6 +22,10 @@ export const AgentCommand = effectCmd({
   handler: (args) =>
     Effect.gen(function* () {
       const { debugAgent } = yield* Effect.promise(() => import("./agent.handler"))
-      return yield* debugAgent(args)
+      return yield* debugAgent(args).pipe(
+        Effect.catchTag("ProductMigrationRequired", () =>
+          fail("Complete Graph Vibe migration before starting a session"),
+        ),
+      )
     }),
 })

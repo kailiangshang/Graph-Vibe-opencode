@@ -7,6 +7,7 @@ export const OpenCode = {
   config: "opencode",
   backendPort: 4096,
   uiPort: 4096,
+  mdnsDomain: "opencode.local",
   package: "opencode-ai",
   desktopID: "ai.opencode.desktop",
   protocol: "opencode",
@@ -23,6 +24,7 @@ export const GraphVibe = {
   config: "graph-vibe",
   backendPort: 4097,
   uiPort: 4444,
+  mdnsDomain: "graph-vibe.local",
   package: "graph-vibe",
   desktopID: "ai.graph-vibe.desktop",
   protocol: "graph-vibe",
@@ -45,4 +47,23 @@ export function commandName() {
   return product === GraphVibe ? product.name : product.cli
 }
 
+export interface Interface {
+  readonly profile: Profile
+}
+
+export class Service extends Context.Service<Service, Interface>()("@opencode/Product") {}
+
+export const layer = Layer.effect(
+  Service,
+  Effect.sync(() => Service.of({ profile: current() })),
+)
+
+export function layerWith(profile: Profile) {
+  return Layer.succeed(Service, Service.of({ profile }))
+}
+
+export const node = makeGlobalNode({ service: Service, layer, deps: [] })
+
 export * as Product from "./product"
+import { Context, Effect, Layer } from "effect"
+import { makeGlobalNode } from "./effect/app-node"

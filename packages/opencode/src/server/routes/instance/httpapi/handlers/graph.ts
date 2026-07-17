@@ -2,6 +2,7 @@ import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { graphDiff } from "@opencode-ai/core/graph/diff"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 import { Graph } from "@opencode-ai/schema"
 import type { ProjectV2 } from "@opencode-ai/core/project"
 import { Effect } from "effect"
@@ -36,6 +37,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
     const sessionSvc = yield* Session.Service
     const projectSvc = yield* Project.Service
     const events = yield* EventV2Bridge.Service
+    const migration = yield* ProductMigrationState.Service
 
     const resolveProjectFromDirectory = Effect.fn("GraphHttpApi.resolveProjectFromDirectory")(function* () {
       const routeCtx = yield* WorkspaceRouteContext
@@ -163,6 +165,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
     })
 
     const deleteNode = Effect.fn("GraphHttpApi.deleteNode")(function* (ctx: { params: { nodeID: string } }) {
+      yield* migration.requireCompleted()
       const projectID = yield* resolveProjectFromDirectory()
       yield* domain.node.delete(ctx.params.nodeID as Graph.NodeID)
       yield* events.publish(Graph.Event.PlanUpdated, { projectID })
@@ -170,6 +173,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
     })
 
     const deleteEdge = Effect.fn("GraphHttpApi.deleteEdge")(function* (ctx: { params: { edgeID: string } }) {
+      yield* migration.requireCompleted()
       const projectID = yield* resolveProjectFromDirectory()
       yield* domain.edge.delete(ctx.params.edgeID as Graph.EdgeID)
       yield* events.publish(Graph.Event.PlanUpdated, { projectID })
@@ -222,6 +226,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       query: typeof SessionRequiredQuery.Type
       payload: typeof PlanAdmitPayload.Type
     }) {
+      yield* migration.requireCompleted()
       const session = yield* resolveSession(ctx.query.session)
       const result = yield* plan
         .admit({
@@ -249,6 +254,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       query: typeof SessionRequiredQuery.Type
       payload: typeof WorkflowModePayload.Type
     }) {
+      yield* migration.requireCompleted()
       const session = yield* resolveSession(ctx.query.session)
       yield* plan.workflow
         .setMode({
@@ -286,6 +292,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       query: typeof SessionRequiredQuery.Type
       payload: typeof WorkflowApprovePayload.Type
     }) {
+      yield* migration.requireCompleted()
       const session = yield* resolveSession(ctx.query.session)
       yield* plan.workflow
         .approve({
@@ -314,6 +321,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       query: typeof SessionRequiredQuery.Type
       payload: typeof WorkflowPausePayload.Type
     }) {
+      yield* migration.requireCompleted()
       const session = yield* resolveSession(ctx.query.session)
       yield* plan.workflow
         .pause({
@@ -340,6 +348,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       query: typeof SessionRequiredQuery.Type
       payload: void | typeof PromotePayload.Type
     }) {
+      yield* migration.requireCompleted()
       const session = yield* resolveSession(ctx.query.session)
       const result = yield* plan.workflow
         .promote({

@@ -34,6 +34,8 @@ import { InstanceStore } from "@/project/instance-store"
 import { WorkspaceAdapterRuntime } from "./workspace-adapter-runtime"
 import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { WorkspaceEvent } from "@opencode-ai/schema/workspace-event"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 
 export const Info = Schema.Struct({
   ...WorkspaceInfoSchema.fields,
@@ -118,13 +120,14 @@ export class SyncAbortedError extends Schema.TaggedErrorClass<SyncAbortedError>(
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
-type CreateError = Auth.AuthError
+type CreateError = Auth.AuthError | ProductMigration.Required
 type SessionWarpError =
   | WorkspaceNotFoundError
   | SessionEventsNotFoundError
   | SessionWarpHttpError
   | Vcs.PatchApplyError
   | HttpClientError.HttpClientError
+  | ProductMigration.Required
 type WaitForSyncError = SyncTimeoutError | SyncAbortedError
 type SyncLoopError = SyncHttpError | HttpClientError.HttpClientError
 
@@ -132,9 +135,9 @@ export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<Info, CreateError>
   readonly sessionWarp: (input: SessionWarpInput) => Effect.Effect<void, SessionWarpError>
   readonly list: (project: Project.Info) => Effect.Effect<Info[]>
-  readonly syncList: (project: Project.Info) => Effect.Effect<void>
+  readonly syncList: (project: Project.Info) => Effect.Effect<void, ProductMigration.Required>
   readonly get: (id: WorkspaceV2.ID) => Effect.Effect<Info | undefined>
-  readonly remove: (id: WorkspaceV2.ID) => Effect.Effect<Info | undefined>
+  readonly remove: (id: WorkspaceV2.ID) => Effect.Effect<Info | undefined, ProductMigration.Required>
   readonly status: () => Effect.Effect<ConnectionStatus[]>
   readonly isSyncing: (workspaceID: WorkspaceV2.ID) => Effect.Effect<boolean>
   readonly waitForSync: (
@@ -143,7 +146,7 @@ export interface Interface {
     signal?: AbortSignal,
     timeout?: number,
   ) => Effect.Effect<void, WaitForSyncError>
-  readonly startWorkspaceSyncing: (projectID: ProjectV2.ID) => Effect.Effect<void>
+  readonly startWorkspaceSyncing: (projectID: ProjectV2.ID) => Effect.Effect<void, ProductMigration.Required>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Workspace") {}
@@ -162,6 +165,8 @@ const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const fs = yield* FSUtil.Service
     const { db } = yield* Database.Service
+    const migration = yield* ProductMigrationState.Service
+    const mutationGate = migration.requireCompleted()
     const connections = new Map<WorkspaceV2.ID, ConnectionStatus>()
     const syncFibers = yield* FiberMap.make<WorkspaceV2.ID, void, SyncLoopError>()
 
@@ -490,6 +495,7 @@ const layer = Layer.effect(
     })
 
     const create = Effect.fn("Workspace.create")(function* (input: CreateInput) {
+      yield* mutationGate
       const id = WorkspaceV2.ID.ascending(input.id)
       const adapter = getAdapter(input.projectID, input.type)
       const config = yield* WorkspaceAdapterRuntime.configure(adapter, {
@@ -557,6 +563,7 @@ const layer = Layer.effect(
     })
 
     const sessionWarp = Effect.fn("Workspace.sessionWarp")(function* (input: SessionWarpInput) {
+      yield* mutationGate
       return yield* Effect.gen(function* () {
         const current = yield* db
           .select({ workspaceID: SessionTable.workspace_id })
@@ -725,6 +732,7 @@ const layer = Layer.effect(
     })
 
     const syncList = Effect.fn("Workspace.syncList")(function* (project: Project.Info) {
+      yield* mutationGate
       const names = new Set((yield* list(project)).map((workspace) => workspace.name))
       const discovered = yield* Effect.forEach(
         registeredAdapters(project.id),
@@ -783,6 +791,7 @@ const layer = Layer.effect(
     })
 
     const remove = Effect.fn("Workspace.remove")(function* (id: WorkspaceV2.ID) {
+      yield* mutationGate
       const sessions = yield* db
         .select({ id: SessionTable.id, parentID: SessionTable.parent_id })
         .from(SessionTable)
@@ -851,6 +860,7 @@ const layer = Layer.effect(
     })
 
     const startWorkspaceSyncing = Effect.fn("Workspace.startWorkspaceSyncing")(function* (projectID: ProjectV2.ID) {
+      yield* mutationGate
       const rows = yield* db
         .selectDistinct({ workspace: WorkspaceTable })
         .from(WorkspaceTable)
@@ -958,6 +968,7 @@ export const node = LayerNode.make({
     RuntimeFlags.node,
     FSUtil.node,
     Database.node,
+    ProductMigrationState.node,
   ],
 })
 

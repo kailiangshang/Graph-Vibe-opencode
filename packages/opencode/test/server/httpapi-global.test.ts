@@ -7,6 +7,9 @@ import { Auth } from "../../src/auth"
 import { Config } from "../../src/config/config"
 import { Installation } from "../../src/installation"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
+import { ProductMigrationService } from "@opencode-ai/core/product-migration/service"
+import { Product } from "@opencode-ai/core/product"
+import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { ServerAuth } from "../../src/server/auth"
 import { RootHttpApi } from "../../src/server/routes/instance/httpapi/api"
 import { GlobalPaths } from "../../src/server/routes/instance/httpapi/groups/global"
@@ -31,6 +34,9 @@ const apiLayer = HttpRouter.serve(
   Layer.provide(Layer.mock(Auth.Service)({})),
   Layer.provide(Layer.mock(Config.Service)({})),
   Layer.provide(Layer.mock(MoveSession.Service)({})),
+  Layer.provide(Layer.mock(ProductMigrationService.Service)({})),
+  Layer.provide(Layer.mock(EventV2Bridge.Service)({})),
+  Layer.provide(Product.layerWith(Product.OpenCode)),
   Layer.provide(
     Layer.mock(Installation.Service)({
       method: () => Effect.succeed("npm"),

@@ -165,6 +165,30 @@ import type {
   PermissionRuleset,
   PermissionV2Reply,
   PermissionV2Source,
+  ProductMigrationDiscoverErrors,
+  ProductMigrationDiscoverPayload,
+  ProductMigrationDiscoverResponses,
+  ProductMigrationDraftPayload,
+  ProductMigrationExecuteErrors,
+  ProductMigrationExecuteResponses,
+  ProductMigrationFinalizeErrors,
+  ProductMigrationFinalizeResponses,
+  ProductMigrationFreshStartErrors,
+  ProductMigrationFreshStartResponses,
+  ProductMigrationGetErrors,
+  ProductMigrationGetResponses,
+  ProductMigrationItemPayload,
+  ProductMigrationPauseErrors,
+  ProductMigrationPauseResponses,
+  ProductMigrationRetryErrors,
+  ProductMigrationRetryResponses,
+  ProductMigrationRevisionPayload,
+  ProductMigrationSkipErrors,
+  ProductMigrationSkipResponses,
+  ProductMigrationUpdateDraftErrors,
+  ProductMigrationUpdateDraftResponses,
+  ProductMigrationValidateErrors,
+  ProductMigrationValidateResponses,
   ProjectCommands,
   ProjectCurrentErrors,
   ProjectCurrentResponses,
@@ -1414,6 +1438,272 @@ export class Global extends HeyApiClient {
   private _config?: Config
   get config(): Config {
     return (this._config ??= new Config({ client: this.client }))
+  }
+}
+
+export class ProductMigration extends HeyApiClient {
+  /**
+   * Get product migration
+   *
+   * Get the current Graph Vibe product migration projection.
+   */
+  public get<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ProductMigrationGetResponses, ProductMigrationGetErrors, ThrowOnError>({
+      url: "/global/product-migration",
+      ...options,
+    })
+  }
+
+  /**
+   * Discover migration source
+   */
+  public discover<ThrowOnError extends boolean = false>(
+    parameters: {
+      productMigrationDiscoverPayload: ProductMigrationDiscoverPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ key: "productMigrationDiscoverPayload", map: "body" }] }],
+    )
+    return (options?.client ?? this.client).post<
+      ProductMigrationDiscoverResponses,
+      ProductMigrationDiscoverErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-migration/discover",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Update migration draft
+   */
+  public updateDraft<ThrowOnError extends boolean = false>(
+    parameters: {
+      productMigrationDraftPayload: ProductMigrationDraftPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "productMigrationDraftPayload", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      ProductMigrationUpdateDraftResponses,
+      ProductMigrationUpdateDraftErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-migration/draft",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Execute or resume migration
+   */
+  public execute<ThrowOnError extends boolean = false>(
+    parameters: {
+      productMigrationRevisionPayload: ProductMigrationRevisionPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ key: "productMigrationRevisionPayload", map: "body" }] }],
+    )
+    return (options?.client ?? this.client).post<
+      ProductMigrationExecuteResponses,
+      ProductMigrationExecuteErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-migration/execute",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Pause migration
+   */
+  public pause<ThrowOnError extends boolean = false>(
+    parameters: {
+      productMigrationRevisionPayload: ProductMigrationRevisionPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ key: "productMigrationRevisionPayload", map: "body" }] }],
+    )
+    return (options?.client ?? this.client).post<
+      ProductMigrationPauseResponses,
+      ProductMigrationPauseErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-migration/pause",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Retry migration item
+   */
+  public retry<ThrowOnError extends boolean = false>(
+    parameters: {
+      productMigrationItemPayload: ProductMigrationItemPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "productMigrationItemPayload", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      ProductMigrationRetryResponses,
+      ProductMigrationRetryErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-migration/retry",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Skip migration item
+   */
+  public skip<ThrowOnError extends boolean = false>(
+    parameters: {
+      productMigrationItemPayload: ProductMigrationItemPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "productMigrationItemPayload", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      ProductMigrationSkipResponses,
+      ProductMigrationSkipErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-migration/skip",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Validate migration
+   */
+  public validate<ThrowOnError extends boolean = false>(
+    parameters: {
+      productMigrationRevisionPayload: ProductMigrationRevisionPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ key: "productMigrationRevisionPayload", map: "body" }] }],
+    )
+    return (options?.client ?? this.client).post<
+      ProductMigrationValidateResponses,
+      ProductMigrationValidateErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-migration/validate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Finalize migration
+   */
+  public finalize<ThrowOnError extends boolean = false>(
+    parameters: {
+      productMigrationRevisionPayload: ProductMigrationRevisionPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ key: "productMigrationRevisionPayload", map: "body" }] }],
+    )
+    return (options?.client ?? this.client).post<
+      ProductMigrationFinalizeResponses,
+      ProductMigrationFinalizeErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-migration/finalize",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Start Graph Vibe without import
+   */
+  public freshStart<ThrowOnError extends boolean = false>(
+    parameters: {
+      productMigrationRevisionPayload: ProductMigrationRevisionPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ key: "productMigrationRevisionPayload", map: "body" }] }],
+    )
+    return (options?.client ?? this.client).post<
+      ProductMigrationFreshStartResponses,
+      ProductMigrationFreshStartErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-migration/fresh-start",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 }
 
@@ -7660,6 +7950,11 @@ export class OpencodeClient extends HeyApiClient {
   private _global?: Global
   get global(): Global {
     return (this._global ??= new Global({ client: this.client }))
+  }
+
+  private _productMigration?: ProductMigration
+  get productMigration(): ProductMigration {
+    return (this._productMigration ??= new ProductMigration({ client: this.client }))
   }
 
   private _event?: Event

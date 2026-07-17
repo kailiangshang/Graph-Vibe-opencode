@@ -13,8 +13,16 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Effect } from "effect"
 import { testEffect } from "../lib/effect"
+import { Product } from "@opencode-ai/core/product"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 const it = testEffect(LayerNode.compile(LayerNode.group([Project.node, Database.node, CrossSpawnSpawner.node])))
+const graphVibe = testEffect(
+  LayerNode.compile(
+    LayerNode.group([Project.node, Database.node, CrossSpawnSpawner.node, ProductMigrationState.node]),
+    [[Product.node, Product.layerWith(Product.GraphVibe)]],
+  ),
+)
 
 function legacySessionID() {
   // Global-session migration covers persisted IDs from before prefixed session IDs.
@@ -59,6 +67,50 @@ function ensureGlobal() {
 }
 
 describe("migrateFromGlobal", () => {
+  graphVibe.live("does not mutate global sessions before product migration completes", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped({ git: true })
+      const projects = yield* Project.Service
+      const { project } = yield* projects.fromDirectory(tmp)
+      yield* ensureGlobal()
+      const id = legacySessionID()
+      yield* seed({ id, dir: tmp, project: ProjectV2.ID.global })
+
+      yield* projects.fromDirectory(tmp)
+
+      const row = yield* Database.Service.use(({ db }) =>
+        db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie),
+      )
+      expect(row?.project_id).toBe(ProjectV2.ID.global)
+      expect(project.id).not.toBe(ProjectV2.ID.global)
+    }),
+  )
+
+  graphVibe.live("retains the original project and sessions when project identity changes before migration", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped({ git: true })
+      const projects = yield* Project.Service
+      const { project: original } = yield* projects.fromDirectory(tmp)
+      const id = legacySessionID()
+      yield* seed({ id, dir: tmp, project: original.id })
+      yield* Effect.promise(() => $`git remote add origin git@github.com:acme/migration-gate.git`.cwd(tmp).quiet())
+
+      const { project: changed } = yield* projects.fromDirectory(tmp)
+
+      const { db } = yield* Database.Service
+      const session = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
+      const project = yield* db
+        .select()
+        .from(ProjectTable)
+        .where(eq(ProjectTable.id, original.id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(changed.id).not.toBe(original.id)
+      expect(session?.project_id).toBe(original.id)
+      expect(project).toBeDefined()
+    }),
+  )
+
   it.live("migrates global sessions on first project creation", () =>
     Effect.gen(function* () {
       // 1. Start with git init but no commits — creates "global" project row

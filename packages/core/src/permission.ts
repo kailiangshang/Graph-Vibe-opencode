@@ -10,6 +10,8 @@ import { SessionV2 } from "./session"
 import { SessionStore } from "./session/store"
 import { Wildcard } from "./util/wildcard"
 import { PermissionSaved } from "./permission/saved"
+import { ProductMigrationState } from "./product-migration/state"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 
 export { Effect, Rule, Ruleset } from "@opencode-ai/schema/permission"
 const missingAgentPermissions: Permission.Ruleset = [{ action: "*", resource: "*", effect: "deny" }]
@@ -90,9 +92,13 @@ export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {
 }
 
 export interface Interface {
-  readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionV2.NotFoundError>
-  readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionV2.NotFoundError>
-  readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError>
+  readonly ask: (
+    input: AssertInput,
+  ) => EffectRuntime.Effect<AskResult, SessionV2.NotFoundError | ProductMigration.Required>
+  readonly assert: (
+    input: AssertInput,
+  ) => EffectRuntime.Effect<void, Error | SessionV2.NotFoundError | ProductMigration.Required>
+  readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError | ProductMigration.Required>
   readonly get: (id: ID) => EffectRuntime.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionV2.ID) => EffectRuntime.Effect<ReadonlyArray<Request>>
   readonly list: () => EffectRuntime.Effect<ReadonlyArray<Request>>
@@ -114,6 +120,7 @@ const layer = Layer.effect(
     const agents = yield* AgentV2.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
+    const migration = yield* ProductMigrationState.Service
     const pending = new Map<ID, Pending>()
 
     yield* EffectRuntime.addFinalizer(() =>
@@ -188,6 +195,7 @@ const layer = Layer.effect(
       )
 
     const ask = EffectRuntime.fn("PermissionV2.ask")(function* (input: AssertInput) {
+      yield* migration.requireCompleted()
       const result = yield* evaluateInput(input)
       const value = request(input)
       if (result.effect === "ask") yield* create(value, input.agent)
@@ -197,6 +205,7 @@ const layer = Layer.effect(
     const assert = EffectRuntime.fn("PermissionV2.assert")((input: AssertInput) =>
       EffectRuntime.uninterruptibleMask((restore) =>
         EffectRuntime.gen(function* () {
+          yield* migration.requireCompleted()
           const result = yield* evaluateInput(input)
           if (result.effect === "deny") {
             return yield* new BlockedError({
@@ -220,6 +229,7 @@ const layer = Layer.effect(
     const reply = EffectRuntime.fn("PermissionV2.reply")((input: ReplyInput) =>
       EffectRuntime.uninterruptible(
         EffectRuntime.gen(function* () {
+          yield* migration.requireCompleted()
           const existing = pending.get(input.requestID)
           if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
           yield* events.publish(Event.Replied, {
@@ -306,5 +316,12 @@ export const locationLayer = layer.pipe(Layer.provideMerge(AgentV2.locationLayer
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventV2.node, Location.node, AgentV2.node, SessionStore.node, PermissionSaved.node],
+  deps: [
+    EventV2.node,
+    Location.node,
+    AgentV2.node,
+    SessionStore.node,
+    PermissionSaved.node,
+    ProductMigrationState.node,
+  ],
 })

@@ -7,6 +7,8 @@ import { makeGlobalNode } from "../effect/app-node"
 import { ProjectV2 } from "../project"
 import { PermissionTable } from "./sql"
 import { PermissionSaved } from "@opencode-ai/schema/permission-saved"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
+import { ProductMigrationState } from "../product-migration/state"
 
 export const ID = PermissionSaved.ID
 export type ID = typeof ID.Type
@@ -28,8 +30,8 @@ export type AddInput = typeof AddInput.Type
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
-  readonly add: (input: AddInput) => Effect.Effect<void>
-  readonly remove: (id: ID) => Effect.Effect<void>
+  readonly add: (input: AddInput) => Effect.Effect<void, ProductMigration.Required>
+  readonly remove: (id: ID) => Effect.Effect<void, ProductMigration.Required>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/PermissionSaved") {}
@@ -38,6 +40,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+    const migration = yield* ProductMigrationState.Service
 
     const list = Effect.fn("PermissionSaved.list")(function* (input?: ListInput) {
       const rows = yield* db
@@ -52,6 +55,7 @@ const layer = Layer.effect(
     })
 
     const add = Effect.fn("PermissionSaved.add")(function* (input: AddInput) {
+      yield* migration.requireCompleted()
       if (!input.resources.length) return
       yield* db
         .insert(PermissionTable)
@@ -69,6 +73,7 @@ const layer = Layer.effect(
     })
 
     const remove = Effect.fn("PermissionSaved.remove")(function* (id: ID) {
+      yield* migration.requireCompleted()
       yield* db.delete(PermissionTable).where(eq(PermissionTable.id, id)).run().pipe(Effect.orDie)
     })
 
@@ -76,4 +81,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, ProductMigrationState.node] })

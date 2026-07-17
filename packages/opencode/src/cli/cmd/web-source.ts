@@ -2,6 +2,7 @@ import { base64Encode } from "@opencode-ai/core/util/encode"
 import { randomUUID } from "node:crypto"
 import { createServer } from "node:net"
 import path from "node:path"
+import { Product } from "@opencode-ai/core/product"
 
 export type SourceWebInput = {
   sourceRoot: string
@@ -45,7 +46,7 @@ export async function resolveSourceWebInput(
   resolvePort: (hostname: string, preferredPort?: number) => Promise<number> = availableSourceWebPort,
 ) {
   if (input.port) return input
-  return { ...input, port: await resolvePort(input.hostname) }
+  return { ...input, port: await resolvePort(input.hostname, Product.GraphVibe.backendPort) }
 }
 
 export function sourceWebPlan(input: SourceWebInput) {
@@ -137,7 +138,10 @@ export async function runSourceWeb(
     const plan = started.plan
     const web = deps.spawn(plan.web)
     children.push(web)
-    const ready = await waitUntilReady(web, `${plan.webOrigin}/`, deps.waitForUrl, deps.interrupted)
+    const ready = await Promise.race([
+      waitUntilReady(web, `${plan.webOrigin}/`, deps.waitForUrl, deps.interrupted),
+      started.backend.exited.then((code) => ({ source: "backend", code }) as const),
+    ])
     if (ready.source === "signal") {
       await Promise.all(children.map((child) => stopSourceWebProcess(child, ready.name)))
       children.length = 0
@@ -145,6 +149,7 @@ export async function runSourceWeb(
     }
     if (ready.source === "error") throw ready.error
     if (ready.source === "exit") throw new Error(`web exited before readiness with code ${ready.code}`)
+    if (ready.source === "backend") throw new Error(`backend exited before web readiness with code ${ready.code}`)
     await onReady(plan)
     await deps.open(plan.webUrl)
     const stopped = await Promise.race([
@@ -200,7 +205,10 @@ async function startSourceWebBackend(input: SourceWebInput, deps: SourceWebDepen
     ? input
     : {
         ...input,
-        port: await (deps.resolvePort ?? availableSourceWebPort)(input.hostname, attempt === 0 ? 4096 : 0),
+        port: await (deps.resolvePort ?? availableSourceWebPort)(
+          input.hostname,
+          attempt === 0 ? Product.GraphVibe.backendPort : 0,
+        ),
       }
   const plan = sourceWebPlan(resolved)
   const backend = deps.spawn(plan.backend)
@@ -237,7 +245,7 @@ function sourceWebBrowserHost(hostname: string) {
   return hostname
 }
 
-export async function availableSourceWebPort(hostname: string, preferredPort = 4096) {
+export async function availableSourceWebPort(hostname: string, preferredPort: number = Product.GraphVibe.backendPort) {
   return listenForAvailablePort(hostname, preferredPort).catch(() => listenForAvailablePort(hostname, 0))
 }
 

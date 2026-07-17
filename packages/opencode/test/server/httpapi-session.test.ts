@@ -23,10 +23,17 @@ import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import * as HttpSessionError from "../../src/server/routes/instance/httpapi/handlers/session-errors"
 import { ExperimentalPaths } from "../../src/server/routes/instance/httpapi/groups/experimental"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
+import { SyncPaths } from "../../src/server/routes/instance/httpapi/groups/sync"
+import { WorkspacePaths } from "../../src/server/routes/instance/httpapi/groups/workspace"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { Database } from "@opencode-ai/core/database/database"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { Product } from "@opencode-ai/core/product"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
+import { EventTable } from "@opencode-ai/core/event/sql"
+import { PermissionTable } from "@opencode-ai/core/permission/sql"
+import { PtyID } from "@opencode-ai/core/pty/schema"
+import { MessageTable, SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -47,6 +54,22 @@ const appLayer = AppNodeBuilder.build(
   LayerNode.group([InstanceStore.node, Project.node, Session.node, Workspace.node, Database.node, Ripgrep.node]),
   [[InstanceStore.bootstrapNode, noopBootstrapLayer]],
 )
+const graphVibeAppLayer = AppNodeBuilder.build(
+  LayerNode.group([
+    InstanceStore.node,
+    Project.node,
+    Session.node,
+    Workspace.node,
+    Database.node,
+    Ripgrep.node,
+    ProductMigrationState.node,
+    Product.node,
+  ]),
+  [
+    [InstanceStore.bootstrapNode, noopBootstrapLayer],
+    [Product.node, Product.layerWith(Product.GraphVibe)],
+  ],
+)
 const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
   HttpApiApp.routes,
   {
@@ -60,6 +83,7 @@ const httpApiLayer = servedRoutes.pipe(
   Layer.provideMerge(NodeServices.layer),
 )
 const it = testEffect(Layer.mergeAll(appLayer, httpApiLayer))
+const graphVibe = testEffect(Layer.mergeAll(graphVibeAppLayer, httpApiLayer))
 
 function pathFor(path: string, params: Record<string, string>) {
   return Object.entries(params).reduce((result, [key, value]) => result.replace(`:${key}`, value), path)
@@ -235,6 +259,166 @@ afterEach(async () => {
 })
 
 describe("session HttpApi", () => {
+  graphVibe.instance("returns the migration gate before any legacy session write", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const project = yield* Project.Service
+      const context = yield* project.fromDirectory(test.directory)
+      const { db } = yield* Database.Service
+      const sessionID = SessionID.descending()
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: context.project.id,
+          slug: "migration-gate",
+          directory: test.directory,
+          path: "",
+          title: "Migration gate",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+      const calls = [
+        { path: SessionPaths.create, body: undefined },
+        {
+          path: pathFor(SessionPaths.prompt, { sessionID }),
+          body: { agent: "build", noReply: true, parts: [{ type: "text", text: "blocked" }] },
+        },
+        {
+          path: pathFor(SessionPaths.promptAsync, { sessionID }),
+          body: { agent: "build", noReply: true, parts: [{ type: "text", text: "blocked async" }] },
+        },
+        {
+          path: pathFor(SessionPaths.init, { sessionID }),
+          body: { messageID: MessageID.ascending(), providerID: "provider", modelID: "model" },
+        },
+        {
+          path: pathFor(SessionPaths.summarize, { sessionID }),
+          body: { providerID: "provider", modelID: "model", auto: false },
+        },
+        {
+          path: pathFor(SessionPaths.revert, { sessionID }),
+          body: { messageID: MessageID.ascending() },
+        },
+        { path: SyncPaths.start, body: undefined },
+        {
+          path: SyncPaths.replay,
+          body: {
+            directory: test.directory,
+            events: [{ id: "evt_blocked", aggregateID: sessionID, seq: 1, type: "blocked", data: {} }],
+          },
+        },
+        { path: SyncPaths.steal, body: { sessionID } },
+        { path: WorkspacePaths.syncList, body: undefined },
+        { path: WorkspacePaths.warp, body: { id: null, sessionID, copyChanges: false } },
+      ]
+
+      const responses = yield* Effect.forEach(calls, (call) =>
+        request(call.path, {
+          method: "POST",
+          headers,
+          ...(call.body === undefined ? {} : { body: JSON.stringify(call.body) }),
+        }),
+      )
+
+      expect(responses.map((response) => response.status)).toEqual(Array.from({ length: calls.length }, () => 404))
+      expect(yield* Effect.forEach(responses, (response) => responseJson(response))).toEqual(
+        Array.from({ length: calls.length }, () => ({ _tag: "ProductMigrationRequired" })),
+      )
+      expect(yield* db.select().from(SessionTable).all().pipe(Effect.orDie)).toHaveLength(1)
+      expect(yield* db.select().from(MessageTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(SessionMessageTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(EventTable).all().pipe(Effect.orDie)).toHaveLength(0)
+    }),
+  )
+
+  graphVibe.instance("returns typed migration errors before permission and PTY mutation work", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const project = yield* Project.Service
+      const context = yield* project.fromDirectory(test.directory)
+      const { db } = yield* Database.Service
+      const sessionID = SessionID.descending()
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: context.project.id,
+          slug: "permission-pty-gate",
+          directory: test.directory,
+          path: "",
+          title: "Permission PTY gate",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const ptyID = PtyID.ascending()
+      const marker = path.join(test.directory, "pty-child-started")
+      const headers = {
+        "x-opencode-directory": test.directory,
+        "content-type": "application/json",
+        "x-opencode-ticket": "1",
+      }
+      const calls = [
+        {
+          method: "POST",
+          path: `/permission/${PermissionV1.ID.make("per_blocked")}/reply`,
+          body: { reply: "once" },
+        },
+        {
+          method: "POST",
+          path: `/api/session/${sessionID}/permission`,
+          body: { action: "read", resources: ["blocked"] },
+        },
+        {
+          method: "POST",
+          path: `/api/session/${sessionID}/permission/${PermissionV1.ID.make("per_blocked")}/reply`,
+          body: { reply: "once" },
+        },
+        { method: "DELETE", path: "/api/permission/saved/psv_blocked", body: undefined },
+        {
+          method: "POST",
+          path: "/pty",
+          body: { command: "/bin/sh", args: ["-c", `printf child > '${marker}'; exec cat`] },
+        },
+        { method: "PUT", path: `/pty/${ptyID}`, body: { title: "blocked", size: { cols: 80, rows: 24 } } },
+        { method: "DELETE", path: `/pty/${ptyID}`, body: undefined },
+        { method: "POST", path: `/pty/${ptyID}/connect-token`, body: undefined },
+        { method: "GET", path: `/pty/${ptyID}/connect`, body: undefined },
+        {
+          method: "POST",
+          path: "/api/pty",
+          body: { command: "/bin/sh", args: ["-c", `printf child > '${marker}'; exec cat`] },
+        },
+        { method: "PUT", path: `/api/pty/${ptyID}`, body: { title: "blocked", size: { cols: 80, rows: 24 } } },
+        { method: "DELETE", path: `/api/pty/${ptyID}`, body: undefined },
+        { method: "POST", path: `/api/pty/${ptyID}/connect-token`, body: undefined },
+        { method: "GET", path: `/api/pty/${ptyID}/connect`, body: undefined },
+      ]
+
+      const responses = yield* Effect.forEach(calls, (call) =>
+        request(call.path, {
+          method: call.method,
+          headers,
+          ...(call.body === undefined ? {} : { body: JSON.stringify(call.body) }),
+        }),
+      )
+
+      expect(responses.map((response) => response.status)).toEqual(Array.from({ length: calls.length }, () => 404))
+      expect(yield* Effect.forEach(responses, (response) => responseJson(response))).toEqual(
+        Array.from({ length: calls.length }, () => ({ _tag: "ProductMigrationRequired" })),
+      )
+      expect(yield* db.select().from(PermissionTable).all().pipe(Effect.orDie)).toEqual([])
+      expect(yield* db.select().from(EventTable).all().pipe(Effect.orDie)).toEqual([])
+      expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+      expect((yield* request("/api/pty", { headers })).status).toBe(200)
+      expect((yield* request("/api/permission/request", { headers })).status).toBe(200)
+    }),
+  )
+
   it.effect("maps busy sessions to public session busy errors", () =>
     Effect.gen(function* () {
       const sessionID = SessionID.descending()

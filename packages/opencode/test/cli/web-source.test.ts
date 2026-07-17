@@ -46,6 +46,7 @@ describe("sourceWebPlan", () => {
   })
 
   test("uses an available fallback when the default backend port is occupied", async () => {
+    const preferred: Array<number | undefined> = []
     const input = await resolveSourceWebInput(
       {
         sourceRoot: root,
@@ -58,9 +59,13 @@ describe("sourceWebPlan", () => {
         cors: [],
         env: {},
       },
-      async () => 5123,
+      async (_hostname, port) => {
+        preferred.push(port)
+        return 5123
+      },
     )
 
+    expect(preferred).toEqual([4097])
     expect(input.port).toBe(5123)
     expect(sourceWebPlan(input).backendUrl).toBe("http://127.0.0.1:5123")
   })
@@ -295,6 +300,51 @@ describe("runSourceWeb", () => {
     expect(killed).toEqual(["backend:SIGTERM"])
   })
 
+  test("stops both children when the backend exits while waiting for Vite", async () => {
+    const killed: string[] = []
+    let exitBackend: (code: number) => void
+    const backend: SourceWebProcess = {
+      exited: new Promise((resolve) => {
+        exitBackend = resolve
+      }),
+      kill: (signal) => killed.push(`backend:${signal ?? "default"}`),
+    }
+    const web = process("web", killed)
+    let interrupt: (signal: NodeJS.Signals) => void
+    const interrupted = new Promise<NodeJS.Signals>((resolve) => {
+      interrupt = resolve
+    })
+
+    await expect(
+      runSourceWeb(
+        {
+          sourceRoot: root,
+          directory: "/work/project",
+          hostname: "127.0.0.1",
+          port: 4096,
+          uiPort: 4444,
+          mdns: false,
+          mdnsDomain: "opencode.local",
+          cors: [],
+          env: {},
+          readinessToken: "ready-token",
+        },
+        {
+          spawn: (spec) => (spec.cwd === "/work/project" ? backend : web),
+          waitForUrl: (url) => {
+            if (url.includes("/__graph-vibe/source-ready")) return Promise.resolve()
+            exitBackend(9)
+            queueMicrotask(() => interrupt("SIGTERM"))
+            return new Promise(() => {})
+          },
+          open: async () => {},
+          interrupted,
+        },
+      ),
+    ).rejects.toThrow("backend exited before web readiness with code 9")
+    expect(killed).toEqual(["backend:default", "web:default"])
+  })
+
   test("reselects a dynamic backend port after a startup collision", async () => {
     const killed: string[] = []
     const backend = process("backend", killed)
@@ -328,11 +378,11 @@ describe("runSourceWeb", () => {
         },
         waitForUrl: async (url) => {
           waited.push(url)
-          if (url.includes(":4096/")) await new Promise(() => {})
+          if (url.includes(":4097/")) await new Promise(() => {})
         },
         open: async () => interrupt("SIGTERM"),
         interrupted,
-        resolvePort: async (_hostname, preferredPort) => (preferredPort === 4096 ? 4096 : 5123),
+        resolvePort: async (_hostname, preferredPort) => (preferredPort === 4097 ? 4097 : 5123),
       },
       async (plan) => {
         ready.push(plan.backendUrl)
@@ -341,7 +391,7 @@ describe("runSourceWeb", () => {
 
     expect(spawned).toEqual(["/work/project", "/work/project", path.join(root, "packages/app")])
     expect(waited).toEqual([
-      "http://127.0.0.1:4096/__graph-vibe/source-ready?token=ready-token",
+      "http://127.0.0.1:4097/__graph-vibe/source-ready?token=ready-token",
       "http://127.0.0.1:5123/__graph-vibe/source-ready?token=ready-token",
       "http://127.0.0.1:4444/",
     ])

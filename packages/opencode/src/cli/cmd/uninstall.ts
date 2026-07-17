@@ -9,6 +9,8 @@ import os from "os"
 import { Filesystem } from "@/util/filesystem"
 import { Process } from "@/util/process"
 import { Product } from "@opencode-ai/core/product"
+import { CliError } from "../effect-cmd"
+import { errorMessage } from "@/util/error"
 
 interface UninstallArgs {
   keepConfig: boolean
@@ -71,17 +73,19 @@ export const UninstallCommand = {
       }),
 
   handler: async (args: UninstallArgs) => {
+    const profile = Product.current()
     UI.empty()
     UI.println(UI.logo("  "))
     UI.empty()
-    prompts.intro(`Uninstall ${Product.current().name}`)
+    prompts.intro(`Uninstall ${profile.name}`)
 
-    const method = await Installation.method()
+    const method = await Installation.method(profile)
     prompts.log.info(`Installation method: ${method}`)
+    const errors: string[] = []
 
-    const targets = await collectRemovalTargets(args, method)
+    const targets = await collectRemovalTargets(args, method, profile, errors)
 
-    await showRemovalSummary(targets, method)
+    await showRemovalSummary(targets, method, profile, errors)
 
     if (!args.force && !args.dryRun) {
       const confirm = await prompts.confirm({
@@ -96,42 +100,53 @@ export const UninstallCommand = {
 
     if (args.dryRun) {
       prompts.log.warn("Dry run - no changes made")
+      throwIfFailed(errors)
       prompts.outro("Done")
       return
     }
 
-    await executeUninstall(method, targets)
+    await executeUninstall(method, targets, profile, errors)
+    throwIfFailed(errors)
 
+    UI.empty()
+    prompts.log.success(`Thank you for using ${profile.name}!`)
     prompts.outro("Done")
   },
 }
 
-async function collectRemovalTargets(args: UninstallArgs, method: Installation.Method): Promise<RemovalTargets> {
+async function collectRemovalTargets(
+  args: UninstallArgs,
+  method: Installation.Method,
+  profile: Product.Profile,
+  errors: string[],
+): Promise<RemovalTargets> {
+  const paths = Global.paths(profile)
   const directories: RemovalTargets["directories"] = [
-    { path: Global.Path.data, label: "Data", keep: args.keepData },
-    { path: Global.Path.cache, label: "Cache", keep: false },
-    { path: Global.Path.config, label: "Config", keep: args.keepConfig },
-    { path: Global.Path.state, label: "State", keep: false },
+    { path: paths.data, label: "Data", keep: args.keepData },
+    { path: paths.cache, label: "Cache", keep: false },
+    { path: paths.config, label: "Config", keep: args.keepConfig },
+    { path: paths.state, label: "State", keep: false },
   ]
 
-  const profile = Product.current()
-  const shellConfig = method === "curl" ? await getShellConfigFile(profile) : null
+  const shellConfig = method === "curl" ? await getShellConfigFile(profile, errors) : null
   const binary = method === "curl" && profile === Product.OpenCode ? process.execPath : null
 
   return { directories, shellConfig, binary }
 }
 
-async function showRemovalSummary(targets: RemovalTargets, method: Installation.Method) {
+async function showRemovalSummary(
+  targets: RemovalTargets,
+  method: Installation.Method,
+  profile: Product.Profile,
+  errors: string[],
+) {
   prompts.log.message("The following will be removed:")
 
   for (const dir of targets.directories) {
-    const exists = await fs
-      .access(dir.path)
-      .then(() => true)
-      .catch(() => false)
+    const exists = await pathExists(dir.path, dir.label, errors)
     if (!exists) continue
 
-    const size = await getDirectorySize(dir.path)
+    const size = await getDirectorySize(dir.path, dir.label, errors)
     const sizeStr = formatSize(size)
     const status = dir.keep ? UI.Style.TEXT_DIM + "(keeping)" : ""
     const prefix = dir.keep ? "○" : "✓"
@@ -148,13 +163,17 @@ async function showRemovalSummary(targets: RemovalTargets, method: Installation.
   }
 
   if (method !== "curl" && method !== "unknown") {
-    prompts.log.info(`  ✓ Package: ${uninstallPackageCommand(Product.current(), method)?.join(" ") ?? method}`)
+    prompts.log.info(`  ✓ Package: ${uninstallPackageCommand(profile, method)?.join(" ") ?? method}`)
   }
 }
 
-async function executeUninstall(method: Installation.Method, targets: RemovalTargets) {
+async function executeUninstall(
+  method: Installation.Method,
+  targets: RemovalTargets,
+  profile: Product.Profile,
+  errors: string[],
+) {
   const spinner = prompts.spinner()
-  const errors: string[] = []
 
   for (const dir of targets.directories) {
     if (dir.keep) {
@@ -162,17 +181,14 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
       continue
     }
 
-    const exists = await fs
-      .access(dir.path)
-      .then(() => true)
-      .catch(() => false)
+    const exists = await pathExists(dir.path, dir.label, errors)
     if (!exists) continue
 
     spinner.start(`Removing ${dir.label}...`)
     const err = await fs.rm(dir.path, { recursive: true, force: true }).catch((e) => e)
     if (err) {
       spinner.stop(`Failed to remove ${dir.label}`, 1)
-      errors.push(`${dir.label}: ${err.message}`)
+      addError(errors, `${dir.label}: ${errorMessage(err)}`)
       continue
     }
     spinner.stop(`Removed ${dir.label}`)
@@ -180,17 +196,17 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
 
   if (targets.shellConfig) {
     spinner.start("Cleaning shell config...")
-    const err = await cleanShellConfig(targets.shellConfig, Product.current()).catch((e) => e)
+    const err = await cleanShellConfig(targets.shellConfig, profile).catch((e) => e)
     if (err) {
       spinner.stop("Failed to clean shell config", 1)
-      errors.push(`Shell config: ${err.message}`)
+      addError(errors, `Shell config: ${errorMessage(err)}`)
     } else {
       spinner.stop("Cleaned shell config")
     }
   }
 
   if (method !== "curl" && method !== "unknown") {
-    const cmd = uninstallPackageCommand(Product.current(), method)
+    const cmd = uninstallPackageCommand(profile, method)
     if (cmd) {
       spinner.start(`Running ${cmd.join(" ")}...`)
       const result = await Process.run(method === "choco" ? [...cmd, "-y", "-r"] : cmd, {
@@ -198,6 +214,7 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
       })
       if (result.code !== 0) {
         spinner.stop(`Package manager uninstall failed: exit code ${result.code}`, 1)
+        addError(errors, `Package: ${cmd.join(" ")} exited with code ${result.code}`)
         const text = `${result.stdout.toString("utf8")}\n${result.stderr.toString("utf8")}`
         if (method === "choco" && text.includes("not running from an elevated command shell")) {
           prompts.log.warn(`You may need to run '${cmd.join(" ")}' from an elevated command shell`)
@@ -216,24 +233,14 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
     prompts.log.info(`  rm "${targets.binary}"`)
 
     const binDir = path.dirname(targets.binary)
-    if (binDir.includes(".opencode")) {
+    if (binDir.includes(`.${profile.storage}`)) {
       prompts.log.info(`  rmdir "${binDir}" 2>/dev/null`)
     }
   }
 
-  if (errors.length > 0) {
-    UI.empty()
-    prompts.log.warn("Some operations failed:")
-    for (const err of errors) {
-      prompts.log.error(`  ${err}`)
-    }
-  }
-
-  UI.empty()
-  prompts.log.success(`Thank you for using ${Product.current().name}!`)
 }
 
-async function getShellConfigFile(profile: Product.Profile): Promise<string | null> {
+async function getShellConfigFile(profile: Product.Profile, errors: string[]): Promise<string | null> {
   const shell = path.basename(process.env.SHELL || "bash")
   const home = os.homedir()
   const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(home, ".config")
@@ -260,13 +267,13 @@ async function getShellConfigFile(profile: Product.Profile): Promise<string | nu
   const candidates = configFiles[shell] || configFiles.bash
 
   for (const file of candidates) {
-    const exists = await fs
-      .access(file)
-      .then(() => true)
-      .catch(() => false)
+    const exists = await pathExists(file, `Shell config ${shortenPath(file)}`, errors)
     if (!exists) continue
 
-    const content = await Filesystem.readText(file).catch(() => "")
+    const content = await Filesystem.readText(file).catch((error) => {
+      addError(errors, `Shell config ${shortenPath(file)}: ${errorMessage(error)}`)
+      return ""
+    })
     const identity = uninstallShellIdentity(profile)
     if (content.includes(identity.marker) || content.includes(identity.bin)) {
       return file
@@ -317,11 +324,14 @@ async function cleanShellConfig(file: string, profile: Product.Profile) {
   await Filesystem.write(file, output)
 }
 
-async function getDirectorySize(dir: string): Promise<number> {
+async function getDirectorySize(dir: string, label: string, errors: string[]): Promise<number> {
   let total = 0
 
   const walk = async (current: string) => {
-    const entries = await fs.readdir(current, { withFileTypes: true }).catch(() => [])
+    const entries = await fs.readdir(current, { withFileTypes: true }).catch((error) => {
+      if (!isMissingPath(error)) addError(errors, `${label}: ${errorMessage(error)}`)
+      return []
+    })
 
     for (const entry of entries) {
       const full = path.join(current, entry.name)
@@ -330,7 +340,10 @@ async function getDirectorySize(dir: string): Promise<number> {
         continue
       }
       if (entry.isFile()) {
-        const stat = await fs.stat(full).catch(() => null)
+        const stat = await fs.stat(full).catch((error) => {
+          if (!isMissingPath(error)) addError(errors, `${label}: ${errorMessage(error)}`)
+          return null
+        })
         if (stat) total += stat.size
       }
     }
@@ -338,6 +351,36 @@ async function getDirectorySize(dir: string): Promise<number> {
 
   await walk(dir)
   return total
+}
+
+async function pathExists(file: string, label: string, errors: string[]) {
+  const error = await fs.access(file).then(
+    () => undefined,
+    (error) => error,
+  )
+  if (!error) return true
+  if (isMissingPath(error)) return false
+  addError(errors, `${label}: ${errorMessage(error)}`)
+  return false
+}
+
+function isMissingPath(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
+}
+
+function addError(errors: string[], error: string) {
+  if (!errors.includes(error)) errors.push(error)
+}
+
+function throwIfFailed(errors: string[]) {
+  if (errors.length === 0) return
+  UI.empty()
+  prompts.log.warn("Some operations failed:")
+  for (const error of errors) {
+    prompts.log.error(`  ${error}`)
+  }
+  prompts.outro("Uninstall incomplete")
+  throw new CliError({ message: "Uninstall failed; review the errors above." })
 }
 
 function formatSize(bytes: number): string {

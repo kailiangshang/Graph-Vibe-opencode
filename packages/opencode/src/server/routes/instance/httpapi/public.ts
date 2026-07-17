@@ -108,9 +108,9 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
       if (!operation) continue
       const isV2Api = isV2ApiPath(path)
       if (operation.requestBody) {
-        // The legacy OpenAPI surface never marked request bodies as required.
-        // Keep that SDK surface stable while the HttpApi spec is tightened.
-        if (!isV2Api) delete operation.requestBody.required
+        // Preserve the legacy optional-body surface except for migration
+        // mutations, whose optimistic-concurrency payloads are always required.
+        if (!isV2Api && !isProductMigrationPath(path)) delete operation.requestBody.required
         const body = operation.requestBody.content?.["application/json"]
         if (body?.schema) body.schema = stripOptionalNull(structuredClone(body.schema))
         if (path === "/experimental/workspace" && method === "post") {
@@ -179,6 +179,10 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
 
 function isV2ApiPath(path: string) {
   return path === "/api" || path.startsWith("/api/")
+}
+
+function isProductMigrationPath(path: string) {
+  return path === "/global/product-migration" || path.startsWith("/global/product-migration/")
 }
 
 function addLegacyErrorSchemas(spec: OpenApiSpec) {
@@ -276,6 +280,18 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
   if (variants && typeof variants === "object") variants.additionalProperties = {}
   const syncInfo = schemas.SyncEventSessionUpdated?.properties?.data?.properties?.info
   if (syncInfo?.properties) makePropertiesNullable(syncInfo.properties)
+  const migration = schemas.ProductMigrationProjection?.properties
+  if (migration) {
+    migration.source = nullable(migration.source)
+    migration.plan = nullable(migration.plan)
+    migration.validation = nullable(migration.validation)
+  }
+  const migrationItem = schemas.ProductMigrationItem?.properties
+  if (migrationItem) {
+    migrationItem.sourceID = nullable(migrationItem.sourceID)
+    migrationItem.targetID = nullable(migrationItem.targetID)
+    migrationItem.error = nullable(migrationItem.error)
+  }
 }
 
 function normalizeComponentDescriptions(spec: OpenApiSpec) {

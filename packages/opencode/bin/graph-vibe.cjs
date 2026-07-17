@@ -4,7 +4,7 @@ const childProcess = require("child_process")
 const path = require("path")
 
 const child = childProcess.spawn(
-  process.env.OPENCODE_BIN_PATH || path.join(__dirname, "opencode.exe"),
+  process.env.GRAPH_VIBE_BIN_PATH || path.join(__dirname, "graph-vibe.exe"),
   process.argv.slice(2),
   {
     stdio: "inherit",
@@ -16,7 +16,11 @@ const forwarders = Object.fromEntries(
   ["SIGINT", "SIGTERM", "SIGHUP"].map((signal) => [
     signal,
     () => {
-      if (!child.killed) child.kill(signal)
+      try {
+        child.kill(signal)
+      } catch {
+        // The child may have already exited.
+      }
     },
   ]),
 )

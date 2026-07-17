@@ -91,7 +91,7 @@ import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
 import { graphHandlers } from "./handlers/graph"
-import { globalHandlers } from "./handlers/global"
+import { globalHandlerLayers } from "./handlers/global"
 import { instanceHandlers } from "./handlers/instance"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
@@ -120,6 +120,8 @@ import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { Product } from "@opencode-ai/core/product"
+import { ProductMigrationService } from "@opencode-ai/core/product-migration/service"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -144,7 +146,7 @@ const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provi
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.layer))
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
-  Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
+  Layer.provide([controlHandlers, controlPlaneHandlers, ...globalHandlerLayers]),
   Layer.provide(schemaErrorLayer),
   Layer.provide(httpApiAuthLayer),
 )
@@ -289,6 +291,9 @@ const app = LayerNode.group([
   ProjectV2.node,
   ProjectCopy.node,
   PtyTicket.node,
+  ProductMigrationService.node,
+  ProductMigrationState.node,
+  Product.node,
 ])
 
 export function createRoutes(

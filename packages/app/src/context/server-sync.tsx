@@ -3,6 +3,8 @@ import type {
   McpResource,
   OpencodeClient,
   Path,
+  ProductMigrationDraftPayload,
+  ProductMigrationProjection,
   Project,
   ProviderAuthResponse,
 } from "@opencode-ai/sdk/v2/client"
@@ -46,6 +48,85 @@ import type { ServerScope } from "@/utils/server-scope"
 import { persisted } from "@/utils/persist"
 import { toggleMcp } from "./global-sync/mcp"
 import { createServerSession } from "./server-session"
+
+type ProductMigrationResult =
+  | { kind: "required"; projection: ProductMigrationProjection }
+  | { kind: "unavailable" }
+
+export function productMigrationResult(response: { data?: ProductMigrationProjection; error?: unknown }): ProductMigrationResult {
+  if (response.data) return { kind: "required", projection: response.data }
+  if (
+    response.error &&
+    typeof response.error === "object" &&
+    "_tag" in response.error &&
+    response.error._tag === "ProductMigrationUnavailable"
+  )
+    return { kind: "unavailable" }
+  throw response.error instanceof Error ? response.error : new Error("Product migration checkpoint unavailable")
+}
+
+export function productMigrationErrorMessage(error: unknown) {
+  if (!error || typeof error !== "object" || !("_tag" in error)) {
+    return "Migration action could not complete. Review the refreshed protected status."
+  }
+  if (error._tag === "ProductMigrationInsufficientSpace" && "requiredBytes" in error && "availableBytes" in error) {
+    const bytes = (value: unknown) => {
+      const amount = typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0
+      return amount < 1_024 ? `${amount} B` : `${(amount / 1_024).toFixed(1)} KB`
+    }
+    return `Insufficient target space: ${bytes(error.requiredBytes)} required, ${bytes(error.availableBytes)} available.`
+  }
+  if (error._tag === "ProductMigrationValidationFailed" && "issues" in error && Array.isArray(error.issues)) {
+    const codes = error.issues
+      .flatMap((issue) =>
+        issue && typeof issue === "object" && "code" in issue && typeof issue.code === "string" ? [issue.code] : [],
+      )
+      .slice(0, 32)
+    return `Validation requires attention${codes.length ? `: ${codes.join(", ")}` : "."}`
+  }
+  if (error._tag === "ProductMigrationSourceError" && "code" in error && typeof error.code === "string") {
+    return `The OpenCode source could not be verified (${error.code}).`
+  }
+  if (error._tag === "ProductMigrationInvalidTransition") return "This action is unavailable at the current checkpoint."
+  if (error._tag === "ProductMigrationInsufficientSpace") return "The target does not have enough free space."
+  if (error._tag === "ProductMigrationConflict") return "Migration data conflicts with the protected plan."
+  if (error._tag === "ProductMigrationItemNotFound") return "The selected migration item is no longer available."
+  if (error._tag === "ProductMigrationFinalized") return "Migration has already been finalized."
+  return "Migration action could not complete. Review the refreshed protected status."
+}
+
+export function productMigrationProjectionIsCurrent(
+  candidate: ProductMigrationProjection,
+  current: ProductMigrationProjection,
+) {
+  if (Number(candidate.revision) !== Number(current.revision)) {
+    return Number(candidate.revision) > Number(current.revision)
+  }
+  if (Number(candidate.completedItems) !== Number(current.completedItems)) {
+    return Number(candidate.completedItems) > Number(current.completedItems)
+  }
+  const ranks = { pending: 0, copying: 1, completed: 2, failed: 2, skipped: 2 } as const
+  const items = new Map(candidate.items.map((item) => [item.itemID, item.status]))
+  return current.items.every((item) => ranks[items.get(item.itemID) ?? "pending"] >= ranks[item.status])
+}
+
+export async function pollProductMigration(input: {
+  active: () => boolean
+  current?: () => ProductMigrationProjection | undefined
+  get: () => Promise<ProductMigrationProjection | undefined>
+  update: (projection: ProductMigrationProjection) => void
+  wait?: () => Promise<void>
+}) {
+  const wait = input.wait ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 250)))
+  while (input.active()) {
+    await wait()
+    if (!input.active()) return
+    const projection = await input.get().catch(() => undefined)
+    if (!input.active()) return
+    const current = input.current?.()
+    if (projection && (!current || productMigrationProjectionIsCurrent(projection, current))) input.update(projection)
+  }
+}
 
 type GlobalStore = {
   ready: boolean
@@ -153,6 +234,93 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
   })
 
   const queryClient = useQueryClient()
+  const productMigrationClient = serverSDK.createClient({ throwOnError: false })
+  const productMigrationKey = [serverSDK.scope, "productMigration"] as const
+  const productMigrationQuery = useQuery(() => ({
+    queryKey: productMigrationKey,
+    retry: false,
+    queryFn: () => productMigrationClient.productMigration.get().then(productMigrationResult),
+  }))
+  const [productMigrationStore, setProductMigrationStore] = createStore({
+    pending: 0,
+    executing: false,
+    conflict: undefined as string | undefined,
+  })
+  let productMigrationDisposed = false
+  let productMigrationConcurrent = false
+  onCleanup(() => {
+    productMigrationDisposed = true
+    setProductMigrationStore("executing", false)
+  })
+
+  const requireProductMigration = () => {
+    const result = productMigrationQuery.data
+    if (result?.kind !== "required") throw new Error("Product migration projection is not available")
+    return result.projection
+  }
+
+  const applyProductMigration = (
+    action: () => Promise<{ data?: ProductMigrationProjection; error?: unknown }>,
+    options: { concurrent?: boolean; poll?: boolean } = {},
+  ) => {
+    if ((productMigrationStore.pending > 0 && !options.concurrent) || (options.concurrent && productMigrationConcurrent)) {
+      return Promise.resolve()
+    }
+    if (options.concurrent) productMigrationConcurrent = true
+    setProductMigrationStore({
+      pending: productMigrationStore.pending + 1,
+      executing: options.poll || productMigrationStore.executing,
+      conflict: undefined,
+    })
+    const request = action()
+    const polling = options.poll
+      ? pollProductMigration({
+          active: () => !productMigrationDisposed && productMigrationStore.executing,
+          current: () => requireProductMigration(),
+          get: () => productMigrationClient.productMigration.get().then((response) => response.data),
+          update: (projection) =>
+            queryClient.setQueryData(productMigrationKey, {
+              kind: "required",
+              projection,
+            } satisfies ProductMigrationResult),
+        })
+      : Promise.resolve()
+    const refreshFailure = async (error?: unknown) => {
+      await productMigrationQuery.refetch()
+      setProductMigrationStore("conflict", productMigrationErrorMessage(error))
+    }
+    return request
+      .then(async (response) => {
+        if (response.data) {
+          const current = requireProductMigration()
+          if (!productMigrationProjectionIsCurrent(response.data, current)) return
+          if (options.poll || response.data.status !== "copying") setProductMigrationStore("executing", false)
+          queryClient.setQueryData(productMigrationKey, { kind: "required", projection: response.data } satisfies ProductMigrationResult)
+          return
+        }
+        if (
+          response.error &&
+          typeof response.error === "object" &&
+          "_tag" in response.error &&
+          response.error._tag === "ProductMigrationRevisionConflict"
+        ) {
+          const refreshed = await productMigrationQuery.refetch()
+          if (refreshed.data?.kind === "required")
+            setProductMigrationStore(
+              "conflict",
+              `Migration changed to revision ${refreshed.data.projection.revision}. Review the refreshed plan.`,
+            )
+          return
+        }
+        await refreshFailure(response.error)
+      }, refreshFailure)
+      .finally(async () => {
+        if (options.poll) setProductMigrationStore("executing", false)
+        if (options.concurrent) productMigrationConcurrent = false
+        setProductMigrationStore("pending", Math.max(0, productMigrationStore.pending - 1))
+        await polling
+      })
+  }
 
   let bootedAt = 0
   let bootingRoot = false
@@ -508,6 +676,87 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
           },
         })
       },
+    },
+    productMigration: {
+      get status() {
+        if (productMigrationQuery.isPending) return "loading" as const
+        if (productMigrationQuery.isError) return "error" as const
+        return productMigrationQuery.data?.kind ?? ("error" as const)
+      },
+      get projection() {
+        const result = productMigrationQuery.data
+        return result?.kind === "required" ? result.projection : undefined
+      },
+      get pending() {
+        return productMigrationStore.pending > 0
+      },
+      get conflict() {
+        return productMigrationStore.conflict
+      },
+      refresh: () =>
+        productMigrationQuery.refetch().then((result) => {
+          setProductMigrationStore("conflict", undefined)
+          return result.data
+        }),
+      discover: () =>
+        applyProductMigration(() =>
+          productMigrationClient.productMigration.discover({
+            productMigrationDiscoverPayload: {
+              expectedRevision: requireProductMigration().revision,
+              currentProject: globalStore.path.directory || undefined,
+            },
+          }),
+        ),
+      updateDraft: (payload: ProductMigrationDraftPayload) =>
+        applyProductMigration(() =>
+          productMigrationClient.productMigration.updateDraft({ productMigrationDraftPayload: payload }),
+        ),
+      execute: () =>
+        applyProductMigration(
+          () =>
+            productMigrationClient.productMigration.execute({
+              productMigrationRevisionPayload: { expectedRevision: requireProductMigration().revision },
+            }),
+          { poll: true },
+        ),
+      pause: () =>
+        applyProductMigration(
+          () =>
+            productMigrationClient.productMigration.pause({
+              productMigrationRevisionPayload: { expectedRevision: requireProductMigration().revision },
+            }),
+          { concurrent: true },
+        ),
+      retry: (itemID: string) =>
+        applyProductMigration(() =>
+          productMigrationClient.productMigration.retry({
+            productMigrationItemPayload: { expectedRevision: requireProductMigration().revision, itemID },
+          }),
+        ),
+      skip: (itemID: string) =>
+        applyProductMigration(() =>
+          productMigrationClient.productMigration.skip({
+            productMigrationItemPayload: { expectedRevision: requireProductMigration().revision, itemID },
+          }),
+        ),
+      validate: () =>
+        applyProductMigration(() =>
+          productMigrationClient.productMigration.validate({
+            productMigrationRevisionPayload: { expectedRevision: requireProductMigration().revision },
+          }),
+        ),
+      finalize: () =>
+        applyProductMigration(() =>
+          productMigrationClient.productMigration.finalize({
+            productMigrationRevisionPayload: { expectedRevision: requireProductMigration().revision },
+          }),
+        ),
+      freshStart: () =>
+        applyProductMigration(() =>
+          productMigrationClient.productMigration.freshStart({
+            productMigrationRevisionPayload: { expectedRevision: requireProductMigration().revision },
+          }),
+        ),
     },
   }
 }

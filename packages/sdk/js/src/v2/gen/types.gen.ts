@@ -81,6 +81,7 @@ export type Event =
   | EventProjectUpdated
   | EventGraphPlanUpdated
   | EventGraphMainUpdated
+  | EventProductMigrationUpdated
   | EventSessionStatus
   | EventSessionIdle
   | EventQuestionAsked
@@ -149,6 +150,10 @@ export type MoveSessionError = {
   data: {
     message: string
   }
+}
+
+export type ProductMigrationRequired = {
+  _tag: "ProductMigrationRequired"
 }
 
 export type SnapshotFileDiff = {
@@ -1508,6 +1513,14 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "product.migration.updated"
+        properties: {
+          status: "draft" | "copying" | "paused" | "validating" | "ready_to_finalize" | "failed" | "completed"
+          revision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      }
+    | {
+        id: string
         type: "session.status"
         properties: {
           sessionID: string
@@ -2038,6 +2051,159 @@ export type Config = {
     mcp_timeout?: number
     policies?: Array<ConfigV2ExperimentalPolicy>
   }
+}
+
+export type ProductMigrationSourceSummary = {
+  database: string
+  databaseBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  mixedGraph: boolean
+  sessionCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type ProductMigrationCategorySelection = {
+  category: "config" | "credentials" | "mcp" | "project" | "session" | "graph"
+  available: boolean
+  selected: boolean
+  estimatedBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type ProductMigrationSessionSelection = {
+  id: string
+  title: string
+  updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  estimatedBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  hasGraph: boolean
+  archived?: boolean
+  selected: boolean
+}
+
+export type ProductMigrationProjectSelection = {
+  id: string
+  path: string
+  sessionCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  estimatedBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  current: boolean
+  sessions: Array<ProductMigrationSessionSelection>
+}
+
+export type ProductMigrationPlan = {
+  revision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  sourceFingerprint: string
+  categories: Array<ProductMigrationCategorySelection>
+  sessionsEnabled: boolean
+  projects: Array<ProductMigrationProjectSelection>
+  requiredBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type ProductMigrationItem = {
+  itemID: string
+  category: "config" | "credentials" | "mcp" | "project" | "session" | "graph"
+  sourceID: string | null
+  targetID: string | null
+  status: "pending" | "copying" | "completed" | "failed" | "skipped"
+  selected: boolean
+  estimatedBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  error: string | null
+}
+
+export type ProductMigrationValidationIssue = {
+  code: string
+  message: string
+}
+
+export type ProductMigrationValidation = {
+  valid: boolean
+  issues: Array<ProductMigrationValidationIssue>
+}
+
+export type ProductMigrationProjection = {
+  status: "undiscovered" | "draft" | "copying" | "paused" | "validating" | "ready_to_finalize" | "failed" | "completed"
+  revision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  source: ProductMigrationSourceSummary | null
+  plan: ProductMigrationPlan | null
+  items: Array<ProductMigrationItem>
+  validation: ProductMigrationValidation | null
+  completedItems: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  totalItems: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  canFinalize: boolean
+}
+
+export type ProductMigrationUnavailable = {
+  _tag: "ProductMigrationUnavailable"
+}
+
+export type ProductMigrationSourceError = {
+  _tag: "ProductMigrationSourceError"
+  code: "not_found" | "unsupported" | "changed" | "unreadable" | "invalid_root" | "limit"
+  message: string
+}
+
+export type ProductMigrationDiscoverPayload = {
+  expectedRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  source?: string
+  currentProject?: string
+}
+
+export type ProductMigrationItemNotFound = {
+  _tag: "ProductMigrationItemNotFound"
+  itemID: string
+}
+
+export type ProductMigrationRevisionConflict = {
+  _tag: "ProductMigrationRevisionConflict"
+  expectedRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  actualRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type ProductMigrationInvalidTransition = {
+  _tag: "ProductMigrationInvalidTransition"
+  status: "draft" | "copying" | "paused" | "validating" | "ready_to_finalize" | "failed" | "completed"
+  target: "draft" | "copying" | "paused" | "validating" | "ready_to_finalize" | "failed" | "completed"
+}
+
+export type ProductMigrationFinalized = {
+  _tag: "ProductMigrationFinalized"
+}
+
+export type ProductMigrationConflict = {
+  _tag: "ProductMigrationConflict"
+  itemID?: string
+  message: string
+}
+
+export type ProductMigrationInsufficientSpace = {
+  _tag: "ProductMigrationInsufficientSpace"
+  requiredBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  availableBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type ProductMigrationValidationFailed = {
+  _tag: "ProductMigrationValidationFailed"
+  issues: Array<ProductMigrationValidationIssue>
+}
+
+export type ProductMigrationDraftPayload = {
+  expectedRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  categories: Array<{
+    category: "config" | "credentials" | "mcp" | "project" | "session" | "graph"
+    selected: boolean
+  }>
+  sessionsEnabled: boolean
+  sessions: Array<{
+    projectID: string
+    sessionID: string
+    selected: boolean
+  }>
+  currentProject?: string
+}
+
+export type ProductMigrationRevisionPayload = {
+  expectedRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type ProductMigrationItemPayload = {
+  expectedRevision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  itemID: string
 }
 
 export type Model = {
@@ -3225,6 +3391,7 @@ export type V2Event =
   | ProjectUpdated
   | GraphPlanUpdated
   | GraphMainUpdated
+  | ProductMigrationUpdated
   | SessionStatus2
   | SessionIdle
   | QuestionAsked
@@ -3257,6 +3424,10 @@ export type ProjectCopyError = {
 
 export type EffectHttpApiErrorForbidden = {
   _tag: "Forbidden"
+}
+
+export type EffectHttpApiErrorNotFound = {
+  _tag: "NotFound"
 }
 
 export type EventTuiPromptAppend2 = {
@@ -6242,6 +6413,24 @@ export type GraphMainUpdated = {
   }
 }
 
+export type ProductMigrationUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "product.migration.updated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    status: "draft" | "copying" | "paused" | "validating" | "ready_to_finalize" | "failed" | "completed"
+    revision: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
 export type SessionIdle = {
   id: string
   metadata?: {
@@ -7276,6 +7465,15 @@ export type EventGraphMainUpdated = {
   }
 }
 
+export type EventProductMigrationUpdated = {
+  id: string
+  type: "product.migration.updated"
+  properties: {
+    status: "draft" | "copying" | "paused" | "validating" | "ready_to_finalize" | "failed" | "completed"
+    revision: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
 export type EventSessionStatus = {
   id: string
   type: "session.status"
@@ -7556,6 +7754,10 @@ export type ExperimentalControlPlaneMoveSessionErrors = {
    * MoveSessionError | InvalidRequestError
    */
   400: MoveSessionError | InvalidRequestError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type ExperimentalControlPlaneMoveSessionError =
@@ -7733,6 +7935,423 @@ export type GlobalUpgradeResponses = {
 }
 
 export type GlobalUpgradeResponse = GlobalUpgradeResponses[keyof GlobalUpgradeResponses]
+
+export type ProductMigrationGetData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/product-migration"
+}
+
+export type ProductMigrationGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ProductMigrationUnavailable
+   */
+  404: ProductMigrationUnavailable
+  /**
+   * ProductMigrationSourceError
+   */
+  422: ProductMigrationSourceError
+}
+
+export type ProductMigrationGetError = ProductMigrationGetErrors[keyof ProductMigrationGetErrors]
+
+export type ProductMigrationGetResponses = {
+  /**
+   * Migration projection
+   */
+  200: ProductMigrationProjection
+}
+
+export type ProductMigrationGetResponse = ProductMigrationGetResponses[keyof ProductMigrationGetResponses]
+
+export type ProductMigrationDiscoverData = {
+  body: ProductMigrationDiscoverPayload
+  path?: never
+  query?: never
+  url: "/global/product-migration/discover"
+}
+
+export type ProductMigrationDiscoverErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+   */
+  404: ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+  /**
+   * ProductMigrationRevisionConflict | ProductMigrationInvalidTransition | ProductMigrationFinalized | ProductMigrationConflict | ProductMigrationInsufficientSpace
+   */
+  409:
+    | ProductMigrationRevisionConflict
+    | ProductMigrationInvalidTransition
+    | ProductMigrationFinalized
+    | ProductMigrationConflict
+    | ProductMigrationInsufficientSpace
+  /**
+   * ProductMigrationSourceError | ProductMigrationValidationFailed
+   */
+  422: ProductMigrationSourceError | ProductMigrationValidationFailed
+}
+
+export type ProductMigrationDiscoverError = ProductMigrationDiscoverErrors[keyof ProductMigrationDiscoverErrors]
+
+export type ProductMigrationDiscoverResponses = {
+  /**
+   * ProductMigrationProjection
+   */
+  200: ProductMigrationProjection
+}
+
+export type ProductMigrationDiscoverResponse =
+  ProductMigrationDiscoverResponses[keyof ProductMigrationDiscoverResponses]
+
+export type ProductMigrationUpdateDraftData = {
+  body: ProductMigrationDraftPayload
+  path?: never
+  query?: never
+  url: "/global/product-migration/draft"
+}
+
+export type ProductMigrationUpdateDraftErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+   */
+  404: ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+  /**
+   * ProductMigrationRevisionConflict | ProductMigrationInvalidTransition | ProductMigrationFinalized | ProductMigrationConflict | ProductMigrationInsufficientSpace
+   */
+  409:
+    | ProductMigrationRevisionConflict
+    | ProductMigrationInvalidTransition
+    | ProductMigrationFinalized
+    | ProductMigrationConflict
+    | ProductMigrationInsufficientSpace
+  /**
+   * ProductMigrationSourceError | ProductMigrationValidationFailed
+   */
+  422: ProductMigrationSourceError | ProductMigrationValidationFailed
+}
+
+export type ProductMigrationUpdateDraftError =
+  ProductMigrationUpdateDraftErrors[keyof ProductMigrationUpdateDraftErrors]
+
+export type ProductMigrationUpdateDraftResponses = {
+  /**
+   * ProductMigrationProjection
+   */
+  200: ProductMigrationProjection
+}
+
+export type ProductMigrationUpdateDraftResponse =
+  ProductMigrationUpdateDraftResponses[keyof ProductMigrationUpdateDraftResponses]
+
+export type ProductMigrationExecuteData = {
+  body: ProductMigrationRevisionPayload
+  path?: never
+  query?: never
+  url: "/global/product-migration/execute"
+}
+
+export type ProductMigrationExecuteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+   */
+  404: ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+  /**
+   * ProductMigrationRevisionConflict | ProductMigrationInvalidTransition | ProductMigrationFinalized | ProductMigrationConflict | ProductMigrationInsufficientSpace
+   */
+  409:
+    | ProductMigrationRevisionConflict
+    | ProductMigrationInvalidTransition
+    | ProductMigrationFinalized
+    | ProductMigrationConflict
+    | ProductMigrationInsufficientSpace
+  /**
+   * ProductMigrationSourceError | ProductMigrationValidationFailed
+   */
+  422: ProductMigrationSourceError | ProductMigrationValidationFailed
+}
+
+export type ProductMigrationExecuteError = ProductMigrationExecuteErrors[keyof ProductMigrationExecuteErrors]
+
+export type ProductMigrationExecuteResponses = {
+  /**
+   * ProductMigrationProjection
+   */
+  200: ProductMigrationProjection
+}
+
+export type ProductMigrationExecuteResponse = ProductMigrationExecuteResponses[keyof ProductMigrationExecuteResponses]
+
+export type ProductMigrationPauseData = {
+  body: ProductMigrationRevisionPayload
+  path?: never
+  query?: never
+  url: "/global/product-migration/pause"
+}
+
+export type ProductMigrationPauseErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+   */
+  404: ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+  /**
+   * ProductMigrationRevisionConflict | ProductMigrationInvalidTransition | ProductMigrationFinalized | ProductMigrationConflict | ProductMigrationInsufficientSpace
+   */
+  409:
+    | ProductMigrationRevisionConflict
+    | ProductMigrationInvalidTransition
+    | ProductMigrationFinalized
+    | ProductMigrationConflict
+    | ProductMigrationInsufficientSpace
+  /**
+   * ProductMigrationSourceError | ProductMigrationValidationFailed
+   */
+  422: ProductMigrationSourceError | ProductMigrationValidationFailed
+}
+
+export type ProductMigrationPauseError = ProductMigrationPauseErrors[keyof ProductMigrationPauseErrors]
+
+export type ProductMigrationPauseResponses = {
+  /**
+   * ProductMigrationProjection
+   */
+  200: ProductMigrationProjection
+}
+
+export type ProductMigrationPauseResponse = ProductMigrationPauseResponses[keyof ProductMigrationPauseResponses]
+
+export type ProductMigrationRetryData = {
+  body: ProductMigrationItemPayload
+  path?: never
+  query?: never
+  url: "/global/product-migration/retry"
+}
+
+export type ProductMigrationRetryErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+   */
+  404: ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+  /**
+   * ProductMigrationRevisionConflict | ProductMigrationInvalidTransition | ProductMigrationFinalized | ProductMigrationConflict | ProductMigrationInsufficientSpace
+   */
+  409:
+    | ProductMigrationRevisionConflict
+    | ProductMigrationInvalidTransition
+    | ProductMigrationFinalized
+    | ProductMigrationConflict
+    | ProductMigrationInsufficientSpace
+  /**
+   * ProductMigrationSourceError | ProductMigrationValidationFailed
+   */
+  422: ProductMigrationSourceError | ProductMigrationValidationFailed
+}
+
+export type ProductMigrationRetryError = ProductMigrationRetryErrors[keyof ProductMigrationRetryErrors]
+
+export type ProductMigrationRetryResponses = {
+  /**
+   * ProductMigrationProjection
+   */
+  200: ProductMigrationProjection
+}
+
+export type ProductMigrationRetryResponse = ProductMigrationRetryResponses[keyof ProductMigrationRetryResponses]
+
+export type ProductMigrationSkipData = {
+  body: ProductMigrationItemPayload
+  path?: never
+  query?: never
+  url: "/global/product-migration/skip"
+}
+
+export type ProductMigrationSkipErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+   */
+  404: ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+  /**
+   * ProductMigrationRevisionConflict | ProductMigrationInvalidTransition | ProductMigrationFinalized | ProductMigrationConflict | ProductMigrationInsufficientSpace
+   */
+  409:
+    | ProductMigrationRevisionConflict
+    | ProductMigrationInvalidTransition
+    | ProductMigrationFinalized
+    | ProductMigrationConflict
+    | ProductMigrationInsufficientSpace
+  /**
+   * ProductMigrationSourceError | ProductMigrationValidationFailed
+   */
+  422: ProductMigrationSourceError | ProductMigrationValidationFailed
+}
+
+export type ProductMigrationSkipError = ProductMigrationSkipErrors[keyof ProductMigrationSkipErrors]
+
+export type ProductMigrationSkipResponses = {
+  /**
+   * ProductMigrationProjection
+   */
+  200: ProductMigrationProjection
+}
+
+export type ProductMigrationSkipResponse = ProductMigrationSkipResponses[keyof ProductMigrationSkipResponses]
+
+export type ProductMigrationValidateData = {
+  body: ProductMigrationRevisionPayload
+  path?: never
+  query?: never
+  url: "/global/product-migration/validate"
+}
+
+export type ProductMigrationValidateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+   */
+  404: ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+  /**
+   * ProductMigrationRevisionConflict | ProductMigrationInvalidTransition | ProductMigrationFinalized | ProductMigrationConflict | ProductMigrationInsufficientSpace
+   */
+  409:
+    | ProductMigrationRevisionConflict
+    | ProductMigrationInvalidTransition
+    | ProductMigrationFinalized
+    | ProductMigrationConflict
+    | ProductMigrationInsufficientSpace
+  /**
+   * ProductMigrationSourceError | ProductMigrationValidationFailed
+   */
+  422: ProductMigrationSourceError | ProductMigrationValidationFailed
+}
+
+export type ProductMigrationValidateError = ProductMigrationValidateErrors[keyof ProductMigrationValidateErrors]
+
+export type ProductMigrationValidateResponses = {
+  /**
+   * ProductMigrationProjection
+   */
+  200: ProductMigrationProjection
+}
+
+export type ProductMigrationValidateResponse =
+  ProductMigrationValidateResponses[keyof ProductMigrationValidateResponses]
+
+export type ProductMigrationFinalizeData = {
+  body: ProductMigrationRevisionPayload
+  path?: never
+  query?: never
+  url: "/global/product-migration/finalize"
+}
+
+export type ProductMigrationFinalizeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+   */
+  404: ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+  /**
+   * ProductMigrationRevisionConflict | ProductMigrationInvalidTransition | ProductMigrationFinalized | ProductMigrationConflict | ProductMigrationInsufficientSpace
+   */
+  409:
+    | ProductMigrationRevisionConflict
+    | ProductMigrationInvalidTransition
+    | ProductMigrationFinalized
+    | ProductMigrationConflict
+    | ProductMigrationInsufficientSpace
+  /**
+   * ProductMigrationSourceError | ProductMigrationValidationFailed
+   */
+  422: ProductMigrationSourceError | ProductMigrationValidationFailed
+}
+
+export type ProductMigrationFinalizeError = ProductMigrationFinalizeErrors[keyof ProductMigrationFinalizeErrors]
+
+export type ProductMigrationFinalizeResponses = {
+  /**
+   * ProductMigrationProjection
+   */
+  200: ProductMigrationProjection
+}
+
+export type ProductMigrationFinalizeResponse =
+  ProductMigrationFinalizeResponses[keyof ProductMigrationFinalizeResponses]
+
+export type ProductMigrationFreshStartData = {
+  body: ProductMigrationRevisionPayload
+  path?: never
+  query?: never
+  url: "/global/product-migration/fresh-start"
+}
+
+export type ProductMigrationFreshStartErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+   */
+  404: ProductMigrationUnavailable | ProductMigrationRequired | ProductMigrationItemNotFound
+  /**
+   * ProductMigrationRevisionConflict | ProductMigrationInvalidTransition | ProductMigrationFinalized | ProductMigrationConflict | ProductMigrationInsufficientSpace
+   */
+  409:
+    | ProductMigrationRevisionConflict
+    | ProductMigrationInvalidTransition
+    | ProductMigrationFinalized
+    | ProductMigrationConflict
+    | ProductMigrationInsufficientSpace
+  /**
+   * ProductMigrationSourceError | ProductMigrationValidationFailed
+   */
+  422: ProductMigrationSourceError | ProductMigrationValidationFailed
+}
+
+export type ProductMigrationFreshStartError = ProductMigrationFreshStartErrors[keyof ProductMigrationFreshStartErrors]
+
+export type ProductMigrationFreshStartResponses = {
+  /**
+   * ProductMigrationProjection
+   */
+  200: ProductMigrationProjection
+}
+
+export type ProductMigrationFreshStartResponse =
+  ProductMigrationFreshStartResponses[keyof ProductMigrationFreshStartResponses]
 
 export type EventSubscribeData = {
   body?: never
@@ -8512,9 +9131,9 @@ export type GraphDeleteNodeErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type GraphDeleteNodeError = GraphDeleteNodeErrors[keyof GraphDeleteNodeErrors]
@@ -8682,9 +9301,9 @@ export type GraphDeleteEdgeErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type GraphDeleteEdgeError = GraphDeleteEdgeErrors[keyof GraphDeleteEdgeErrors]
@@ -8746,9 +9365,9 @@ export type GraphPlanAdmitErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type GraphPlanAdmitError = GraphPlanAdmitErrors[keyof GraphPlanAdmitErrors]
@@ -8812,9 +9431,9 @@ export type GraphWorkflowModeErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
   /**
    * GraphWorkflowRevisionConflict | GraphWorkflowActiveOperation
    */
@@ -8849,9 +9468,9 @@ export type GraphWorkflowApproveErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
   /**
    * GraphWorkflowRevisionConflict
    */
@@ -8886,9 +9505,9 @@ export type GraphWorkflowPauseErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
   /**
    * GraphWorkflowRevisionConflict
    */
@@ -8923,9 +9542,9 @@ export type GraphPromoteErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type GraphPromoteError = GraphPromoteErrors[keyof GraphPromoteErrors]
@@ -9831,6 +10450,10 @@ export type PtyCreateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type PtyCreateError = PtyCreateErrors[keyof PtyCreateErrors]
@@ -9862,9 +10485,9 @@ export type PtyRemoveErrors = {
    */
   400: BadRequestError
   /**
-   * PtyNotFoundError
+   * PtyNotFoundError | ProductMigrationRequired
    */
-  404: PtyNotFoundError
+  404: PtyNotFoundError | ProductMigrationRequired
 }
 
 export type PtyRemoveError = PtyRemoveErrors[keyof PtyRemoveErrors]
@@ -9936,9 +10559,9 @@ export type PtyUpdateErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * PtyNotFoundError
+   * PtyNotFoundError | ProductMigrationRequired
    */
-  404: PtyNotFoundError
+  404: PtyNotFoundError | ProductMigrationRequired
 }
 
 export type PtyUpdateError = PtyUpdateErrors[keyof PtyUpdateErrors]
@@ -9974,9 +10597,9 @@ export type PtyConnectTokenErrors = {
    */
   403: PtyForbiddenError
   /**
-   * PtyNotFoundError
+   * PtyNotFoundError | ProductMigrationRequired
    */
-  404: PtyNotFoundError
+  404: PtyNotFoundError | ProductMigrationRequired
 }
 
 export type PtyConnectTokenError = PtyConnectTokenErrors[keyof PtyConnectTokenErrors]
@@ -10140,9 +10763,9 @@ export type PermissionReplyErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * PermissionNotFoundError
+   * PermissionNotFoundError | ProductMigrationRequired
    */
-  404: PermissionNotFoundError
+  404: PermissionNotFoundError | ProductMigrationRequired
 }
 
 export type PermissionReplyError = PermissionReplyErrors[keyof PermissionReplyErrors]
@@ -10357,6 +10980,10 @@ export type SessionCreateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type SessionCreateError = SessionCreateErrors[keyof SessionCreateErrors]
@@ -10418,9 +11045,9 @@ export type SessionDeleteErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type SessionDeleteError = SessionDeleteErrors[keyof SessionDeleteErrors]
@@ -10495,9 +11122,9 @@ export type SessionUpdateErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type SessionUpdateError = SessionUpdateErrors[keyof SessionUpdateErrors]
@@ -10682,9 +11309,9 @@ export type SessionPromptErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type SessionPromptError = SessionPromptErrors[keyof SessionPromptErrors]
@@ -10720,9 +11347,9 @@ export type SessionDeleteMessageErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
   /**
    * SessionBusyError
    */
@@ -10798,9 +11425,9 @@ export type SessionForkErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type SessionForkError = SessionForkErrors[keyof SessionForkErrors]
@@ -10831,6 +11458,10 @@ export type SessionAbortErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type SessionAbortError = SessionAbortErrors[keyof SessionAbortErrors]
@@ -10866,9 +11497,9 @@ export type SessionInitErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type SessionInitError = SessionInitErrors[keyof SessionInitErrors]
@@ -10900,9 +11531,9 @@ export type SessionUnshareErrors = {
    */
   400: BadRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
   /**
    * InternalServerError
    */
@@ -10938,9 +11569,9 @@ export type SessionShareErrors = {
    */
   400: BadRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
   /**
    * InternalServerError
    */
@@ -10980,9 +11611,9 @@ export type SessionSummarizeErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type SessionSummarizeError = SessionSummarizeErrors[keyof SessionSummarizeErrors]
@@ -11029,9 +11660,9 @@ export type SessionPromptAsyncErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type SessionPromptAsyncError = SessionPromptAsyncErrors[keyof SessionPromptAsyncErrors]
@@ -11078,9 +11709,9 @@ export type SessionCommandErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type SessionCommandError = SessionCommandErrors[keyof SessionCommandErrors]
@@ -11123,9 +11754,9 @@ export type SessionShellErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
   /**
    * SessionBusyError
    */
@@ -11167,9 +11798,9 @@ export type SessionRevertErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
   /**
    * SessionBusyError
    */
@@ -11205,9 +11836,9 @@ export type SessionUnrevertErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
   /**
    * SessionBusyError
    */
@@ -11246,9 +11877,9 @@ export type PermissionRespondErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError | PermissionNotFoundError
+   * NotFoundError | PermissionNotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError | PermissionNotFoundError
+  404: NotFoundError | PermissionNotFoundError | ProductMigrationRequired
 }
 
 export type PermissionRespondError = PermissionRespondErrors[keyof PermissionRespondErrors]
@@ -11282,9 +11913,9 @@ export type PartDeleteErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type PartDeleteError = PartDeleteErrors[keyof PartDeleteErrors]
@@ -11318,9 +11949,9 @@ export type PartUpdateErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type PartUpdateError = PartUpdateErrors[keyof PartUpdateErrors]
@@ -11349,6 +11980,10 @@ export type SyncStartErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type SyncStartError = SyncStartErrors[keyof SyncStartErrors]
@@ -11388,6 +12023,10 @@ export type SyncReplayErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type SyncReplayError = SyncReplayErrors[keyof SyncReplayErrors]
@@ -11420,6 +12059,10 @@ export type SyncStealErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type SyncStealError = SyncStealErrors[keyof SyncStealErrors]
@@ -11941,6 +12584,10 @@ export type ExperimentalWorkspaceCreateErrors = {
    * WorkspaceCreateError | BadRequest | InvalidRequestError
    */
   400: WorkspaceCreateError | EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type ExperimentalWorkspaceCreateError =
@@ -11971,6 +12618,10 @@ export type ExperimentalWorkspaceSyncListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type ExperimentalWorkspaceSyncListError =
@@ -12033,6 +12684,10 @@ export type ExperimentalWorkspaceRemoveErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type ExperimentalWorkspaceRemoveError =
@@ -12068,9 +12723,9 @@ export type ExperimentalWorkspaceWarpErrors = {
    */
   400: WorkspaceWarpError | VcsApplyError | InvalidRequestError
   /**
-   * NotFoundError
+   * NotFoundError | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: NotFoundError | ProductMigrationRequired
 }
 
 export type ExperimentalWorkspaceWarpError = ExperimentalWorkspaceWarpErrors[keyof ExperimentalWorkspaceWarpErrors]
@@ -12249,6 +12904,10 @@ export type V2SessionCreateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type V2SessionCreateError = V2SessionCreateErrors[keyof V2SessionCreateErrors]
@@ -12355,9 +13014,9 @@ export type V2SessionSwitchAgentErrors = {
    */
   401: UnauthorizedError
   /**
-   * SessionNotFoundError
+   * SessionNotFoundError | ProductMigrationRequired
    */
-  404: SessionNotFoundError
+  404: ProductMigrationRequired | SessionNotFoundError
 }
 
 export type V2SessionSwitchAgentError = V2SessionSwitchAgentErrors[keyof V2SessionSwitchAgentErrors]
@@ -12392,9 +13051,9 @@ export type V2SessionSwitchModelErrors = {
    */
   401: UnauthorizedError
   /**
-   * SessionNotFoundError
+   * SessionNotFoundError | ProductMigrationRequired
    */
-  404: SessionNotFoundError
+  404: ProductMigrationRequired | SessionNotFoundError
 }
 
 export type V2SessionSwitchModelError = V2SessionSwitchModelErrors[keyof V2SessionSwitchModelErrors]
@@ -12432,9 +13091,9 @@ export type V2SessionPromptErrors = {
    */
   401: UnauthorizedError
   /**
-   * SessionNotFoundError
+   * SessionNotFoundError | ProductMigrationRequired
    */
-  404: SessionNotFoundError
+  404: ProductMigrationRequired | SessionNotFoundError
   /**
    * ConflictError
    */
@@ -12554,9 +13213,9 @@ export type V2SessionRevertStageErrors = {
    */
   401: UnauthorizedError
   /**
-   * MessageNotFoundError | SessionNotFoundError
+   * MessageNotFoundError | SessionNotFoundError | ProductMigrationRequired
    */
-  404: MessageNotFoundError | SessionNotFoundError
+  404: MessageNotFoundError | ProductMigrationRequired | SessionNotFoundError
   /**
    * UnknownError
    */
@@ -12595,9 +13254,9 @@ export type V2SessionRevertClearErrors = {
    */
   401: UnauthorizedError
   /**
-   * SessionNotFoundError
+   * SessionNotFoundError | ProductMigrationRequired
    */
-  404: SessionNotFoundError
+  404: ProductMigrationRequired | SessionNotFoundError
   /**
    * UnknownError
    */
@@ -12634,9 +13293,9 @@ export type V2SessionRevertCommitErrors = {
    */
   401: UnauthorizedError
   /**
-   * SessionNotFoundError
+   * SessionNotFoundError | ProductMigrationRequired
    */
-  404: SessionNotFoundError
+  404: ProductMigrationRequired | SessionNotFoundError
 }
 
 export type V2SessionRevertCommitError = V2SessionRevertCommitErrors[keyof V2SessionRevertCommitErrors]
@@ -13458,6 +14117,10 @@ export type V2PermissionSavedRemoveErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type V2PermissionSavedRemoveError = V2PermissionSavedRemoveErrors[keyof V2PermissionSavedRemoveErrors]
@@ -13537,9 +14200,9 @@ export type V2SessionPermissionCreateErrors = {
    */
   401: UnauthorizedError
   /**
-   * SessionNotFoundError
+   * SessionNotFoundError | ProductMigrationRequired
    */
-  404: SessionNotFoundError
+  404: ProductMigrationRequired | SessionNotFoundError
 }
 
 export type V2SessionPermissionCreateError = V2SessionPermissionCreateErrors[keyof V2SessionPermissionCreateErrors]
@@ -13620,9 +14283,9 @@ export type V2SessionPermissionReplyErrors = {
    */
   401: UnauthorizedError
   /**
-   * SessionNotFoundError | PermissionNotFoundError
+   * SessionNotFoundError | PermissionNotFoundError | ProductMigrationRequired
    */
-  404: PermissionNotFoundError | SessionNotFoundError
+  404: PermissionNotFoundError | ProductMigrationRequired | SessionNotFoundError
 }
 
 export type V2SessionPermissionReplyError = V2SessionPermissionReplyErrors[keyof V2SessionPermissionReplyErrors]
@@ -13918,6 +14581,10 @@ export type V2PtyCreateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ProductMigrationRequired
+   */
+  404: ProductMigrationRequired
 }
 
 export type V2PtyCreateError = V2PtyCreateErrors[keyof V2PtyCreateErrors]
@@ -13958,9 +14625,9 @@ export type V2PtyRemoveErrors = {
    */
   401: UnauthorizedError
   /**
-   * PtyNotFoundError
+   * PtyNotFoundError | ProductMigrationRequired
    */
-  404: PtyNotFoundError
+  404: PtyNotFoundError | ProductMigrationRequired
 }
 
 export type V2PtyRemoveError = V2PtyRemoveErrors[keyof V2PtyRemoveErrors]
@@ -14047,9 +14714,9 @@ export type V2PtyUpdateErrors = {
    */
   401: UnauthorizedError
   /**
-   * PtyNotFoundError
+   * PtyNotFoundError | ProductMigrationRequired
    */
-  404: PtyNotFoundError
+  404: PtyNotFoundError | ProductMigrationRequired
 }
 
 export type V2PtyUpdateError = V2PtyUpdateErrors[keyof V2PtyUpdateErrors]
@@ -14094,9 +14761,9 @@ export type V2PtyConnectTokenErrors = {
    */
   403: ForbiddenError
   /**
-   * PtyNotFoundError
+   * PtyNotFoundError | ProductMigrationRequired
    */
-  404: PtyNotFoundError
+  404: PtyNotFoundError | ProductMigrationRequired
 }
 
 export type V2PtyConnectTokenError = V2PtyConnectTokenErrors[keyof V2PtyConnectTokenErrors]
@@ -14141,9 +14808,9 @@ export type V2PtyConnectErrors = {
    */
   403: ForbiddenError
   /**
-   * PtyNotFoundError
+   * PtyNotFoundError | ProductMigrationRequired
    */
-  404: PtyNotFoundError
+  404: PtyNotFoundError | ProductMigrationRequired
 }
 
 export type V2PtyConnectError = V2PtyConnectErrors[keyof V2PtyConnectErrors]
@@ -14463,9 +15130,9 @@ export type PtyConnectErrors = {
    */
   403: EffectHttpApiErrorForbidden
   /**
-   * Not found
+   * NotFound | ProductMigrationRequired
    */
-  404: NotFoundError
+  404: EffectHttpApiErrorNotFound | ProductMigrationRequired
 }
 
 export type PtyConnectError = PtyConnectErrors[keyof PtyConnectErrors]

@@ -12,6 +12,9 @@ import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { Database } from "@opencode-ai/core/database/database"
+import { Product } from "@opencode-ai/core/product"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const env = AppNodeBuilder.build(
@@ -19,6 +22,22 @@ const env = AppNodeBuilder.build(
   [[InstanceStore.bootstrapNode, noopBootstrap]],
 )
 const it = testEffect(env)
+const graphVibe = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      Permission.node,
+      EventV2Bridge.node,
+      CrossSpawnSpawner.node,
+      InstanceStore.node,
+      Database.node,
+      ProductMigrationState.node,
+    ]),
+    [
+      [InstanceStore.bootstrapNode, noopBootstrap],
+      [Product.node, Product.layerWith(Product.GraphVibe)],
+    ],
+  ),
+)
 
 const rejectAll = (message?: string) =>
   Effect.gen(function* () {
@@ -554,6 +573,33 @@ test("disabled - specific allow overrides wildcard deny", () => {
 })
 
 // ask tests
+
+graphVibe.instance(
+  "permission mutations require completed product migration",
+  () =>
+    Effect.gen(function* () {
+      const input = {
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "allow" as const }],
+      }
+      const blockedAsk = yield* ask(input).pipe(Effect.exit)
+      expect(Exit.isFailure(blockedAsk)).toBe(true)
+      if (Exit.isFailure(blockedAsk))
+        expect(Cause.squash(blockedAsk.cause)).toMatchObject({ _tag: "ProductMigrationRequired" })
+      expect(
+        yield* reply({ requestID: PermissionV1.ID.make("per_blocked"), reply: "once" }).pipe(Effect.flip),
+      ).toMatchObject({ _tag: "ProductMigrationRequired" })
+      expect(yield* list()).toEqual([])
+
+      yield* (yield* ProductMigrationState.Service).freshStart({ expectedRevision: 0 })
+      expect(yield* ask(input)).toBeUndefined()
+    }),
+  { git: true },
+)
 
 it.instance(
   "ask - resolves immediately when action is allow",

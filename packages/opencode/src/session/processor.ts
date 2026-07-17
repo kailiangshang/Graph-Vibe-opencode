@@ -673,7 +673,7 @@ const layer = Layer.effect(
               }),
             ),
             Effect.catch(halt),
-            Effect.ensuring(cleanup()),
+            Effect.ensuring(cleanup().pipe(Effect.orDie)),
           )
 
           if (ctx.needsCompaction) return "compact"
@@ -686,9 +686,9 @@ const layer = Layer.effect(
         get message() {
           return ctx.assistantMessage
         },
-        updateToolCall,
-        completeToolCall,
-        process,
+        updateToolCall: (toolCallID, update) => updateToolCall(toolCallID, update).pipe(Effect.orDie),
+        completeToolCall: (toolCallID, output) => completeToolCall(toolCallID, output).pipe(Effect.orDie),
+        process: (input) => process(input).pipe(Effect.orDie),
       } satisfies Handle
     })
 

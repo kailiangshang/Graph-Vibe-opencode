@@ -5,9 +5,11 @@ import { Effect, Layer, Scope, Context } from "effect"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ShareNext } from "./share-next"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 export interface Interface {
-  readonly create: (input?: Session.CreateInput) => Effect.Effect<Session.Info>
+  readonly create: (input?: Session.CreateInput) => Effect.Effect<Session.Info, ProductMigration.Required>
   readonly share: (sessionID: SessionID) => Effect.Effect<{ url: string }, unknown>
   readonly unshare: (sessionID: SessionID) => Effect.Effect<void, unknown>
 }
@@ -22,8 +24,10 @@ const layer = Layer.effect(
     const shareNext = yield* ShareNext.Service
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
+    const migration = yield* ProductMigrationState.Service
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
+      yield* migration.requireCompleted()
       const conf = yield* cfg.get()
       if (conf.share === "disabled") throw new Error("Sharing is disabled in configuration")
       const result = yield* shareNext.create(sessionID)
@@ -32,6 +36,7 @@ const layer = Layer.effect(
     })
 
     const unshare = Effect.fn("SessionShare.unshare")(function* (sessionID: SessionID) {
+      yield* migration.requireCompleted()
       yield* shareNext.remove(sessionID)
       yield* session.setShare({ sessionID, share: undefined })
     })
@@ -52,7 +57,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, Session.node, ShareNext.node, RuntimeFlags.node],
+  deps: [Config.node, Session.node, ShareNext.node, RuntimeFlags.node, ProductMigrationState.node],
 })
 
 export * as SessionShare from "./session"

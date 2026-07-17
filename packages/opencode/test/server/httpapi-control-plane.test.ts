@@ -4,11 +4,14 @@ import { Context, Effect, Layer, Option, Ref } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
+import { ProductMigrationService } from "@opencode-ai/core/product-migration/service"
+import { Product } from "@opencode-ai/core/product"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { Auth } from "../../src/auth"
 import { Config } from "../../src/config/config"
 import { Installation } from "../../src/installation"
+import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { ServerAuth } from "../../src/server/auth"
 import { RootHttpApi } from "../../src/server/routes/instance/httpapi/api"
 import { controlHandlers } from "../../src/server/routes/instance/httpapi/handlers/control"
@@ -39,6 +42,9 @@ const apiLayer = HttpRouter.serve(
   Layer.provide(Layer.mock(Auth.Service)({})),
   Layer.provide(Layer.mock(Config.Service)({})),
   Layer.provide(Layer.mock(Installation.Service)({})),
+  Layer.provide(Layer.mock(ProductMigrationService.Service)({})),
+  Layer.provide(Layer.mock(EventV2Bridge.Service)({})),
+  Layer.provide(Product.layerWith(Product.OpenCode)),
   Layer.provide(
     Layer.mock(MoveSession.Service)({
       moveSession: (value) => Ref.set(called, value),

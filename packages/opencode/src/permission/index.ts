@@ -6,12 +6,18 @@ import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 
 export const Event = PermissionV1.Event
 
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
-  readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
+  readonly ask: (
+    input: PermissionV1.AskInput,
+  ) => Effect.Effect<void, PermissionV1.Error | ProductMigration.Required>
+  readonly reply: (
+    input: PermissionV1.ReplyInput,
+  ) => Effect.Effect<void, PermissionV1.NotFoundError | ProductMigration.Required>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
 }
 
@@ -43,6 +49,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const migration = yield* ProductMigrationState.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -65,6 +72,7 @@ const layer = Layer.effect(
     )
 
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
+      yield* migration.requireCompleted()
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
       let needsAsk = false
@@ -107,6 +115,7 @@ const layer = Layer.effect(
     })
 
     const reply = Effect.fn("Permission.reply")(function* (input: PermissionV1.ReplyInput) {
+      yield* migration.requireCompleted()
       const { approved, pending } = yield* InstanceState.get(state)
       const existing = pending.get(input.requestID)
       if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
@@ -218,6 +227,10 @@ export function visibleTools<T>(tools: Record<string, T>, ruleset: PermissionV1.
   return Object.fromEntries(Object.entries(tools).filter(([name]) => !hidden.has(name)))
 }
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [EventV2Bridge.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer: layer,
+  deps: [EventV2Bridge.node, ProductMigrationState.node],
+})
 
 export * as Permission from "."

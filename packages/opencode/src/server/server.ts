@@ -13,6 +13,7 @@ import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
 import { PublicApi } from "./routes/instance/httpapi/public"
 import type { CorsOptions } from "@opencode-ai/server/cors"
 import { lazy } from "@/util/lazy"
+import { Product } from "@opencode-ai/core/product"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -71,7 +72,7 @@ export async function openapi() {
 export let url: URL | undefined
 
 export async function listen(opts: ListenOptions): Promise<Listener> {
-  const listener = await Effect.runPromise(listenEffect(opts))
+  const listener = await Effect.runPromise(listenEffect(opts, Product.current()))
   return {
     hostname: listener.hostname,
     port: listener.port,
@@ -80,12 +81,15 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
   }
 }
 
-const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unknown> = Effect.fn("Server.listen")(
-  function* (opts: ListenOptions) {
-    const state = yield* startWithPortFallback(opts)
+const listenEffect: (
+  opts: ListenOptions,
+  profile: Product.Profile,
+) => Effect.Effect<EffectListener, unknown> = Effect.fn("Server.listen")(
+  function* (opts: ListenOptions, profile: Product.Profile) {
+    const state = yield* startWithPortFallback(opts, profile)
     const address = yield* tcpAddress(state)
     const listenerUrl = makeURL(opts.hostname, address.port)
-    const unpublishMdns = yield* setupMdns(opts, address.port, state.scope)
+    const unpublishMdns = yield* setupMdns(opts, address.port, state.scope, profile)
     url = listenerUrl
 
     return {
@@ -114,11 +118,9 @@ function listenerLayer(opts: ListenOptions, port: number) {
   )
 }
 
-function startWithPortFallback(opts: ListenOptions) {
+function startWithPortFallback(opts: ListenOptions, profile: Product.Profile) {
   if (opts.port !== 0) return startListener(opts, opts.port)
-  // Match the legacy listener port-resolution behavior: explicit `0` prefers
-  // 4096 first, then any free port.
-  return startListener(opts, 4096).pipe(Effect.catch(() => startListener(opts, 0)))
+  return startListener(opts, profile.backendPort).pipe(Effect.catch(() => startListener(opts, 0)))
 }
 
 function startListener(opts: ListenOptions, port: number) {
@@ -152,13 +154,13 @@ function makeURL(hostname: string, port: number) {
   return result
 }
 
-function setupMdns(opts: ListenOptions, port: number, scope: Scope.Scope) {
+function setupMdns(opts: ListenOptions, port: number, scope: Scope.Scope, profile: Product.Profile) {
   return Effect.gen(function* () {
     const publish =
       opts.mdns && port && opts.hostname !== "127.0.0.1" && opts.hostname !== "localhost" && opts.hostname !== "::1"
     if (publish) {
-      const unpublish = yield* Effect.cached(Effect.sync(() => MDNS.unpublish()))
-      yield* Effect.sync(() => MDNS.publish(port, opts.mdnsDomain))
+      const dispose = yield* Effect.sync(() => MDNS.publish(profile, port, opts.mdnsDomain))
+      const unpublish = yield* Effect.cached(Effect.sync(dispose))
       yield* Scope.addFinalizer(scope, unpublish)
       return unpublish
     }

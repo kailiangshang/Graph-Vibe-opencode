@@ -22,6 +22,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Project } from "@opencode-ai/schema/project"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 export const Info = Project.Info
 export type Info = Types.DeepMutable<Schema.Schema.Type<typeof Info>>
@@ -113,6 +114,7 @@ const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const { db } = yield* Database.Service
+    const migration = yield* ProductMigrationState.Service
 
     const git = Effect.fnUntraced(
       function* (args: string[], opts?: { cwd?: string }) {
@@ -150,6 +152,12 @@ const layer = Layer.effect(
       if (!oldID) return
       if (oldID === ProjectV2.ID.global) return
       if (oldID === newID) return
+      const canMutateSessions = yield* migration.requireCompleted().pipe(
+        Effect.match({
+          onFailure: () => false,
+          onSuccess: () => true,
+        }),
+      )
 
       yield* db
         .transaction(
@@ -174,18 +182,20 @@ const layer = Layer.effect(
               // accuracy
               yield* d.delete(ProjectDirectoryTable).where(eq(ProjectDirectoryTable.project_id, oldID)).run()
 
-              yield* d
-                .update(SessionTable)
-                .set({ project_id: newID, time_updated: sql`${SessionTable.time_updated}` })
-                .where(eq(SessionTable.project_id, oldID))
-                .run()
-              yield* d
-                .update(WorkspaceTable)
-                .set({ project_id: newID })
-                .where(eq(WorkspaceTable.project_id, oldID))
-                .run()
+              if (canMutateSessions) {
+                yield* d
+                  .update(SessionTable)
+                  .set({ project_id: newID, time_updated: sql`${SessionTable.time_updated}` })
+                  .where(eq(SessionTable.project_id, oldID))
+                  .run()
+                yield* d
+                  .update(WorkspaceTable)
+                  .set({ project_id: newID })
+                  .where(eq(WorkspaceTable.project_id, oldID))
+                  .run()
+              }
 
-              if (oldProject) yield* d.delete(ProjectTable).where(eq(ProjectTable.id, oldID)).run()
+              if (oldProject && canMutateSessions) yield* d.delete(ProjectTable).where(eq(ProjectTable.id, oldID)).run()
             }),
           { behavior: "immediate" },
         )
@@ -288,7 +298,13 @@ const layer = Layer.effect(
         .run()
         .pipe(Effect.orDie)
 
-      if (projectID !== ProjectV2.ID.global) {
+      const canMutateSessions = yield* migration.requireCompleted().pipe(
+        Effect.match({
+          onFailure: () => false,
+          onSuccess: () => true,
+        }),
+      )
+      if (projectID !== ProjectV2.ID.global && canMutateSessions) {
         yield* db
           .update(SessionTable)
           .set({ project_id: projectID })
@@ -477,6 +493,7 @@ export const node = LayerNode.make({
     EventV2Bridge.node,
     RuntimeFlags.node,
     Database.node,
+    ProductMigrationState.node,
   ],
 })
 

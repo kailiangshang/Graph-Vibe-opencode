@@ -1,4 +1,5 @@
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
@@ -22,7 +23,7 @@ export const ControlPlaneApi = HttpApi.make("controlPlane").add(
       HttpApiEndpoint.post("moveSession", `${root}/move-session`, {
         payload: MoveSessionPayload,
         success: described(HttpApiSchema.NoContent, "Session moved"),
-        error: ApiMoveSessionError,
+        error: [ApiMoveSessionError, ProductMigration.Required],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "experimental.controlPlane.moveSession",

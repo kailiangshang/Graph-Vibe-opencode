@@ -25,6 +25,10 @@ export type InvalidCursorError = { readonly _tag: "InvalidCursorError"; readonly
 export const isInvalidCursorError = (value: unknown): value is InvalidCursorError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "InvalidCursorError"
 
+export type ProductMigrationRequired = { readonly _tag: "ProductMigrationRequired" }
+export const isProductMigrationRequired = (value: unknown): value is ProductMigrationRequired =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ProductMigrationRequired"
+
 export type SessionNotFoundError = {
   readonly _tag: "SessionNotFoundError"
   readonly sessionID: string

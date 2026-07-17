@@ -37,6 +37,8 @@ import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
+import { ProductMigrationState } from "./product-migration/state"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -112,7 +114,7 @@ export type Error = NotFoundError | MessageDecodeError | OperationUnavailableErr
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
-  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
+  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, ProductMigration.Required>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -139,18 +141,21 @@ export interface Interface {
     after?: number
     limit: number
   }) => Effect.Effect<{ events: ReadonlyArray<SessionEvent.DurableEvent>; hasMore: boolean }, NotFoundError>
-  readonly switchAgent: (input: { sessionID: SessionSchema.ID; agent: string }) => Effect.Effect<void, NotFoundError>
+  readonly switchAgent: (input: {
+    sessionID: SessionSchema.ID
+    agent: string
+  }) => Effect.Effect<void, NotFoundError | ProductMigration.Required>
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
-  }) => Effect.Effect<void, NotFoundError>
+  }) => Effect.Effect<void, NotFoundError | ProductMigration.Required>
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
     prompt: PromptInput.Prompt
     delivery?: SessionInput.Delivery
     resume?: boolean
-  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
+  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | ProductMigration.Required>
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -166,16 +171,25 @@ export interface Interface {
   readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
-  readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
+  readonly resume: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<void, NotFoundError | SessionRunner.RunError | ProductMigration.Required>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly revert: {
     readonly stage: (input: {
       sessionID: SessionSchema.ID
       messageID: SessionMessage.ID
       files?: boolean
-    }) => Effect.Effect<Revert.State, NotFoundError | MessageNotFoundError | Snapshot.Error>
-    readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | Snapshot.Error>
-    readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+    }) => Effect.Effect<
+      Revert.State,
+      NotFoundError | MessageNotFoundError | Snapshot.Error | ProductMigration.Required
+    >
+    readonly clear: (
+      sessionID: SessionSchema.ID,
+    ) => Effect.Effect<void, NotFoundError | Snapshot.Error | ProductMigration.Required>
+    readonly commit: (
+      sessionID: SessionSchema.ID,
+    ) => Effect.Effect<void, NotFoundError | ProductMigration.Required>
   }
 }
 
@@ -191,6 +205,7 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
+    const migration = yield* ProductMigrationState.Service
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -206,6 +221,7 @@ const layer = Layer.effect(
 
     const result = Service.of({
       create: Effect.fn("V2Session.create")(function* (input) {
+        yield* migration.requireCompleted()
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
@@ -360,6 +376,7 @@ const layer = Layer.effect(
       prompt: Effect.fn("V2Session.prompt")((input) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
+            yield* migration.requireCompleted()
             yield* result.get(input.sessionID)
             const prompt = resolvePrompt(input.prompt)
             const messageID = input.id ?? SessionMessage.ID.create()
@@ -391,6 +408,7 @@ const layer = Layer.effect(
         return yield* new OperationUnavailableError({ operation: "skill" })
       }),
       switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
+        yield* migration.requireCompleted()
         yield* result.get(input.sessionID)
         yield* events.publish(SessionEvent.AgentSwitched, {
           sessionID: input.sessionID,
@@ -400,6 +418,7 @@ const layer = Layer.effect(
         })
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
+        yield* migration.requireCompleted()
         const session = yield* result.get(input.sessionID)
         if (
           session.model?.providerID === input.model.providerID &&
@@ -424,6 +443,7 @@ const layer = Layer.effect(
       }),
       active: execution.active,
       resume: Effect.fn("V2Session.resume")(function* (sessionID) {
+        yield* migration.requireCompleted()
         yield* result.get(sessionID)
         yield* execution.resume(sessionID)
       }),
@@ -432,6 +452,7 @@ const layer = Layer.effect(
       ),
       revert: {
         stage: Effect.fn("V2Session.revert.stage")(function* (input) {
+          yield* migration.requireCompleted()
           const session = yield* result.get(input.sessionID)
           return yield* SessionRevert.stage({ session, messageID: input.messageID, files: input.files }).pipe(
             Effect.provideService(Database.Service, database),
@@ -440,6 +461,7 @@ const layer = Layer.effect(
           )
         }),
         clear: Effect.fn("V2Session.revert.clear")(function* (sessionID) {
+          yield* migration.requireCompleted()
           const session = yield* result.get(sessionID)
           yield* SessionRevert.clear(session).pipe(
             Effect.provideService(EventV2.Service, events),
@@ -447,6 +469,7 @@ const layer = Layer.effect(
           )
         }),
         commit: Effect.fn("V2Session.revert.commit")(function* (sessionID) {
+          yield* migration.requireCompleted()
           const session = yield* result.get(sessionID)
           yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
         }),
@@ -482,5 +505,6 @@ export const node = makeGlobalNode({
     SessionStore.node,
     LocationServiceMap.node,
     SessionProjector.node,
+    ProductMigrationState.node,
   ],
 })

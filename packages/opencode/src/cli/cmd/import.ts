@@ -12,6 +12,7 @@ import path from "path"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Effect, Schema } from "effect"
 import type { InstanceContext } from "@/project/instance-context"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 const decodeMessageInfo = Schema.decodeUnknownSync(SessionV1.Info)
 const decodePart = Schema.decodeUnknownSync(SessionV1.Part)
@@ -169,6 +170,9 @@ const runImport = Effect.fn("Cli.import.body")(function* (file: string, ctx: Ins
     process.stdout.write(EOL)
     return
   }
+
+  const migration = yield* ProductMigrationState.Service
+  yield* migration.requireCompleted()
 
   const info = Schema.decodeUnknownSync(Session.Info)({
     ...exportData.info,

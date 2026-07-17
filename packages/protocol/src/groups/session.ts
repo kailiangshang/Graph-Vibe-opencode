@@ -21,6 +21,7 @@ import { Model } from "@opencode-ai/schema/model"
 import { Location } from "@opencode-ai/schema/location"
 import { Revert } from "@opencode-ai/schema/revert"
 import { SessionEvent } from "@opencode-ai/schema/session-event"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 
 const SessionsQueryFields = {
   workspace: Workspace.ID.pipe(Schema.optional),
@@ -134,6 +135,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           location: Location.Ref.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: Session.Info }),
+        error: ProductMigration.Required,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "v2.session.create",
@@ -174,7 +176,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ agent: Agent.ID }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, ProductMigration.Required],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -190,7 +192,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ model: Model.Ref }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, ProductMigration.Required],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -211,7 +213,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, ProductMigration.Required],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -257,7 +259,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ messageID: SessionMessage.ID, files: Schema.Boolean.pipe(Schema.optional) }),
         success: Schema.Struct({ data: Revert.State }),
-        error: [MessageNotFoundError, SessionNotFoundError, UnknownError],
+        error: [MessageNotFoundError, SessionNotFoundError, ProductMigration.Required, UnknownError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -272,7 +274,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       HttpApiEndpoint.post("session.revert.clear", "/api/session/:sessionID/revert/clear", {
         params: { sessionID: Session.ID },
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, UnknownError],
+        error: [SessionNotFoundError, ProductMigration.Required, UnknownError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(OpenApi.annotations({ identifier: "v2.session.revert.clear", summary: "Clear staged revert" })),
@@ -281,7 +283,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       HttpApiEndpoint.post("session.revert.commit", "/api/session/:sessionID/revert/commit", {
         params: { sessionID: Session.ID },
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, ProductMigration.Required],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

@@ -29,6 +29,7 @@ export const UpgradeCommand = {
     if (!Installation.releaseAvailable(Product.current())) {
       prompts.log.error("Graph Vibe upgrades are unavailable until its release channel is configured")
       prompts.outro("Done")
+      process.exitCode = 1
       return
     }
     const detectedMethod = await Installation.method()

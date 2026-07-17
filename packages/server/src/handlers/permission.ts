@@ -6,6 +6,7 @@ import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { PermissionNotFoundError, SessionNotFoundError } from "@opencode-ai/protocol/errors"
 import { response } from "../location"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 
 function missingRequest(id: PermissionV2.ID) {
   return new PermissionNotFoundError({ requestID: id, message: `Permission request not found: ${id}` })
@@ -13,6 +14,7 @@ function missingRequest(id: PermissionV2.ID) {
 
 export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", (handlers) =>
   Effect.gen(function* () {
+    const migration = yield* ProductMigrationState.Service
     return handlers
       .handle(
         "permission.request.list",
@@ -23,6 +25,7 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
       .handle(
         "session.permission.create",
         Effect.fn(function* (ctx) {
+          yield* migration.requireCompleted()
           const permission = yield* PermissionV2.Service
           return {
             data: yield* permission
@@ -67,6 +70,7 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
       .handle(
         "session.permission.reply",
         Effect.fn(function* (ctx) {
+          yield* migration.requireCompleted()
           const permission = yield* PermissionV2.Service
           const request = yield* permission.get(ctx.params.requestID)
           if (!request || request.sessionID !== ctx.params.sessionID) return yield* missingRequest(ctx.params.requestID)
@@ -90,6 +94,7 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
       .handle(
         "permission.saved.remove",
         Effect.fn(function* (ctx) {
+          yield* migration.requireCompleted()
           yield* (yield* PermissionSaved.Service).remove(ctx.params.id)
           return HttpApiSchema.NoContent.make()
         }),

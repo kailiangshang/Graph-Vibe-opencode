@@ -17,6 +17,7 @@ import { PermissionV1 } from "./permission-v1"
 import { Plugin } from "./plugin"
 import { Project } from "./project"
 import { ProjectDirectories } from "./project-directories"
+import { ProductMigration } from "./product-migration"
 import { Pty } from "./pty"
 import { Question } from "./question"
 import { QuestionV1 } from "./question-v1"
@@ -60,6 +61,7 @@ export const ServerDefinitions = Event.inventory(
   ...featureDefinitions,
   ...SessionTodo.Event.Definitions,
   ...Graph.Event.Definitions,
+  ...ProductMigration.Event.Definitions,
 )
 
 export const Definitions = Event.inventory(
@@ -75,6 +77,7 @@ export const Definitions = Event.inventory(
   ...LegacyEvent.Definitions,
   ...Project.Event.Definitions,
   ...Graph.Event.Definitions,
+  ...ProductMigration.Event.Definitions,
   ...SessionStatusEvent.Definitions,
   ...QuestionV1.Event.Definitions,
   ...SessionCompactionEvent.Definitions,

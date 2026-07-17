@@ -29,6 +29,7 @@ describe("Product.current", () => {
       database: "graph-vibe.db",
       config: "graph-vibe",
       backendPort: 4097,
+      mdnsDomain: "graph-vibe.local",
       uiPort: 4444,
       package: "graph-vibe",
       desktopID: "ai.graph-vibe.desktop",

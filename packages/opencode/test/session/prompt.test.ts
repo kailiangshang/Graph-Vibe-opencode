@@ -26,7 +26,8 @@ import { Image } from "../../src/image/image"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { SessionMessageTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, PartTable, SessionMessageTable, SessionTable, TodoTable } from "@opencode-ai/core/session/sql"
+import { EventTable } from "@opencode-ai/core/event/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -57,6 +58,9 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
+import { Product } from "@opencode-ai/core/product"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
+import { InstanceState } from "@/effect/instance-state"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -253,8 +257,138 @@ const withMcpInstructions = testEffect(
     ],
   }),
 )
+const migrationGate = testEffect(
+  LayerNode.compile(LayerNode.group([promptRoot, testLLMServerNode, ProductMigrationState.node]), [
+    [SessionSummary.node, summary],
+    [LSP.node, lsp],
+    [MCP.node, makeMcp()],
+    [RuntimeFlags.node, runtimeFlags],
+    [Product.node, Product.layerWith(Product.GraphVibe)],
+  ]),
+)
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
 const unixNoLLMServer = process.platform !== "win32" ? noLLMServer.instance : noLLMServer.instance.skip
+
+migrationGate.instance("blocks legacy create, prompt, and resume execution until fresh start", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const prompt = yield* SessionPrompt.Service
+    const revert = yield* SessionRevert.Service
+    const migration = yield* ProductMigrationState.Service
+    const database = yield* Database.Service
+    const ctx = yield* InstanceState.context
+    const sessionID = SessionID.create()
+
+    expect(yield* sessions.create({ title: "blocked" }).pipe(Effect.flip)).toMatchObject({
+      _tag: "ProductMigrationRequired",
+    })
+    yield* database.db
+      .insert(SessionTable)
+      .values({
+        id: sessionID,
+        project_id: ctx.project.id,
+        slug: "existing",
+        directory: ctx.directory,
+        path: "",
+        title: "Existing migration session",
+        version: "test",
+      })
+      .run()
+      .pipe(Effect.orDie)
+
+    const messageID = MessageID.ascending()
+    const partID = PartID.ascending()
+    const todo = yield* Todo.Service
+    const existing = yield* sessions.get(sessionID)
+    const before = yield* Effect.all({
+      sessions: database.db.select().from(SessionTable).all().pipe(Effect.orDie),
+      messages: database.db.select().from(MessageTable).all().pipe(Effect.orDie),
+      parts: database.db.select().from(PartTable).all().pipe(Effect.orDie),
+      todos: database.db.select().from(TodoTable).all().pipe(Effect.orDie),
+      events: database.db.select().from(EventTable).all().pipe(Effect.orDie),
+    })
+    const mutations: Effect.Effect<void, unknown>[] = [
+      sessions.fork({ sessionID }).pipe(Effect.asVoid),
+      sessions.setTitle({ sessionID, title: "blocked title" }),
+      sessions.setArchived({ sessionID, time: 1 }),
+      sessions.setMetadata({ sessionID, metadata: { blocked: true } }),
+      sessions.setAgentModel({
+        sessionID,
+        agent: "build",
+        model: { providerID: ref.providerID, id: ref.modelID },
+        time: 1,
+      }),
+      sessions.setPermission({ sessionID, permission: [{ permission: "*", pattern: "*", action: "allow" }] }),
+      sessions.setRevert({ sessionID, revert: { messageID }, summary: undefined }),
+      sessions.clearRevert(sessionID),
+      sessions.setSummary({ sessionID, summary: { additions: 1, deletions: 0, files: 1 } }),
+      sessions.setShare({ sessionID, share: { url: "https://example.com/share" } }),
+      sessions.setWorkspace({ sessionID, workspaceID: undefined }),
+      sessions.updateMessage({
+        id: messageID,
+        sessionID,
+        role: "user" as const,
+        time: { created: 1 },
+        agent: "build",
+        model: { providerID: ref.providerID, modelID: ref.modelID },
+      }),
+      sessions.updatePart({ id: partID, sessionID, messageID, type: "text" as const, text: "blocked" }),
+      sessions.updatePartDelta({ sessionID, messageID, partID, field: "text", delta: "blocked" }),
+      sessions.removeMessage({ sessionID, messageID }),
+      sessions.removePart({ sessionID, messageID, partID }),
+      todo.update({
+        sessionID,
+        todos: [{ content: "blocked", status: "pending", priority: "medium" }],
+      }),
+      revert.revert({ sessionID, messageID }).pipe(Effect.asVoid),
+      revert.unrevert({ sessionID }).pipe(Effect.asVoid),
+      revert.cleanup(existing),
+      sessions.remove(sessionID),
+    ]
+    const exits = yield* Effect.forEach(mutations, (mutation) => mutation.pipe(Effect.exit), { concurrency: 1 })
+    expect(exits.every(Exit.isFailure)).toBe(true)
+    expect(exits.every((exit) => Exit.isFailure(exit) && !exit.cause.reasons.some(Cause.isDieReason))).toBe(true)
+    expect(
+      exits.map((exit) => (Exit.isFailure(exit) ? (Cause.squash(exit.cause) as { _tag?: string })._tag : undefined)),
+    ).toEqual(Array.from({ length: mutations.length }, () => "ProductMigrationRequired"))
+    expect(
+      yield* Effect.all({
+        sessions: database.db.select().from(SessionTable).all().pipe(Effect.orDie),
+        messages: database.db.select().from(MessageTable).all().pipe(Effect.orDie),
+        parts: database.db.select().from(PartTable).all().pipe(Effect.orDie),
+        todos: database.db.select().from(TodoTable).all().pipe(Effect.orDie),
+        events: database.db.select().from(EventTable).all().pipe(Effect.orDie),
+      }),
+    ).toEqual(before)
+
+    expect(
+      yield* prompt
+        .prompt({
+          sessionID,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "blocked" }],
+        })
+        .pipe(Effect.flip),
+    ).toMatchObject({ _tag: "ProductMigrationRequired" })
+    expect(yield* prompt.loop({ sessionID }).pipe(Effect.flip)).toMatchObject({
+      _tag: "ProductMigrationRequired",
+    })
+
+    yield* migration.freshStart({ expectedRevision: 0 })
+    const { llm } = yield* useServerConfig(providerCfg)
+    yield* prompt.prompt({
+      sessionID,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "allowed" }],
+    })
+    yield* llm.text("completed")
+
+    const result = yield* prompt.loop({ sessionID })
+    expect(result.parts.some((part) => part.type === "text" && part.text === "completed")).toBe(true)
+  }),
+)
 
 // Config that registers a custom "test" provider with a "test-model" model
 // so provider model lookup succeeds inside the loop.
@@ -830,7 +964,6 @@ it.instance("glob tool keeps instance context during prompt runs", () =>
     })
     yield* llm.tool("glob", { pattern: "**/*.txt" })
     yield* llm.text("done")
-
     const result = yield* prompt.loop({ sessionID: session.id })
     expect(result.info.role).toBe("assistant")
 
@@ -847,6 +980,7 @@ it.instance("glob tool keeps instance context during prompt runs", () =>
     expect(tool.state.output).not.toContain("No context found for instance")
     expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
   }),
+  30_000,
 )
 
 it.instance("loop continues when finish is stop but assistant has tool parts", () =>

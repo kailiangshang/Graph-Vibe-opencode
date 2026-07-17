@@ -1,4 +1,5 @@
 import { Graph } from "@opencode-ai/schema"
+import { ProductMigration } from "@opencode-ai/schema/product-migration"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
@@ -362,7 +363,7 @@ export const GraphApi = HttpApi.make("graph")
           params: { nodeID: Schema.String },
           query: ProjectQuery,
           success: described(Schema.Boolean, "Node deleted"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ProductMigration.Required],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.deleteNode",
@@ -374,7 +375,7 @@ export const GraphApi = HttpApi.make("graph")
           params: { edgeID: Schema.String },
           query: ProjectQuery,
           success: described(Schema.Boolean, "Edge deleted"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ProductMigration.Required],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.deleteEdge",
@@ -397,7 +398,7 @@ export const GraphApi = HttpApi.make("graph")
           query: SessionRequiredQuery,
           payload: PlanAdmitPayload,
           success: described(AdmitResultResponse, "CurrentPlan admission result"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ProductMigration.Required],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.planAdmit",
@@ -425,6 +426,7 @@ export const GraphApi = HttpApi.make("graph")
             ApiNotFoundError,
             GraphWorkflowRevisionConflict,
             GraphWorkflowActiveOperation,
+            ProductMigration.Required,
           ],
         }).annotateMerge(
           OpenApi.annotations({
@@ -437,7 +439,12 @@ export const GraphApi = HttpApi.make("graph")
           query: SessionRequiredQuery,
           payload: WorkflowApprovePayload,
           success: described(WorkflowResponse, "Updated session workflow projection"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, GraphWorkflowRevisionConflict],
+          error: [
+            HttpApiError.BadRequest,
+            ApiNotFoundError,
+            GraphWorkflowRevisionConflict,
+            ProductMigration.Required,
+          ],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.workflowApprove",
@@ -449,7 +456,12 @@ export const GraphApi = HttpApi.make("graph")
           query: SessionRequiredQuery,
           payload: WorkflowPausePayload,
           success: described(WorkflowResponse, "Updated session workflow projection"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, GraphWorkflowRevisionConflict],
+          error: [
+            HttpApiError.BadRequest,
+            ApiNotFoundError,
+            GraphWorkflowRevisionConflict,
+            ProductMigration.Required,
+          ],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.workflowPause",
@@ -461,7 +473,7 @@ export const GraphApi = HttpApi.make("graph")
           query: SessionRequiredQuery,
           payload: [HttpApiSchema.NoContent, PromotePayload],
           success: described(PromoteResultResponse, "CurrentPlan promotion result"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ProductMigration.Required],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.promote",

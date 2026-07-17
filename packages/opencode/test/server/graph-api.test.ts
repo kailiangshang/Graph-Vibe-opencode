@@ -1,5 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
+import { sql } from "drizzle-orm"
 import { Config, Effect, Fiber, Layer } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
@@ -12,6 +13,8 @@ import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { GraphBuild } from "@opencode-ai/core/graph/workflow/build"
 import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
 import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
+import { Product } from "@opencode-ai/core/product"
+import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap as InstanceBootstrapService } from "@/project/bootstrap-service"
@@ -28,23 +31,29 @@ const noopBootstrapLayer = Layer.succeed(
   InstanceBootstrapService.Service,
   InstanceBootstrapService.Service.of({ run: Effect.void }),
 )
-const appLayer = AppNodeBuilder.build(
-  LayerNode.group([
-    InstanceStore.node,
-    Project.node,
-    Session.node,
-    Workspace.node,
-    Database.node,
-    Ripgrep.node,
-    GraphStorage.node,
-    GraphDomain.node,
-    GraphAudit.node,
-    GraphPlan.node,
-    GraphBuild.node,
-    GraphWorkflowState.node,
-  ]),
-  [[InstanceStore.bootstrapNode, noopBootstrapLayer]],
-)
+const appLayer = (profile: Product.Profile) =>
+  AppNodeBuilder.build(
+    LayerNode.group([
+      InstanceStore.node,
+      Project.node,
+      Session.node,
+      Workspace.node,
+      Database.node,
+      Ripgrep.node,
+      GraphStorage.node,
+      GraphDomain.node,
+      GraphAudit.node,
+      GraphPlan.node,
+      GraphBuild.node,
+      GraphWorkflowState.node,
+      ProductMigrationState.node,
+      Product.node,
+    ]),
+    [
+      [InstanceStore.bootstrapNode, noopBootstrapLayer],
+      [Product.node, Product.layerWith(profile)],
+    ],
+  )
 const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
   HttpApiApp.routes,
   { disableListenLog: true, disableLogger: true },
@@ -54,7 +63,8 @@ const httpApiLayer = servedRoutes.pipe(
   Layer.provideMerge(NodeHttpServer.layerTest),
   Layer.provideMerge(NodeServices.layer),
 )
-const it = testEffect(Layer.mergeAll(appLayer, httpApiLayer))
+const it = testEffect(Layer.mergeAll(appLayer(Product.OpenCode), httpApiLayer))
+const graphVibeIt = testEffect(Layer.mergeAll(appLayer(Product.GraphVibe), httpApiLayer))
 
 function request(path: string) {
   const url = new URL(path, "http://localhost")
@@ -72,14 +82,14 @@ function requestJson<T>(path: string) {
   })
 }
 
-function send(method: "POST" | "PATCH", path: string, body?: unknown) {
+function send(method: "DELETE" | "POST" | "PATCH", path: string, body?: unknown) {
   const url = new URL(path, "http://localhost")
   const base = HttpClientRequest.fromWeb(new Request(url, { method })).pipe(HttpClientRequest.setUrl(url.pathname))
   const withBody = body === undefined ? base : base.pipe(HttpClientRequest.setBody(HttpBody.jsonUnsafe(body)))
   return withBody.pipe(HttpClient.execute)
 }
 
-function sendJson<T = unknown>(method: "POST" | "PATCH", path: string, body?: unknown) {
+function sendJson<T = unknown>(method: "DELETE" | "POST" | "PATCH", path: string, body?: unknown) {
   return Effect.gen(function* () {
     const response = yield* send(method, path, body)
     if (response.status !== 200) return { status: response.status, json: null as T | null }
@@ -101,6 +111,85 @@ interface GraphViewResponse {
 const verification = { criteria: ["observable result"], diagnostics: [{ name: "test" }] }
 
 describe("graph HttpApi", () => {
+  graphVibeIt.instance("migration gate rejects every Graph mutation without changing destination state", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const migration = yield* ProductMigrationState.Service
+      yield* migration.freshStart({ expectedRevision: 0 })
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      const domain = yield* GraphDomain.Service
+      const storage = yield* GraphStorage.Service
+      const workflow = yield* GraphWorkflowState.Service
+      const sourceID = yield* domain.node.create({
+        projectID: session.projectID,
+        sessionID: session.id,
+        type: "atomic",
+        name: "Gate source",
+        level: "L2",
+      })
+      const targetID = yield* domain.node.create({
+        projectID: session.projectID,
+        sessionID: session.id,
+        type: "atomic",
+        name: "Gate target",
+        level: "L2",
+      })
+      const edgeID = yield* domain.edge.create({
+        projectID: session.projectID,
+        sessionID: session.id,
+        sourceID,
+        targetID,
+        relation: "blocks",
+      })
+      const before = yield* storage.currentPlan({ sessionID: session.id })
+      const beforeWorkflow = yield* workflow.get(session.id)
+      const beforeVersions = yield* domain.version.list({ projectID: session.projectID })
+      const { db } = yield* Database.Service
+      yield* db.run(sql`
+        UPDATE product_migration
+        SET status = 'draft', revision = revision + 1, finalized_at = NULL
+        WHERE id = 'opencode-first-import'
+      `)
+      const directory = encodeURIComponent(test.directory)
+      expect(
+        (yield* request(`/graph/current-plan?directory=${directory}&session=${session.id}`)).status,
+      ).toBe(200)
+      const mutations = [
+        yield* send("DELETE", `/graph/node/${sourceID}?directory=${directory}`),
+        yield* send("DELETE", `/graph/edge/${edgeID}?directory=${directory}`),
+        yield* send("POST", `/graph/plan/admit?directory=${directory}&session=${session.id}`, {
+          nodes: [{ type: "atomic", name: "Blocked admission", level: "L2", verification }],
+          edges: [],
+        }),
+        yield* send("PATCH", `/graph/workflow/mode?directory=${directory}&session=${session.id}`, {
+          mode: "atomic",
+          expectedRevision: 0,
+        }),
+        yield* send("PATCH", `/graph/workflow/approve?directory=${directory}&session=${session.id}`, {
+          expectedRevision: 0,
+        }),
+        yield* send("PATCH", `/graph/workflow/pause?directory=${directory}&session=${session.id}`, {
+          expectedRevision: 0,
+        }),
+        yield* send("POST", `/graph/current-plan/promote?directory=${directory}&session=${session.id}`, {}),
+      ]
+
+      expect(mutations.map((response) => response.status)).toEqual(Array(mutations.length).fill(404))
+      yield* Effect.forEach(
+        mutations,
+        (response) =>
+          Effect.gen(function* () {
+            expect(yield* response.json).toEqual({ _tag: "ProductMigrationRequired" })
+          }),
+        { discard: true },
+      )
+      expect(yield* storage.currentPlan({ sessionID: session.id })).toEqual(before)
+      expect(yield* workflow.get(session.id)).toEqual(beforeWorkflow)
+      expect(yield* domain.version.list({ projectID: session.projectID })).toEqual(beforeVersions)
+    }),
+  )
+
   it.instance("publishes plan invalidation after workflow mode mutation", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
@@ -388,7 +477,7 @@ describe("graph HttpApi", () => {
     }),
   )
 
-  it.instance("admits nodes and edges into the CurrentPlan", () =>
+  it.instance("OpenCode bypasses the migration gate and admits nodes and edges into the CurrentPlan", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
 
