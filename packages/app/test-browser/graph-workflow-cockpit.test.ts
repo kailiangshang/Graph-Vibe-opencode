@@ -92,6 +92,10 @@ test("renders valid checkpoint actions and dispatches task selection and locate"
   expect(root.textContent).toContain("Cockpit polish")
   expect(root.textContent).toContain("Verify phase")
   expect(root.textContent).not.toContain("Pause")
+  const progress = root.querySelector('[role="progressbar"]')
+  expect(progress?.getAttribute("aria-valuemin")).toBe("0")
+  expect(progress?.getAttribute("aria-valuemax")).toBe("100")
+  expect(progress?.getAttribute("aria-valuenow")).toBe("0")
 
   root.querySelector<HTMLButtonElement>(".graph-action.primary")!.click()
   expect(continued).toBe(1)
@@ -113,6 +117,47 @@ test("renders valid checkpoint actions and dispatches task selection and locate"
   dispose()
   root.remove()
   window.matchMedia = matchMedia
+})
+
+test("Main derives its rail and inspector from visible graph nodes without plan controls", () => {
+  const root = document.createElement("div")
+  document.body.append(root)
+  const selected: Array<string | null> = []
+  const dispose = render(
+    () =>
+      createComponent(GraphCockpit, {
+        source: "main",
+        workflow,
+        graph: {
+          nodes: [
+            {
+              id: "main-only",
+              name: "Released capability",
+              type: "atomic",
+              level: "L2",
+              status: "verified",
+              testStatus: "passed",
+              priority: null,
+              sessionID: null,
+              desc: "Visible only in Main",
+            },
+          ],
+          edges: [],
+        },
+        selectedNodeID: "main-only",
+        onSelectNode: (id) => selected.push(id),
+      }),
+    root,
+  )
+
+  expect(root.textContent).toContain("Released capability")
+  expect(root.textContent).toContain("Visible only in Main")
+  expect(root.textContent).not.toContain("Build rail")
+  expect(root.querySelector('[aria-label="Execution mode"]')).toBeNull()
+  root.querySelector<HTMLButtonElement>(".graph-task")!.click()
+  expect(selected).toEqual(["main-only"])
+  dispose()
+  root.remove()
 })
 
 test("renders Pause only for an active authorized workflow", () => {

@@ -222,6 +222,7 @@ export default function GraphPage() {
               </button>
             </div>
             <GraphCockpit
+              source={state.source}
               workflow={ready()}
               graph={graphQuery.data!}
               selectedNodeID={state.selectedNodeID}

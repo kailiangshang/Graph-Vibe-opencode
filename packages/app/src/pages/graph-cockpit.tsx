@@ -200,6 +200,7 @@ export function enrichWorkflowNodes(input: {
 }
 
 export function GraphCockpit(props: {
+  source?: "currentPlan" | "main"
   workflow: CockpitWorkflow
   graph: GraphView
   selectedNodeID: string | null
@@ -221,10 +222,49 @@ export function GraphCockpit(props: {
     centerNodeID: null as string | null,
     centerRequestToken: 0,
   })
+  const isPlan = () => props.source !== "main"
+  const tasks = () =>
+    isPlan()
+      ? props.workflow.tasks
+      : props.graph.nodes.map((item): Task => ({
+          id: item.id,
+          name: item.name,
+          moduleID: null,
+          moduleName: item.type,
+          status: item.status,
+          testStatus: item.testStatus,
+          current: false,
+          buildable: item.status !== "deprecated",
+          verification: null,
+          latestEvidence: null,
+        }))
+  const modules = () => {
+    if (isPlan()) return props.workflow.modules
+    const items = tasks()
+    return [
+      {
+        id: null,
+        name: "Main graph",
+        progress: { verified: items.filter((item) => item.status === "verified").length, total: items.length },
+        tasks: items,
+      },
+    ]
+  }
+  const model = () =>
+    isPlan()
+      ? props.workflow
+      : {
+          ...props.workflow,
+          currentTask: null,
+          checkpoint: { status: "none", kind: null, reason: null, scopeNodeID: null },
+          tasks: tasks(),
+          modules: modules(),
+        }
   const selectedTask = () =>
-    props.workflow.tasks.find((task) => task.id === props.selectedNodeID) ??
-    props.workflow.tasks.find((task) => task.id === props.workflow.currentTask?.id)
-  const selectedID = () => props.selectedNodeID ?? props.workflow.currentTask?.id ?? props.graph.nodes[0]?.id ?? null
+    tasks().find((task) => task.id === props.selectedNodeID) ??
+    (isPlan() ? tasks().find((task) => task.id === props.workflow.currentTask?.id) : undefined)
+  const selectedID = () =>
+    props.selectedNodeID ?? (isPlan() ? props.workflow.currentTask?.id : undefined) ?? props.graph.nodes[0]?.id ?? null
   const node = () => props.graph.nodes.find((item) => item.id === selectedID())
   const dependencies = () =>
     props.graph.edges
@@ -232,10 +272,13 @@ export function GraphCockpit(props: {
       .map((edge) => props.graph.nodes.find((item) => item.id === edge.sourceID)?.name)
       .filter((name): name is string => !!name)
   const evidence = () => selectedTask()?.latestEvidence
-  const actions = () => cockpitActions(props.workflow, props.pendingAction)
+  const actions = () =>
+    isPlan()
+      ? cockpitActions(props.workflow, props.pendingAction)
+      : { continue: false, pause: false, mode: false, continuePending: false, pausePending: false }
   const state = () => cockpitViewState({ workflow: props.workflow })
   const nodes = () =>
-    enrichWorkflowNodes({ graph: props.graph, workflow: props.workflow, selectedNodeID: selectedID() })
+    enrichWorkflowNodes({ graph: props.graph, workflow: model(), selectedNodeID: selectedID() })
   const canvas = () => ({ ...props.graph, nodes: nodes() })
   const nodeState = (id: string) => nodes().find((item) => item.id === id)
   let centerRequestToken = 0
@@ -260,51 +303,70 @@ export function GraphCockpit(props: {
           ← Session
         </button>
         <div class="mr-auto min-w-48">
-          <div class="text-xs font-medium uppercase tracking-[0.16em] text-text-weak">Workflow control</div>
-          <div class="font-semibold">{props.workflow.currentTask?.name ?? "No current task"}</div>
+          <div class="text-xs font-medium uppercase tracking-[0.16em] text-text-weak">
+            {isPlan() ? "Current Plan workflow" : "Main graph · read-only"}
+          </div>
+          <div class="font-semibold">
+            {isPlan() ? props.workflow.currentTask?.name ?? "No current task" : "Released project topology"}
+          </div>
           <div class="text-xs text-text-weak">
             {[props.projectName, props.sessionTitle].filter(Boolean).join(" · ")}
           </div>
         </div>
-        <div class="rounded-full border border-border-weak-base px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em]">
-          {workflowPhaseStep(props.workflow.phase)} phase
-        </div>
-        <label class="flex items-center gap-2 text-sm">
-          <span class="text-text-weak">Mode</span>
-          <select
-            class="graph-field min-h-10 rounded-md px-2"
-            aria-label="Execution mode"
-            value={props.workflow.mode ?? ""}
-            disabled={!actions().mode || props.pendingAction === "mode"}
-            onChange={(event) => {
-              const mode = event.currentTarget.value
-              if (mode === "atomic" || mode === "module" || mode === "autopilot") props.onModeChange?.(mode)
-            }}
-          >
-            <option value="" disabled>
-              Select mode
-            </option>
-            <option value="atomic">Atomic</option>
-            <option value="module">Module (recommended)</option>
-            <option value="autopilot">Autopilot</option>
-          </select>
-        </label>
-        <Show when={!actions().mode && props.workflow.phase !== "complete" && props.workflow.phase !== "failed"}>
+        <Show when={isPlan()}>
+          <div class="rounded-full border border-border-weak-base px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em]">
+            {workflowPhaseStep(props.workflow.phase)} phase
+          </div>
+        </Show>
+        <Show when={isPlan()}>
+          <label class="flex items-center gap-2 text-sm">
+            <span class="text-text-weak">Mode</span>
+            <select
+              class="graph-field min-h-10 rounded-md px-2"
+              aria-label="Execution mode"
+              value={props.workflow.mode ?? ""}
+              disabled={!actions().mode || props.pendingAction === "mode"}
+              onChange={(event) => {
+                const mode = event.currentTarget.value
+                if (mode === "atomic" || mode === "module" || mode === "autopilot") props.onModeChange?.(mode)
+              }}
+            >
+              <option value="" disabled>
+                Select mode
+              </option>
+              <option value="atomic">Atomic</option>
+              <option value="module">Module (recommended)</option>
+              <option value="autopilot">Autopilot</option>
+            </select>
+          </label>
+        </Show>
+        <Show
+          when={isPlan() && !actions().mode && props.workflow.phase !== "complete" && props.workflow.phase !== "failed"}
+        >
           <span class="max-w-40 text-xs text-text-weak">
             Pause or wait for active workflow changes before changing execution mode.
           </span>
         </Show>
-        <div class="min-w-36" aria-label={`${props.workflow.progress.percent}% complete`}>
-          <div class="mb-1 flex justify-between text-xs text-text-weak">
-            <span>
-              {props.workflow.progress.verified}/{props.workflow.progress.total} verified
-            </span>
-            <span>{props.workflow.progress.percent}%</span>
+        <Show when={isPlan()}>
+          <div
+            class="min-w-36"
+            role="progressbar"
+            aria-label="Workflow verification progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={props.workflow.progress.percent}
+          >
+            <div class="mb-1 flex justify-between text-xs text-text-weak">
+              <span>
+                {props.workflow.progress.verified}/{props.workflow.progress.total} verified
+              </span>
+              <span>{props.workflow.progress.percent}%</span>
+            </div>
+            <div class="h-1.5 overflow-hidden rounded-full bg-surface-raised-base">
+              <div class="h-full bg-[var(--graph-current)]" style={{ width: `${props.workflow.progress.percent}%` }} />
+            </div>
           </div>
-          <div class="h-1.5 overflow-hidden rounded-full bg-surface-raised-base">
-            <div class="h-full bg-[var(--graph-current)]" style={{ width: `${props.workflow.progress.percent}%` }} />
-          </div>
-        </div>
+        </Show>
         <Show when={actions().pause}>
           <button class="graph-action secondary" disabled={actions().pausePending} onClick={props.onPause}>
             Pause
@@ -323,7 +385,7 @@ export function GraphCockpit(props: {
         </div>
       </Show>
 
-      <Show when={state() !== "ready"}>
+      <Show when={isPlan() && state() !== "ready"}>
         <div class="graph-state-strip graph-glass border-b px-4 py-2 text-sm" role="status">
           {stateLabel(state(), props.workflow.checkpoint.reason)}
         </div>
@@ -367,9 +429,9 @@ export function GraphCockpit(props: {
           aria-label={COCKPIT_REGIONS[0]}
         >
           <div class="sticky top-0 z-10 border-b border-border-weak-base bg-[var(--graph-glass-solid)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-text-weak">
-            Tasks by module
+            {isPlan() ? "Tasks by module" : "Main graph nodes"}
           </div>
-          <For each={props.workflow.modules}>
+          <For each={modules()}>
             {(module) => (
               <section class="border-b border-border-weak-base px-2 py-3">
                 <div class="mb-2 flex items-center justify-between px-2">
@@ -433,11 +495,11 @@ export function GraphCockpit(props: {
           aria-label={COCKPIT_REGIONS[1]}
         >
           <GraphCanvas
-            graphID={`workflow-${props.workflow.revision}`}
+            graphID={`${isPlan() ? "workflow" : "main"}-${props.workflow.revision}`}
             data={canvas()}
             selectedNodeID={selectedID()}
-            currentNodeID={props.workflow.currentTask?.id ?? null}
-            onSelectNode={(id) => props.onSelectNode(id ?? props.workflow.currentTask?.id ?? null)}
+            currentNodeID={isPlan() ? props.workflow.currentTask?.id ?? null : null}
+            onSelectNode={(id) => props.onSelectNode(id ?? (isPlan() ? props.workflow.currentTask?.id : null) ?? null)}
             centerNodeID={local.centerNodeID}
             centerRequestToken={local.centerRequestToken}
             onCenterNode={props.onCenterNode}
@@ -520,9 +582,9 @@ export function GraphCockpit(props: {
                   </Show>
                   <InspectorSection title="Next action">
                     <p>
-                      {actions().continue
+                      {isPlan() && actions().continue
                         ? "Review the checkpoint and Continue to authorize the next scope."
-                        : selectedTask()?.current
+                        : isPlan() && selectedTask()?.current
                           ? "Complete the current task and run its verification criteria."
                           : "Return to the current task or inspect this dependency."}
                     </p>
@@ -536,7 +598,7 @@ export function GraphCockpit(props: {
                   >
                     View Changes
                   </button>
-                  <Show when={selectedID() !== props.workflow.currentTask?.id}>
+                  <Show when={isPlan() && selectedID() !== props.workflow.currentTask?.id}>
                     <button
                       class="graph-action secondary flex-1"
                       onClick={() => props.onSelectNode(props.workflow.currentTask?.id ?? null)}
@@ -569,7 +631,7 @@ export function GraphCockpit(props: {
         </aside>
       </div>
       <div class="sr-only" aria-live="polite">
-        {workflowAnnouncement(props.workflow)}
+        {isPlan() ? workflowAnnouncement(props.workflow) : `Main graph. ${props.graph.nodes.length} visible nodes.`}
       </div>
     </section>
   )
