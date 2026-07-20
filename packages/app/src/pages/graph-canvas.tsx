@@ -92,6 +92,7 @@ export function GraphCanvas(props: {
   let panOrigin = camera
   let panned = false
   let reducedMotion: MediaQueryList | undefined
+  let topology = ""
 
   const colors = () => {
     if (!container || typeof getComputedStyle === "undefined") return defaultColors
@@ -274,11 +275,24 @@ export function GraphCanvas(props: {
   }
 
   createEffect(() => {
-    nodes = reconcileCanvasNodes(props.graphID, nodes, props.data.nodes)
-    props.data.edges.length
+    const data = props.data
+    const nextTopology = JSON.stringify([
+      props.graphID,
+      data.nodes.map((node) => node.id),
+      data.edges.map((edge) => [edge.id, edge.sourceID, edge.targetID, edge.relation]),
+    ])
+    nodes = reconcileCanvasNodes(props.graphID, nodes, data.nodes)
+    if (nextTopology === topology) {
+      draw()
+      return
+    }
+    topology = nextTopology
+    if (typeof window !== "undefined") start()
+  })
+  createEffect(() => {
     props.selectedNodeID
     props.currentNodeID
-    if (typeof window !== "undefined") start()
+    draw()
   })
   createEffect(() => {
     props.centerRequestToken
@@ -288,10 +302,13 @@ export function GraphCanvas(props: {
     const resize = () => draw()
     reducedMotion ??= window.matchMedia("(prefers-reduced-motion: reduce)")
     const motion = () => start()
-    window.addEventListener("resize", resize)
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(resize)
+    if (observer && container) observer.observe(container)
+    if (!observer) window.addEventListener("resize", resize)
     reducedMotion.addEventListener("change", motion)
     onCleanup(() => {
-      window.removeEventListener("resize", resize)
+      observer?.disconnect()
+      if (!observer) window.removeEventListener("resize", resize)
       reducedMotion?.removeEventListener("change", motion)
     })
   })

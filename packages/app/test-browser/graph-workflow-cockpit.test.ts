@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createComponent } from "solid-js"
+import { createComponent, createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import h from "solid-js/h"
 import { GraphCanvas } from "@/pages/graph-canvas"
@@ -483,6 +483,83 @@ test("reduced motion draws without RAF and normal motion cancels RAF on cleanup"
   animated.remove()
 
   window.matchMedia = matchMedia
+  window.requestAnimationFrame = requestAnimationFrame
+  window.cancelAnimationFrame = cancelAnimationFrame
+})
+
+test("canvas redraws at positive dimensions after the mobile Graph tab becomes visible", () => {
+  const originalResizeObserver = window.ResizeObserver
+  const callbacks: ResizeObserverCallback[] = []
+  class TestResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      callbacks.push(callback)
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  Object.defineProperty(window, "ResizeObserver", { configurable: true, value: TestResizeObserver })
+  const root = document.createElement("div")
+  document.body.append(root)
+  const dispose = render(
+    () =>
+      createComponent(GraphCockpit, {
+        workflow,
+        graph: graphWithTask(),
+        selectedNodeID: null,
+        onSelectNode: () => {},
+      }),
+    root,
+  )
+  const container = root.querySelector<HTMLElement>(".graph-canvas")!
+  Object.defineProperties(container, {
+    clientWidth: { configurable: true, value: 360 },
+    clientHeight: { configurable: true, value: 240 },
+  })
+  root.querySelector<HTMLButtonElement>("#graph-tab-graph")!.click()
+  expect(callbacks).toHaveLength(1)
+  callbacks[0]?.([], {} as ResizeObserver)
+  const canvas = root.querySelector<HTMLCanvasElement>("canvas")!
+  expect(canvas.width).toBeGreaterThan(0)
+  expect(canvas.height).toBeGreaterThan(0)
+  dispose()
+  root.remove()
+  Object.defineProperty(window, "ResizeObserver", { configurable: true, value: originalResizeObserver })
+})
+
+test("selection and current-task changes redraw without restarting topology simulation", async () => {
+  const requestAnimationFrame = window.requestAnimationFrame
+  const cancelAnimationFrame = window.cancelAnimationFrame
+  const requested: number[] = []
+  window.requestAnimationFrame = (() => {
+    requested.push(requested.length + 1)
+    return requested.length
+  }) as typeof window.requestAnimationFrame
+  window.cancelAnimationFrame = (() => {}) as typeof window.cancelAnimationFrame
+  const [style, setStyle] = createSignal({ selected: null as string | null, current: null as string | null })
+  const root = document.createElement("div")
+  document.body.append(root)
+  const dispose = render(
+    () =>
+      createComponent(GraphCanvas, {
+        graphID: "workflow-1",
+        data: { nodes: [{ id: "task", name: "Task" }], edges: [] },
+        get selectedNodeID() {
+          return style().selected
+        },
+        get currentNodeID() {
+          return style().current
+        },
+        onSelectNode: () => {},
+      }),
+    root,
+  )
+  const started = requested.length
+  setStyle({ selected: "task", current: "task" })
+  await Promise.resolve()
+  expect(requested).toHaveLength(started)
+  dispose()
+  root.remove()
   window.requestAnimationFrame = requestAnimationFrame
   window.cancelAnimationFrame = cancelAnimationFrame
 })
