@@ -51,10 +51,7 @@ for (const route of ["source", "embedded"] as const) {
     await expect(page.getByRole("button", { name: "Main" })).toHaveAttribute("aria-pressed", "false")
     await expect(page.getByRole("button", { name: "Back to session" })).toBeVisible()
     await expect(page.getByRole("heading", { name: "Interface" })).toBeVisible()
-    await expect(page.getByRole("button").filter({ hasText: "Build rail" })).toHaveAttribute(
-      "aria-current",
-      "step",
-    )
+    await expect(page.getByRole("button").filter({ hasText: "Build rail" })).toHaveAttribute("aria-current", "step")
     await expect(page.getByRole("button", { name: "Continue" }).first()).toBeVisible()
     await expect(page.getByRole("button", { name: "Pause" })).toHaveCount(0)
     await expect(page.getByText("Rail remains visible at mobile width")).toBeVisible()
@@ -146,8 +143,9 @@ for (const route of ["source", "embedded"] as const) {
     await expect(canvas).toBeVisible()
     expect((await canvas.boundingBox())?.width).toBeGreaterThan(0)
     expect((await canvas.boundingBox())?.height).toBeGreaterThan(0)
-    expect(await canvas.evaluate((element) => [(element as HTMLCanvasElement).width, (element as HTMLCanvasElement).height]))
-      .toEqual([expect.any(Number), expect.any(Number)])
+    expect(
+      await canvas.evaluate((element) => [(element as HTMLCanvasElement).width, (element as HTMLCanvasElement).height]),
+    ).toEqual([expect.any(Number), expect.any(Number)])
     for (const tab of await page.getByRole("tab").all()) {
       expect((await tab.boundingBox())?.height).toBeGreaterThanOrEqual(44)
     }

@@ -226,18 +226,20 @@ export function GraphCockpit(props: {
   const tasks = () =>
     isPlan()
       ? props.workflow.tasks
-      : props.graph.nodes.map((item): Task => ({
-          id: item.id,
-          name: item.name,
-          moduleID: null,
-          moduleName: item.type,
-          status: item.status,
-          testStatus: item.testStatus,
-          current: false,
-          buildable: item.status !== "deprecated",
-          verification: null,
-          latestEvidence: null,
-        }))
+      : props.graph.nodes.map(
+          (item): Task => ({
+            id: item.id,
+            name: item.name,
+            moduleID: null,
+            moduleName: item.type,
+            status: item.status,
+            testStatus: item.testStatus,
+            current: false,
+            buildable: item.status !== "deprecated",
+            verification: null,
+            latestEvidence: null,
+          }),
+        )
   const modules = () => {
     if (isPlan()) return props.workflow.modules
     const items = tasks()
@@ -277,8 +279,7 @@ export function GraphCockpit(props: {
       ? cockpitActions(props.workflow, props.pendingAction)
       : { continue: false, pause: false, mode: false, continuePending: false, pausePending: false }
   const state = () => cockpitViewState({ workflow: props.workflow })
-  const nodes = () =>
-    enrichWorkflowNodes({ graph: props.graph, workflow: model(), selectedNodeID: selectedID() })
+  const nodes = () => enrichWorkflowNodes({ graph: props.graph, workflow: model(), selectedNodeID: selectedID() })
   const canvas = () => ({ ...props.graph, nodes: nodes() })
   const nodeState = (id: string) => nodes().find((item) => item.id === id)
   let centerRequestToken = 0
@@ -307,7 +308,7 @@ export function GraphCockpit(props: {
             {isPlan() ? "Current Plan workflow" : "Main graph · read-only"}
           </div>
           <div class="font-semibold">
-            {isPlan() ? props.workflow.currentTask?.name ?? "No current task" : "Released project topology"}
+            {isPlan() ? (props.workflow.currentTask?.name ?? "No current task") : "Released project topology"}
           </div>
           <div class="text-xs text-text-weak">
             {[props.projectName, props.sessionTitle].filter(Boolean).join(" · ")}
@@ -498,7 +499,7 @@ export function GraphCockpit(props: {
             graphID={`${isPlan() ? "workflow" : "main"}-${props.workflow.revision}`}
             data={canvas()}
             selectedNodeID={selectedID()}
-            currentNodeID={isPlan() ? props.workflow.currentTask?.id ?? null : null}
+            currentNodeID={isPlan() ? (props.workflow.currentTask?.id ?? null) : null}
             onSelectNode={(id) => props.onSelectNode(id ?? (isPlan() ? props.workflow.currentTask?.id : null) ?? null)}
             centerNodeID={local.centerNodeID}
             centerRequestToken={local.centerRequestToken}

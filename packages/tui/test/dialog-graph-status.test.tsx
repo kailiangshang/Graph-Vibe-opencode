@@ -105,17 +105,28 @@ test("status dialog disables a pending action and ignores rapid duplicate keys",
   try {
     app.mockInput.pressKey("c")
     app.mockInput.pressKey("c")
-    await waitFor(() => app.captureCharFrame().includes("Continuing..."), () => app.renderOnce())
+    await waitFor(
+      () => app.captureCharFrame().includes("Continuing..."),
+      () => app.renderOnce(),
+    )
     expect(continued).toBe(1)
     expect(app.captureCharFrame()).not.toContain("c Continue")
     resolve()
-    await waitFor(() => app.captureCharFrame().includes("c Continue"), () => app.renderOnce())
+    await waitFor(
+      () => app.captureCharFrame().includes("c Continue"),
+      () => app.renderOnce(),
+    )
   } finally {
     app.renderer.destroy()
   }
 })
 
-async function mount(workflow: Workflow, conflict: string | undefined, onContinue: () => unknown, onPause: () => unknown) {
+async function mount(
+  workflow: Workflow,
+  conflict: string | undefined,
+  onContinue: () => unknown,
+  onPause: () => unknown,
+) {
   await mkdir("/tmp/opencode/state", { recursive: true })
   if (!(await Bun.file("/tmp/opencode/state/kv.json").exists())) await Bun.write("/tmp/opencode/state/kv.json", "{}")
 
@@ -147,7 +158,10 @@ async function mount(workflow: Workflow, conflict: string | undefined, onContinu
 
   const app = await testRender(() => <Harness />, { kittyKeyboard: true })
   const mode = workflow.mode ? `Mode: ${workflow.mode[0].toUpperCase()}${workflow.mode.slice(1)}` : "Mode: Not selected"
-  await waitFor(() => app.captureCharFrame().includes(mode), () => app.renderOnce())
+  await waitFor(
+    () => app.captureCharFrame().includes(mode),
+    () => app.renderOnce(),
+  )
   return app
 }
 
