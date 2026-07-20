@@ -124,6 +124,17 @@ for (const route of ["source", "embedded"] as const) {
     await assertState(page, state, "network-error", "Workflow unavailable", { retry: true })
 
     state.set("checkpoint")
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.reload()
+    await page.getByRole("button", { name: "Main" }).click()
+    await page.locator(".graph-task").filter({ hasText: "Released capability" }).click()
+    await expect(page.getByRole("heading", { name: "Released capability" })).toBeVisible()
+    await expect(page.getByText("Visible only in Main")).toBeVisible()
+    await expect(page.getByRole("button", { name: "Build rail" })).toHaveCount(0)
+    await expect(page.getByLabel("Execution mode")).toHaveCount(0)
+    await page.getByRole("button", { name: "Plan" }).click()
+
+    state.set("checkpoint")
     await page.setViewportSize({ width: 390, height: 844 })
     await page.reload()
     const tasks = page.getByRole("tab", { name: "Tasks" })
@@ -131,6 +142,12 @@ for (const route of ["source", "embedded"] as const) {
     await tasks.press("ArrowRight")
     await expect(page.getByRole("tab", { name: "Graph" })).toBeFocused()
     await expect(page.getByRole("tab", { name: "Graph" })).toHaveAttribute("aria-selected", "true")
+    const canvas = page.getByLabel("Workflow graph canvas. Use the task rail for keyboard navigation.")
+    await expect(canvas).toBeVisible()
+    expect((await canvas.boundingBox())?.width).toBeGreaterThan(0)
+    expect((await canvas.boundingBox())?.height).toBeGreaterThan(0)
+    expect(await canvas.evaluate((element) => [(element as HTMLCanvasElement).width, (element as HTMLCanvasElement).height]))
+      .toEqual([expect.any(Number), expect.any(Number)])
     for (const tab of await page.getByRole("tab").all()) {
       expect((await tab.boundingBox())?.height).toBeGreaterThanOrEqual(44)
     }
@@ -212,8 +229,9 @@ async function setup(page: Page, embedded: boolean, initialView: WorkflowView = 
       view = "building"
       return route.fulfill(json(projection(view)))
     }
-    if (url.pathname === "/graph/current-plan" || url.pathname === "/graph/main")
+    if (url.pathname === "/graph/current-plan")
       return route.fulfill(json(view === "empty" ? { nodes: [], edges: [] } : graph))
+    if (url.pathname === "/graph/main") return route.fulfill(json(mainGraph))
     return route.fallback()
   })
   await page.addInitScript(
@@ -367,6 +385,23 @@ const graph = {
     { id: "contains-goal", sourceID: "goal", targetID: "module", relation: "contains" },
     { id: "contains-task", sourceID: "module", targetID: "task", relation: "contains" },
   ],
+}
+
+const mainGraph = {
+  nodes: [
+    {
+      id: "main-only",
+      name: "Released capability",
+      type: "atomic",
+      level: "L2",
+      status: "verified",
+      testStatus: "passed",
+      priority: null,
+      sessionID: null,
+      desc: "Visible only in Main",
+    },
+  ],
+  edges: [],
 }
 
 function json(body: unknown, status = 200) {
