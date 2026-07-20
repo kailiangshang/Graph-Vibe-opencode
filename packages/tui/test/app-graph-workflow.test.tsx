@@ -213,10 +213,12 @@ test("an open Graph status dialog replaces its projection after graph.plan.updat
       }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
     )
     await ready
-    await Bun.sleep(25)
+    await waitFor(() => api?.keymap.getCommands().some((command) => command.name === "graph.status") ?? false)
     api?.keymap.dispatchCommand("graph.status")
-    await Bun.sleep(25)
-    await setup.renderOnce()
+    await waitFor(async () => {
+      await setup.renderOnce()
+      return setup.captureCharFrame().includes("Initial task")
+    })
     expect(setup.captureCharFrame()).toContain("Initial task")
 
     currentTask = "Advanced task"
@@ -224,8 +226,10 @@ test("an open Graph status dialog replaces its projection after graph.plan.updat
       directory,
       payload: { id: "evt_graph", type: "graph.plan.updated", properties: { projectID: "proj_test" } },
     })
-    await Bun.sleep(25)
-    await setup.renderOnce()
+    await waitFor(async () => {
+      await setup.renderOnce()
+      return setup.captureCharFrame().includes("Advanced task")
+    })
     expect(setup.captureCharFrame()).toContain("Advanced task")
     expect(setup.captureCharFrame()).not.toContain("Initial task")
 
@@ -236,6 +240,14 @@ test("an open Graph status dialog replaces its projection after graph.plan.updat
     mock.restore()
   }
 })
+
+async function waitFor(check: () => boolean | Promise<boolean>, timeout = 2000) {
+  const end = Date.now() + timeout
+  while (!(await check())) {
+    if (Date.now() >= end) throw new Error("Timed out waiting for Graph workflow readiness")
+    await Bun.sleep(5)
+  }
+}
 
 function restore(key: string, value: string | undefined) {
   if (value === undefined) {

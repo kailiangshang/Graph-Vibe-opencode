@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
@@ -18,20 +19,30 @@ export function DialogGraphStatus(props: {
 export function GraphStatusView(props: {
   workflow: Workflow
   conflict?: string
-  onContinue?: () => void
-  onPause?: () => void
+  onContinue?: () => unknown
+  onPause?: () => unknown
   onClose: () => void
 }) {
   const { theme } = useTheme()
+  const [local, setLocal] = createStore({ pending: undefined as "continue" | "pause" | undefined })
   const status = () => formatWorkflowStatus(props.workflow)
+  const run = async (kind: "continue" | "pause", action: (() => unknown) | undefined) => {
+    if (local.pending || !action) return
+    setLocal("pending", kind)
+    try {
+      await action()
+    } finally {
+      setLocal("pending", undefined)
+    }
+  }
 
   useBindings(() => ({
     bindings: [
-      ...(workflowActions(props.workflow).continue
-        ? [{ key: "c", desc: "Continue", group: "Workflow", cmd: () => props.onContinue?.() }]
+      ...(workflowActions(props.workflow).continue && !local.pending
+        ? [{ key: "c", desc: "Continue", group: "Workflow", cmd: () => run("continue", props.onContinue) }]
         : []),
-      ...(workflowActions(props.workflow).pause
-        ? [{ key: "p", desc: "Pause", group: "Workflow", cmd: () => props.onPause?.() }]
+      ...(workflowActions(props.workflow).pause && !local.pending
+        ? [{ key: "p", desc: "Pause", group: "Workflow", cmd: () => run("pause", props.onPause) }]
         : []),
       { key: "return", desc: "Close status", group: "Dialog", cmd: props.onClose },
       { key: "escape", desc: "Close status", group: "Dialog", cmd: props.onClose },
@@ -77,10 +88,16 @@ export function GraphStatusView(props: {
         )}
       </For>
       <box flexDirection="row" gap={2}>
-        <Show when={workflowActions(props.workflow).continue}>
+        <Show when={local.pending === "continue"}>
+          <text fg={theme.primary}>Continuing...</text>
+        </Show>
+        <Show when={local.pending === "pause"}>
+          <text fg={theme.primary}>Pausing...</text>
+        </Show>
+        <Show when={workflowActions(props.workflow).continue && !local.pending}>
           <text fg={theme.primary}>c Continue</text>
         </Show>
-        <Show when={workflowActions(props.workflow).pause}>
+        <Show when={workflowActions(props.workflow).pause && !local.pending}>
           <text fg={theme.primary}>p Pause</text>
         </Show>
       </box>

@@ -87,7 +87,35 @@ test("status dialog binds Pause only while work is active and hides actions befo
   }
 })
 
-async function mount(workflow: Workflow, conflict: string | undefined, onContinue: () => void, onPause: () => void) {
+test("status dialog disables a pending action and ignores rapid duplicate keys", async () => {
+  let continued = 0
+  let resolve!: () => void
+  const pending = new Promise<void>((done) => {
+    resolve = done
+  })
+  const app = await mount(
+    checkpoint,
+    undefined,
+    () => {
+      continued++
+      return pending
+    },
+    () => {},
+  )
+  try {
+    app.mockInput.pressKey("c")
+    app.mockInput.pressKey("c")
+    await waitFor(() => app.captureCharFrame().includes("Continuing..."), () => app.renderOnce())
+    expect(continued).toBe(1)
+    expect(app.captureCharFrame()).not.toContain("c Continue")
+    resolve()
+    await waitFor(() => app.captureCharFrame().includes("c Continue"), () => app.renderOnce())
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+async function mount(workflow: Workflow, conflict: string | undefined, onContinue: () => unknown, onPause: () => unknown) {
   await mkdir("/tmp/opencode/state", { recursive: true })
   if (!(await Bun.file("/tmp/opencode/state/kv.json").exists())) await Bun.write("/tmp/opencode/state/kv.json", "{}")
 
@@ -118,10 +146,16 @@ async function mount(workflow: Workflow, conflict: string | undefined, onContinu
   }
 
   const app = await testRender(() => <Harness />, { kittyKeyboard: true })
-  await app.renderOnce()
-  for (let attempt = 0; attempt < 5 && !app.captureCharFrame().trim(); attempt++) {
-    await Bun.sleep(25)
-    await app.renderOnce()
-  }
+  const mode = workflow.mode ? `Mode: ${workflow.mode[0].toUpperCase()}${workflow.mode.slice(1)}` : "Mode: Not selected"
+  await waitFor(() => app.captureCharFrame().includes(mode), () => app.renderOnce())
   return app
+}
+
+async function waitFor(check: () => boolean | Promise<boolean>, update: () => void | Promise<void>, timeout = 2000) {
+  const end = Date.now() + timeout
+  while (!(await check())) {
+    if (Date.now() >= end) throw new Error("Timed out waiting for Graph status readiness")
+    await update()
+    await Bun.sleep(5)
+  }
 }
