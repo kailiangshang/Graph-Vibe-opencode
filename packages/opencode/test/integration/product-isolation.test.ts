@@ -196,6 +196,13 @@ const runtimeScript = String.raw`
   }))
 `
 
+const healthScript = String.raw`
+  const { Default } = await import("./src/server/server")
+  const response = await Default().app.request("/global/health")
+  console.log("HEALTH_RESULT=" + JSON.stringify({ status: response.status, body: await response.json() }))
+  process.exit(0)
+`
+
 const expectedDatabaseTables = [
   { name: "account", rows: 0 },
   { name: "account_state", rows: 0 },
@@ -229,6 +236,77 @@ const expectedDatabaseTables = [
   { name: "todo", rows: 0 },
   { name: "workspace", rows: 0 },
 ]
+
+test("concurrent OpenCode and Graph Vibe health responses report their product profiles", async () => {
+  await using tmp = await tmpdir()
+  const processes = [
+    { id: "opencode", client: "" },
+    { id: "graph-vibe", client: "graph-vibe" },
+  ].map((product) => ({
+    ...product,
+    proc: Bun.spawn({
+      cmd: [process.execPath, "--eval", healthScript],
+      cwd: path.join(import.meta.dir, "../.."),
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: path.join(tmp.path, product.id),
+        OPENCODE_TEST_HOME: path.join(tmp.path, product.id),
+        XDG_DATA_HOME: path.join(tmp.path, product.id, "data"),
+        XDG_CONFIG_HOME: path.join(tmp.path, product.id, "config"),
+        XDG_STATE_HOME: path.join(tmp.path, product.id, "state"),
+        XDG_CACHE_HOME: path.join(tmp.path, product.id, "cache"),
+        TMPDIR: path.join(tmp.path, product.id, "tmp"),
+        TMP: path.join(tmp.path, product.id, "tmp"),
+        TEMP: path.join(tmp.path, product.id, "tmp"),
+        OPENCODE_CLIENT: product.client,
+        OPENCODE_DISABLE_CHANNEL_DB: "1",
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 30_000,
+    }),
+  }))
+  const results = await Promise.all(
+    processes.map(async (product) => {
+      const [exit, stdout, stderr] = await Promise.all([
+        product.proc.exited,
+        new Response(product.proc.stdout).text(),
+        new Response(product.proc.stderr).text(),
+      ])
+      expect(exit, stderr).toBe(0)
+      const line = stdout.split(/\r?\n/).find((item) => item.startsWith("HEALTH_RESULT="))
+      if (!line) throw new Error(`Health result missing for ${product.id}: ${stdout}\n${stderr}`)
+      return JSON.parse(line.slice("HEALTH_RESULT=".length))
+    }),
+  )
+  expect(results).toEqual([
+    {
+      status: 200,
+      body: {
+        healthy: true,
+        version: expect.any(String),
+        product: {
+          id: "opencode",
+          name: "OpenCode",
+          capability: "The AI coding agent built for the terminal",
+        },
+      },
+    },
+    {
+      status: 200,
+      body: {
+        healthy: true,
+        version: expect.any(String),
+        product: {
+          id: "graph-vibe",
+          name: "Graph Vibe",
+          capability: "Graph-guided development",
+        },
+      },
+    },
+  ])
+}, 30_000)
 
 test("real OpenCode and Graph Vibe runtimes never cross-write a shared synthetic home", async () => {
   await using tmp = await tmpdir()

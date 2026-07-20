@@ -19,7 +19,7 @@ for (const route of ["source", "embedded"] as const) {
     await expect(page.getByRole("region", { name: "Graph workflow cockpit" })).toBeVisible()
   })
 
-  test(`${route} route renders explicit empty-plan guidance without workflow actions`, async ({ page }) => {
+  test(`${route} route renders explicit empty-plan guidance without execution actions`, async ({ page }) => {
     await setup(page, route === "embedded", "empty")
     await page.goto(routeUrl(route))
 
@@ -30,6 +30,11 @@ for (const route of ["source", "embedded"] as const) {
     await expect(page.getByLabel("Execution mode")).toHaveCount(0)
     await expect(page.getByRole("button", { name: "Continue" })).toHaveCount(0)
     await expect(page.getByRole("button", { name: "Pause" })).toHaveCount(0)
+    const describe = page.getByRole("button", { name: "Describe a goal", exact: true })
+    await expect(describe).toBeVisible()
+    expect((await describe.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+    await describe.click()
+    await expect(page).toHaveURL(routeUrl(route).replace(/\/graph$/, ""))
   })
 
   test(`${route} route renders the complete Graph workflow cockpit state matrix`, async ({ page }) => {
@@ -46,7 +51,10 @@ for (const route of ["source", "embedded"] as const) {
     await expect(page.getByRole("button", { name: "Main" })).toHaveAttribute("aria-pressed", "false")
     await expect(page.getByRole("button", { name: "Back to session" })).toBeVisible()
     await expect(page.getByRole("heading", { name: "Interface" })).toBeVisible()
-    await expect(page.getByRole("button", { name: "Build rail" })).toHaveAttribute("aria-current", "step")
+    await expect(page.getByRole("button").filter({ hasText: "Build rail" })).toHaveAttribute(
+      "aria-current",
+      "step",
+    )
     await expect(page.getByRole("button", { name: "Continue" }).first()).toBeVisible()
     await expect(page.getByRole("button", { name: "Pause" })).toHaveCount(0)
     await expect(page.getByText("Rail remains visible at mobile width")).toBeVisible()
@@ -91,17 +99,22 @@ for (const route of ["source", "embedded"] as const) {
         .locator(".graph-glass")
         .first()
         .evaluate((element) => getComputedStyle(element).backdropFilter),
-    ).toBe("none")
+    ).not.toContain("blur")
 
     await cdp.send("Emulation.setEmulatedMedia", { features: [] })
     await page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" })
 
     state.set("checkpoint")
+    await page.setViewportSize({ width: 767, height: 900 })
     await page.reload()
-    await page.getByRole("button", { name: "Continue" }).first().click()
+    await page.getByRole("tab", { name: "Details" }).click()
+    const continueAction = page.getByLabel("Details").getByRole("button", { name: "Continue" })
+    await expect(continueAction).toBeEnabled()
+    await continueAction.click()
     await expect.poll(() => state.approvals).toBe(1)
-    await expect(page.getByRole("button", { name: "Pause" })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Pause" }).first()).toBeVisible()
     await expect(page.getByRole("button", { name: "Continue" })).toHaveCount(0)
+    await page.setViewportSize({ width: 1440, height: 900 })
 
     await assertState(page, state, "mode-required", "Execution mode required", { mode: true })
     await assertState(page, state, "paused", "Workflow paused", { mode: true, continue: true })
@@ -177,6 +190,8 @@ async function setup(page: Page, embedded: boolean, initialView: WorkflowView = 
   })
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url())
+    if (url.pathname === "/global/product-migration")
+      return route.fulfill(json({ _tag: "ProductMigrationUnavailable" }, 404))
     if (url.pathname === "/graph/workflow") {
       if (route.request().method() === "GET") {
         if (view === "loading") {
@@ -354,6 +369,6 @@ const graph = {
   ],
 }
 
-function json(body: unknown) {
-  return { status: 200, contentType: "application/json", body: JSON.stringify(body) }
+function json(body: unknown, status = 200) {
+  return { status, contentType: "application/json", body: JSON.stringify(body) }
 }

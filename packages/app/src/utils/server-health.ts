@@ -3,8 +3,14 @@ import { ServerConnection } from "@/context/server"
 import { createSdkForServer } from "./server"
 import { Accessor, createEffect, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
+import type { GlobalHealthResponse } from "@opencode-ai/sdk/v2"
 
-export type ServerHealth = { healthy: boolean; version?: string }
+export type ServerHealth = { healthy: boolean; version?: string; product?: GlobalHealthResponse["product"] }
+
+export function preserveServerHealthProduct(previous: ServerHealth | undefined, result: ServerHealth): ServerHealth {
+  if (result.healthy || result.product || !previous?.product) return result
+  return { ...result, product: previous.product }
+}
 
 interface CheckServerHealthOptions {
   timeoutMs?: number
@@ -89,7 +95,11 @@ export async function checkServerHealth(
       signal,
     })
       .global.health()
-      .then((x) => (x.error ? next(count, x.error) : { healthy: x.data?.healthy === true, version: x.data?.version }))
+      .then((x) =>
+        x.error
+          ? next(count, x.error)
+          : { healthy: x.data?.healthy === true, version: x.data?.version, product: x.data?.product },
+      )
       .catch((error) => next(count, error))
   return attempt(0).finally(() => timeout?.clear?.())
 }
@@ -133,7 +143,7 @@ export const useServerHealth = (servers: Accessor<ServerConnection.Any[]>, enabl
       await Promise.all(
         list.map(async (conn) => {
           const key = ServerConnection.key(conn)
-          const result = await checkServerHealth(conn.http)
+          const result = preserveServerHealthProduct(status[key], await checkServerHealth(conn.http))
           results[key] = result
           if (!dead) setStatus(key, result)
         }),

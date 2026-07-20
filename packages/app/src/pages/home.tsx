@@ -69,6 +69,9 @@ import { archiveHomeSession } from "./home-session-archive"
 import { shouldOpenSessionInBackground } from "./home-session-open"
 import { showToast } from "@/utils/toast"
 import { fileManagerApp } from "@/utils/file-manager"
+import { HomeGraphVibe } from "./home-graph-vibe"
+import { resolveProductPresentation } from "@/utils/product-presentation"
+import { sessionGraphHref } from "@/utils/session-route"
 
 const HOME_SESSION_LIMIT = 64
 const HOME_SESSION_HEADER_STICKY_TOP = 12
@@ -273,12 +276,19 @@ export function NewHome() {
   const [state, setState] = createStore({
     search: "",
     searchFocused: false,
+    graphPending: false,
   })
   const selection = layout.home.selection
 
   const focusedServer = createMemo(
     () => global.servers.list().find((conn) => ServerConnection.key(conn) === selection().server) ?? server.current,
   )
+  const focusedHealth = createMemo(() => {
+    const conn = focusedServer()
+    if (!conn) return
+    return global.servers.health[ServerConnection.key(conn)]
+  })
+  const focusedProduct = createMemo(() => resolveProductPresentation(focusedHealth()?.product))
   const focusedServerCtx = createMemo(() => {
     const conn = focusedServer()
     if (!conn) return
@@ -457,6 +467,60 @@ export function NewHome() {
     openProjectNewSession(conn, project.worktree)
   }
 
+  function startGraphWorkflow() {
+    if (state.graphPending) return
+    const conn = focusedServer()
+    if (!conn) return
+    if (global.servers.health[ServerConnection.key(conn)]?.healthy === false) return
+    setState("graphPending", true)
+
+    const project = selectedProject()
+    const directory = project
+      ? Promise.resolve(project.worktree)
+      : new Promise<string | undefined>((resolve) => {
+          pickDirectory({
+            server: conn,
+            title: language.t("command.project.open"),
+            multiple: true,
+            onSelect: (result) => resolve(homeProjectDirectories(result)[0]),
+          })
+        })
+
+    void directory
+      .then(async (selected) => {
+        if (!selected) return
+        const ctx = global.ensureServerCtx(conn)
+        const response = await ctx.sdk
+          .createClient({ directory: selected, throwOnError: true })
+          .session.create({ title: "Graph workflow" })
+        if (!response.data) throw response.error ?? new Error(language.t("common.requestFailed"))
+        return { ctx, selected, session: response.data }
+      })
+      .catch((error) => {
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: errorMessage(error, language.t("common.requestFailed")),
+        })
+        return undefined
+      })
+      .then(async (created) => {
+        if (!created) return
+        await created.ctx.sync.session.lineage.resolve(created.session.id).catch(() => undefined)
+
+        const key = ServerConnection.key(conn)
+        created.ctx.projects.open(created.selected)
+        created.ctx.projects.touch(created.selected)
+        setSelection({ server: key, directory: created.selected })
+        await startTransition(() => {
+          const tab = tabs.addSessionTab({ server: key, sessionId: created.session.id })
+          tabs.select(tab)
+          navigate(sessionGraphHref(key, created.session.id))
+        })
+      })
+      .catch(() => {})
+      .finally(() => setState("graphPending", false))
+  }
+
   function openProjectNewSession(conn: ServerConnection.Any, directory: string) {
     const ctx = global.ensureServerCtx(conn)
     ctx.projects.open(directory)
@@ -573,6 +637,14 @@ export function NewHome() {
           class="min-h-0 min-w-0 flex-1 flex flex-col pt-6 lg:pt-12 relative"
           aria-label={language.t("sidebar.project.recentSessions")}
         >
+          <HomeGraphVibe
+            visible={focusedProduct().id === "graph-vibe"}
+            pending={state.graphPending}
+            unavailable={focusedHealth()?.healthy === false}
+            capability={focusedProduct().capability}
+            projectName={selectedProject() ? displayName(selectedProject()!) : undefined}
+            onStart={startGraphWorkflow}
+          />
           <HomeSessionSearch
             value={state.search}
             placeholder={searchPlaceholder()}

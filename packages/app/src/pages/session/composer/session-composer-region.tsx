@@ -32,7 +32,7 @@ export function SessionComposerRegion(props: {
     >
       <div
         classList={{
-          "w-full px-3 pointer-events-auto": true,
+          "w-full pl-3 pr-12 sm:px-3 pointer-events-auto": true,
           "md:max-w-200 md:mx-auto 2xl:max-w-[1000px]": controller.centered(),
         }}
       >

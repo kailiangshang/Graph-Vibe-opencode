@@ -1,5 +1,6 @@
 import type { ProductMigrationDraftPayload, ProductMigrationProjection } from "@opencode-ai/sdk/v2/client"
-import { createMemo, For, onCleanup, onMount, Show } from "solid-js"
+import { Button } from "@opencode-ai/ui/button"
+import { createEffect, createMemo, For, type JSX, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 
 type DraftPatch = {
@@ -11,6 +12,8 @@ type DraftPatch = {
   projectSelected?: boolean
   selected?: boolean
 }
+
+type RunMigrationAction = (label: string, action: () => Promise<unknown>, onSettle?: () => void) => void
 
 export type ProductMigrationController = {
   projection: () => ProductMigrationProjection
@@ -96,6 +99,7 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
     project: 0,
     mobileStep: "manifest" as (typeof mobileSteps)[number],
     confirm: undefined as "finalize" | "fresh" | undefined,
+    actionLabel: undefined as string | undefined,
   })
   const projection = () => props.controller.projection()
   const plan = () =>
@@ -110,8 +114,10 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
   const source = () =>
     projection().source ?? { database: "", databaseBytes: 0, mixedGraph: false, sessionCount: 0 }
   const progress = createMemo(() => migrationProgress(projection()))
-  const editable = () => projection().status === "draft" && !props.controller.pending()
+  const busy = () => !!store.actionLabel || props.controller.pending()
+  const editable = () => projection().status === "draft" && !busy()
   const selectedProject = createMemo(() => plan()?.projects[store.project] ?? plan()?.projects[0])
+  let root: HTMLElement | undefined
   let dialog: HTMLDivElement | undefined
   let confirmation: HTMLDivElement | undefined
   let confirmationKind: "finalize" | "fresh" | undefined
@@ -148,6 +154,60 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
     previousFocus = undefined
   }
 
+  const settleConflictRefresh = () => {
+    if (props.controller.conflict()) return
+    const focus = previousFocus
+    if (dialog) dialog.hidden = true
+    previousFocus = undefined
+    dialog = undefined
+    focus?.focus()
+  }
+
+  const runAction: RunMigrationAction = (label, action, onSettle) => {
+    if (busy()) return
+    setStore("actionLabel", label)
+    const settle = () => {
+      setStore("actionLabel", undefined)
+      onSettle?.()
+    }
+    void Promise.resolve().then(action).then(settle, settle)
+  }
+
+  const restoreActionFocus = (element: HTMLElement, resolve = () => element) => () => {
+    queueMicrotask(() => {
+      if (dialog) return
+      if (document.activeElement !== document.body && document.activeElement !== element) return
+      const current = element.isConnected ? element : resolve()
+      if (!current.isConnected) return
+      current.focus()
+    })
+  }
+
+  const resolveCategoryInput = (category: ProductMigrationDraftPayload["categories"][number]["category"]) =>
+    [...(root?.querySelectorAll<HTMLInputElement>("[data-migration-category]") ?? [])]
+      .find((input) => input.dataset.migrationCategory === category)
+
+  const resolveSessionInput = (projectID: string, sessionID: string) =>
+    [...(root?.querySelectorAll<HTMLInputElement>("[data-migration-project][data-migration-session]") ?? [])]
+      .find((input) => input.dataset.migrationProject === projectID && input.dataset.migrationSession === sessionID)
+
+  const refreshConflict = () => runAction("Refreshing checkpoint…", props.controller.refresh, settleConflictRefresh)
+
+  createEffect(() => {
+    const conflict = props.controller.conflict()
+    const pending = busy()
+    if (!conflict) return
+    queueMicrotask(() => {
+      if (!dialog || !props.controller.conflict()) return
+      if (pending) {
+        dialog.focus()
+        return
+      }
+      if (dialog.contains(document.activeElement) && document.activeElement !== dialog) return
+      dialog.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus() ?? dialog.focus()
+    })
+  })
+
   const selectMobileStep = (step: (typeof mobileSteps)[number], root?: HTMLElement | null) => {
     setStore("mobileStep", step)
     root?.querySelectorAll<HTMLElement>("[data-mobile-panel]").forEach((panel) => {
@@ -160,12 +220,16 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
 
   const trap = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
-      closeConfirmation()
+      if (dialog === confirmation) closeConfirmation()
       return
     }
     if (event.key !== "Tab" || !dialog) return
     const focusable = [...dialog.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled])")]
-    if (!focusable.length) return
+    if (!focusable.length) {
+      event.preventDefault()
+      dialog.focus()
+      return
+    }
     const index = focusable.indexOf(document.activeElement as HTMLElement)
     const next = event.shiftKey ? (index <= 0 ? focusable.length - 1 : index - 1) : (index + 1) % focusable.length
     event.preventDefault()
@@ -177,6 +241,7 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
 
   return (
     <main
+      ref={(element) => { root = element }}
       class="min-h-dvh w-full overflow-x-hidden bg-background-base text-text-base"
       aria-label="Graph Vibe data transfer checkpoint"
     >
@@ -193,15 +258,19 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
           </div>
         </header>
 
+        <div class="pointer-events-none fixed inset-x-4 top-4 z-[60] flex justify-center">
+          <p aria-live="polite" aria-atomic="true" class="border border-border-weak-base bg-surface-raised-base px-3 py-2 font-mono text-10-medium uppercase text-text-weak shadow-sm empty:hidden">{(() => store.actionLabel ?? "") as unknown as JSX.Element}</p>
+        </div>
+
         <Show when={props.controller.conflict()}>
           {(message) => (
-            <div ref={(element) => { previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; dialog = element }} role="dialog" aria-modal="true" aria-labelledby="migration-conflict-title" class="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+            <div ref={(element) => { previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; dialog = element }} tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="migration-conflict-title" class="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
               <div class="w-full max-w-lg border border-border-strong-base bg-surface-raised-base p-6 shadow-xl">
                 <p class="font-mono text-11-medium uppercase tracking-wider text-icon-warning-base">Revision conflict</p>
                 <h2 id="migration-conflict-title" class="mt-2 text-18-medium text-text-strong">The transfer plan changed</h2>
                 <p class="mt-3 text-13-regular text-text-base">{message()}</p>
                 <p class="mt-2 text-12-regular text-text-weak">The latest SDK projection has replaced the stale view. Review it before repeating the action.</p>
-                <button type="button" autofocus class="mt-5 min-h-11 border border-border-strong-base px-4 text-13-medium hover:bg-surface-base-hover" onClick={() => { const focus = previousFocus; previousFocus = undefined; dialog = undefined; void props.controller.refresh().finally(() => focus?.focus()) }}>Review refreshed plan</button>
+                <Button type="button" size="large" autofocus disabled={busy()} class="mt-5 min-h-11 px-4" onClick={(_event: MouseEvent) => refreshConflict()}>{store.actionLabel === "Refreshing checkpoint…" ? store.actionLabel : "Review refreshed plan"}</Button>
               </div>
             </div>
           )}
@@ -214,18 +283,24 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
               <h2 data-confirm-heading="fresh" id="migration-confirm-fresh-title" hidden class="mt-2 text-18-medium text-text-strong">Start without importing?</h2>
               <p data-confirm-copy class="mt-3 text-13-regular text-text-base" />
               <div class="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <button type="button" data-action="cancel-confirmation" class="min-h-11 border border-border-weak-base px-4 text-13-medium hover:bg-surface-base-hover" onClick={closeConfirmation}>Cancel</button>
-                <button
+                <Button type="button" size="large" data-action="cancel-confirmation" disabled={props.controller.pending()} class="min-h-11 px-4" onClick={(_event: MouseEvent) => closeConfirmation()}>Cancel</Button>
+                <Button
                   type="button"
+                  size="large"
+                  variant="primary"
                   autofocus
                   data-confirm-action
-                  class="min-h-11 bg-button-primary-base px-4 text-13-medium text-text-on-color hover:bg-button-primary-hover"
-                  onClick={() => {
-                    const action = confirmationKind === "finalize" ? props.controller.finalize() : props.controller.freshStart()
+                  disabled={props.controller.pending()}
+                  class="min-h-11 px-4"
+                  onClick={(_event: MouseEvent) => {
+                    const kind = confirmationKind
+                    runAction(
+                      kind === "finalize" ? "Finalizing import…" : "Starting Graph Vibe fresh…",
+                      () => kind === "finalize" ? props.controller.finalize() : props.controller.freshStart(),
+                    )
                     closeConfirmation()
-                    void action
                   }}
-                >Confirm and unlock</button>
+                >Confirm and unlock</Button>
               </div>
             </div>
           </div>
@@ -250,13 +325,13 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
               <p class="font-mono text-11-medium uppercase tracking-wider text-text-weak">Stage 00 / Source discovery</p>
               <h2 class="mt-3 text-20-medium text-text-strong">Locate the OpenCode inventory</h2>
               <p class="mt-3 max-w-xl text-13-regular text-text-base">Graph Vibe asks the migration service to inspect the canonical source. No browser-side file probing or inferred state is used.</p>
-              <button type="button" class="mt-6 min-h-11 bg-button-primary-base px-5 text-13-medium text-text-on-color hover:bg-button-primary-hover" onClick={() => props.controller.discover()}>Discover OpenCode data</button>
+              <Button type="button" size="large" variant="primary" disabled={busy()} class="mt-6 min-h-11 px-5" onClick={(_event: MouseEvent) => runAction("Discovering OpenCode data…", props.controller.discover)}>Discover OpenCode data</Button>
             </div>
             <div class="border border-border-weak-base bg-surface-base p-5">
               <p class="font-mono text-11-medium uppercase tracking-wider text-text-weak">Alternative</p>
               <h3 class="mt-2 text-16-medium text-text-strong">Use empty isolated storage</h3>
               <p class="mt-2 text-12-regular text-text-base">This requires a separate confirmation and never touches OpenCode data.</p>
-              <button type="button" data-action="fresh-start" class="mt-5 min-h-11 border border-border-strong-base px-4 text-13-medium hover:bg-surface-base-hover" onClick={() => openConfirmation("fresh")}>Start Graph Vibe fresh</button>
+              <Button type="button" size="large" data-action="fresh-start" disabled={busy()} class="mt-5 min-h-11 px-4" onClick={(_event: MouseEvent) => openConfirmation("fresh")}>Start Graph Vibe fresh</Button>
             </div>
           </section>
         </Show>
@@ -275,7 +350,18 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
                   <For each={plan()!.categories}>
                     {(item) => (
                       <label class="flex min-h-11 cursor-pointer items-center gap-3 border-b border-border-weak-base px-1 last:border-b-0">
-                        <input type="checkbox" checked={item.selected} disabled={!item.available || !editable()} onChange={(event) => props.controller.updateDraft(migrationDraftPayload(projection(), { category: item.category, categorySelected: event.currentTarget.checked }))} />
+                        <input
+                          type="checkbox"
+                          data-migration-category={item.category}
+                          checked={item.selected}
+                          disabled={!item.available || !editable()}
+                          onChange={(event) => {
+                            const input = event.currentTarget
+                            const checked = input.checked
+                            const category = item.category
+                            runAction("Saving migration selection…", () => props.controller.updateDraft(migrationDraftPayload(projection(), { category, categorySelected: checked })), restoreActionFocus(input, () => resolveCategoryInput(category) ?? input))
+                          }}
+                        />
                         <span class="min-w-0 flex-1 text-12-medium text-text-base">{labels[item.category]}</span>
                         <span class="font-mono text-10-regular text-text-weak">{formatMigrationBytes(item.estimatedBytes)}</span>
                       </label>
@@ -304,18 +390,42 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
                 <div class="border-b border-border-weak-base p-4">
                   <div class="flex items-center justify-between gap-3">
                     <div><h2 class="font-mono text-11-medium uppercase tracking-wider text-text-strong">Sessions</h2><p class="mt-1 text-11-regular text-text-weak">{plan()!.sessionsEnabled ? "Explicit import enabled" : "Sessions are off"}</p></div>
-                    <label class="flex min-h-11 cursor-pointer items-center gap-2 text-11-medium"><input type="checkbox" checked={plan()!.sessionsEnabled} disabled={!editable()} onChange={(event) => props.controller.updateDraft(migrationDraftPayload(projection(), { sessionsEnabled: event.currentTarget.checked }))} /> Import</label>
+                    <label class="flex min-h-11 cursor-pointer items-center gap-2 text-11-medium">
+                      <input
+                        type="checkbox"
+                        checked={plan()!.sessionsEnabled}
+                        disabled={!editable()}
+                        onChange={(event) => {
+                          const input = event.currentTarget
+                          const checked = input.checked
+                          runAction("Saving migration selection…", () => props.controller.updateDraft(migrationDraftPayload(projection(), { sessionsEnabled: checked })), restoreActionFocus(input))
+                        }}
+                      /> Import
+                    </label>
                   </div>
                   <div class="mt-2 grid grid-cols-2 gap-2">
-                    <button type="button" data-action="select-project-sessions" disabled={!editable() || !plan()!.sessionsEnabled || !selectedProject()} class="min-h-11 border border-border-weak-base px-2 text-10-medium disabled:opacity-50" onClick={() => props.controller.updateDraft(migrationDraftPayload(projection(), { projectID: selectedProject()!.id, projectSelected: true }))}>Select project</button>
-                    <button type="button" data-action="clear-project-sessions" disabled={!editable() || !plan()!.sessionsEnabled || !selectedProject()} class="min-h-11 border border-border-weak-base px-2 text-10-medium disabled:opacity-50" onClick={() => props.controller.updateDraft(migrationDraftPayload(projection(), { projectID: selectedProject()!.id, projectSelected: false }))}>Clear project</button>
+                    <button type="button" data-action="select-project-sessions" disabled={!editable() || !plan()!.sessionsEnabled || !selectedProject()} class="min-h-11 border border-border-weak-base px-2 text-10-medium disabled:opacity-50" onClick={(event) => runAction("Saving migration selection…", () => props.controller.updateDraft(migrationDraftPayload(projection(), { projectID: selectedProject()!.id, projectSelected: true })), restoreActionFocus(event.currentTarget))}>Select project</button>
+                    <button type="button" data-action="clear-project-sessions" disabled={!editable() || !plan()!.sessionsEnabled || !selectedProject()} class="min-h-11 border border-border-weak-base px-2 text-10-medium disabled:opacity-50" onClick={(event) => runAction("Saving migration selection…", () => props.controller.updateDraft(migrationDraftPayload(projection(), { projectID: selectedProject()!.id, projectSelected: false })), restoreActionFocus(event.currentTarget))}>Clear project</button>
                   </div>
                 </div>
                 <div class="grid max-h-[52vh] overflow-y-auto p-2">
                   <For each={selectedProject()?.sessions ?? []}>
                     {(session) => (
                       <label class={`flex min-h-11 items-center gap-3 border-b border-border-weak-base px-3 py-2 last:border-b-0 ${plan()!.sessionsEnabled ? "cursor-pointer" : "opacity-55"}`}>
-                        <input type="checkbox" disabled={!plan()!.sessionsEnabled || !editable()} checked={session.selected} onChange={(event) => props.controller.updateDraft(migrationDraftPayload(projection(), { projectID: selectedProject()!.id, sessionID: session.id, selected: event.currentTarget.checked }))} />
+                        <input
+                          type="checkbox"
+                          data-migration-project={selectedProject()!.id}
+                          data-migration-session={session.id}
+                          disabled={!plan()!.sessionsEnabled || !editable()}
+                          checked={session.selected}
+                          onChange={(event) => {
+                            const input = event.currentTarget
+                            const checked = input.checked
+                            const projectID = selectedProject()!.id
+                            const sessionID = session.id
+                            runAction("Saving migration selection…", () => props.controller.updateDraft(migrationDraftPayload(projection(), { projectID, sessionID, selected: checked })), restoreActionFocus(input, () => resolveSessionInput(projectID, sessionID) ?? input))
+                          }}
+                        />
                         <span class="min-w-0 flex-1"><span class="block truncate text-12-medium text-text-base">{session.title}</span><span class="font-mono text-10-regular text-text-weak">{session.archived ? "Archived" : "Available"} / Updated {new Date(session.updatedAt).toISOString().slice(0, 10)} / {session.hasGraph ? "Graph attached / " : ""}{formatMigrationBytes(session.estimatedBytes)}</span></span>
                       </label>
                     )}
@@ -325,19 +435,19 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
             </section>
 
             <aside data-mobile-panel="review" data-active={store.mobileStep === "review"} class={`${store.mobileStep === "review" ? "block" : "hidden"} border border-border-weak-base bg-surface-base lg:block`}>
-              <MigrationStatus projection={projection()} controller={props.controller} />
+              <MigrationStatus projection={projection()} controller={props.controller} busy={busy()} runAction={runAction} />
               <Show when={projection().status === "draft"}>
                 <div class="border-t border-border-weak-base p-4">
                   <p class="font-mono text-10-medium uppercase tracking-wider text-text-weak">Estimated transfer</p>
                   <p class="mt-2 text-20-medium text-text-strong">{formatMigrationBytes(plan()!.requiredBytes)}</p>
-                  <button type="button" class="mt-4 min-h-11 w-full bg-button-primary-base px-4 text-13-medium text-text-on-color hover:bg-button-primary-hover" onClick={() => props.controller.execute()}>Begin transfer</button>
-                  <button type="button" data-action="fresh-start" class="mt-2 min-h-11 w-full border border-border-weak-base px-4 text-12-medium hover:bg-surface-base-hover" onClick={() => openConfirmation("fresh")}>Start fresh instead</button>
+                  <Button type="button" size="large" variant="primary" disabled={busy()} class="mt-4 min-h-11 w-full px-4" onClick={(_event: MouseEvent) => runAction("Beginning transfer…", props.controller.execute)}>Begin transfer</Button>
+                  <Button type="button" size="large" data-action="fresh-start" disabled={busy()} class="mt-2 min-h-11 w-full px-4" onClick={(_event: MouseEvent) => openConfirmation("fresh")}>Start fresh instead</Button>
                 </div>
               </Show>
               <Show when={projection().status === "ready_to_finalize"}>
                 <div class="border-t border-border-weak-base p-4">
-                  <button type="button" data-action="finalize" disabled={!projection().canFinalize} class="min-h-11 w-full bg-button-primary-base px-4 text-13-medium text-text-on-color disabled:opacity-50" onClick={() => openConfirmation("finalize")}>Finalize validated import</button>
-                  <button type="button" data-action="return-to-draft" class="mt-2 min-h-11 w-full border border-border-weak-base px-4 text-12-medium" onClick={() => props.controller.updateDraft(migrationDraftPayload(projection()))}>Return to selection</button>
+                  <Button type="button" size="large" variant="primary" data-action="finalize" disabled={!projection().canFinalize || busy()} class="min-h-11 w-full px-4" onClick={(_event: MouseEvent) => openConfirmation("finalize")}>Finalize validated import</Button>
+                  <Button type="button" size="large" data-action="return-to-draft" disabled={busy()} class="mt-2 min-h-11 w-full px-4" onClick={(event: MouseEvent) => runAction("Returning to selection…", () => props.controller.updateDraft(migrationDraftPayload(projection())), restoreActionFocus(event.currentTarget as HTMLButtonElement))}>Return to selection</Button>
                 </div>
               </Show>
             </aside>
@@ -348,14 +458,13 @@ export function ProductMigrationPage(props: { controller: ProductMigrationContro
   )
 }
 
-function MigrationStatus(props: { projection: ProductMigrationProjection; controller: ProductMigrationController }) {
+function MigrationStatus(props: { projection: ProductMigrationProjection; controller: ProductMigrationController; busy: boolean; runAction: RunMigrationAction }) {
   const progress = () => migrationProgress(props.projection)
   const failed = () => props.projection.items.filter((item) => item.status === "failed")
   const copied = () =>
     props.projection.status === "copying" &&
     Number(props.projection.totalItems) > 0 &&
-    Number(props.projection.completedItems) >= Number(props.projection.totalItems) &&
-    !props.controller.pending()
+    Number(props.projection.completedItems) >= Number(props.projection.totalItems)
   return (
     <div class="p-4" role="status" aria-live="polite">
       <p class="font-mono text-10-medium uppercase tracking-wider text-text-weak">Transfer status</p>
@@ -386,9 +495,9 @@ function MigrationStatus(props: { projection: ProductMigrationProjection; contro
           </For>
         </ul>
       </Show>
-      <Show when={props.projection.status === "copying" && !copied()}><button type="button" data-action="pause" class="mt-4 min-h-11 w-full border border-border-strong-base px-4 text-12-medium hover:bg-surface-base-hover" onClick={() => props.controller.pause()}>Pause transfer</button></Show>
-      <Show when={copied()}><button type="button" data-action="validate" class="mt-4 min-h-11 w-full bg-button-primary-base px-4 text-12-medium text-text-on-color" onClick={() => props.controller.validate()}>Validate copied data</button></Show>
-      <Show when={props.projection.status === "paused"}><button type="button" class="mt-4 min-h-11 w-full bg-button-primary-base px-4 text-12-medium text-text-on-color" onClick={() => props.controller.execute()}>Resume transfer</button></Show>
+      <Show when={props.projection.status === "copying" && !copied()}><Button type="button" size="large" data-action="pause" disabled={props.busy} class="mt-4 min-h-11 w-full px-4" onClick={(_event: MouseEvent) => props.runAction("Pausing transfer…", props.controller.pause)}>Pause transfer</Button></Show>
+      <Show when={copied()}><Button type="button" size="large" variant="primary" data-action="validate" disabled={props.busy} class="mt-4 min-h-11 w-full px-4" onClick={(_event: MouseEvent) => props.runAction("Validating copied data…", props.controller.validate)}>Validate copied data</Button></Show>
+      <Show when={props.projection.status === "paused"}><Button type="button" size="large" variant="primary" disabled={props.busy} class="mt-4 min-h-11 w-full px-4" onClick={(_event: MouseEvent) => props.runAction("Resuming transfer…", props.controller.execute)}>Resume transfer</Button></Show>
       <Show when={failed().length}>
         <div class="mt-4 grid gap-3">
           <For each={failed()}>
@@ -397,15 +506,15 @@ function MigrationStatus(props: { projection: ProductMigrationProjection; contro
                 <p class="text-12-medium text-text-strong">Copy failed: {labels[item.category]}</p>
                 <p class="mt-1 text-11-regular text-text-weak">Raw source identifiers and error details are hidden.</p>
                 <div class="mt-2 grid grid-cols-2 gap-2">
-                  <button type="button" aria-label={`Retry failed ${item.category} item`} class="min-h-11 border border-border-strong-base px-2 text-11-medium" onClick={() => props.controller.retry(item.itemID)}>Retry</button>
-                  <button type="button" aria-label={`Skip failed ${item.category} item`} class="min-h-11 border border-border-weak-base px-2 text-11-medium" onClick={() => props.controller.skip(item.itemID)}>Skip</button>
+                  <Button type="button" size="large" aria-label={`Retry failed ${item.category} item`} disabled={props.busy} class="min-h-11 px-2" onClick={(_event: MouseEvent) => props.runAction("Retrying item…", () => props.controller.retry(item.itemID))}>Retry</Button>
+                  <Button type="button" size="large" aria-label={`Skip failed ${item.category} item`} disabled={props.busy} class="min-h-11 px-2" onClick={(_event: MouseEvent) => props.runAction("Skipping item…", () => props.controller.skip(item.itemID))}>Skip</Button>
                 </div>
               </div>
             )}
           </For>
         </div>
       </Show>
-      <Show when={props.projection.status === "failed" && failed().length === 0}><button type="button" data-action="validate" class="mt-4 min-h-11 w-full border border-border-strong-base px-4 text-12-medium" onClick={() => props.controller.validate()}>Run validation again</button></Show>
+      <Show when={props.projection.status === "failed" && failed().length === 0}><Button type="button" size="large" data-action="validate" disabled={props.busy} class="mt-4 min-h-11 w-full px-4" onClick={(_event: MouseEvent) => props.runAction("Validating copied data…", props.controller.validate)}>Run validation again</Button></Show>
       <Show when={props.projection.validation && !props.projection.validation.valid}>
         <div class="mt-4 border-l-2 border-icon-warning-base pl-3">
           <p class="text-12-medium text-text-strong">Validation requires attention</p>
@@ -416,7 +525,6 @@ function MigrationStatus(props: { projection: ProductMigrationProjection; contro
         </div>
       </Show>
       <Show when={props.projection.status === "completed"}><p class="mt-3 text-12-regular text-text-base">Graph Vibe is unlocked. Normal navigation is now available.</p></Show>
-      <Show when={props.controller.pending()}><p class="mt-3 font-mono text-10-medium uppercase text-text-weak">Applying checkpoint action…</p></Show>
     </div>
   )
 }

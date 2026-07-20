@@ -687,6 +687,9 @@ export const dict = {
   "session.header.open.ariaLabel": "{{app}} ile aç",
   "session.header.open.menu": "Açma seçenekleri",
   "session.header.open.copyPath": "Yolu kopyala",
+  "session.header.reveal.finder": "Finder'da göster",
+  "session.header.reveal.fileExplorer": "Dosya Gezgini'nde göster",
+  "session.header.reveal.containingFolder": "Proje klasörünü aç",
 
   "status.popover.trigger": "Durum",
   "status.popover.ariaLabel": "Sunucu yapılandırmaları",

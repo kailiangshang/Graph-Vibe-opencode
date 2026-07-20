@@ -677,6 +677,9 @@ export const dict = {
   "session.header.open.ariaLabel": "เปิดใน {{app}}",
   "session.header.open.menu": "ตัวเลือกการเปิด",
   "session.header.open.copyPath": "คัดลอกเส้นทาง",
+  "session.header.reveal.finder": "แสดงใน Finder",
+  "session.header.reveal.fileExplorer": "แสดงใน File Explorer",
+  "session.header.reveal.containingFolder": "เปิดโฟลเดอร์โปรเจกต์",
 
   "status.popover.trigger": "สถานะ",
   "status.popover.ariaLabel": "การกำหนดค่าเซิร์ฟเวอร์",

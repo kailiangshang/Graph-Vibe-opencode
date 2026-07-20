@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { createComponent } from "solid-js"
+import { createStore } from "solid-js/store"
 import { render } from "solid-js/web"
 import h from "solid-js/h"
 import type { ProductMigrationDraftPayload, ProductMigrationProjection } from "@opencode-ai/sdk/v2/client"
@@ -100,6 +101,7 @@ test("requires dialogs for finalization and fresh start", async () => {
   trigger.click()
   await Bun.sleep(1)
   ready.root.querySelector<HTMLButtonElement>('[data-action="confirm-finalize"]')!.click()
+  await Bun.sleep(1)
   expect(calls).toEqual(["finalize"])
   ready.dispose()
 
@@ -110,16 +112,51 @@ test("requires dialogs for finalization and fresh start", async () => {
   const labelledBy = fresh.root.querySelector('[role="dialog"]')?.getAttribute("aria-labelledby")
   expect(fresh.root.querySelector(`#${labelledBy}`)?.textContent).toBe("Start without importing?")
   fresh.root.querySelector<HTMLButtonElement>('[data-action="confirm-fresh-start"]')!.click()
+  await Bun.sleep(1)
   expect(calls.at(-1)).toBe("freshStart")
   fresh.dispose()
 })
 
-test("selects or clears every session in the current project", () => {
+test("selects or clears every session in the current project", async () => {
   const app = mount({ ...draft, plan: { ...draft.plan!, sessionsEnabled: true } })
   app.root.querySelector<HTMLButtonElement>('[data-action="select-project-sessions"]')!.click()
+  await Bun.sleep(1)
   expect(app.payloads.at(-1)?.sessions.every((session) => session.selected)).toBe(true)
   app.root.querySelector<HTMLButtonElement>('[data-action="clear-project-sessions"]')!.click()
+  await Bun.sleep(1)
   expect(app.payloads.at(-1)?.sessions.every((session) => !session.selected)).toBe(true)
+  app.dispose()
+})
+
+test("captures category and session values before delayed draft updates", async () => {
+  const releases: Array<() => void> = []
+  const app = mount({ ...draft, plan: { ...draft.plan!, sessionsEnabled: true } }, [], false, {
+    updateDraft: () => new Promise<void>((resolve) => releases.push(resolve)),
+  })
+  const configuration = [...app.root.querySelectorAll("label")].find((label) => label.textContent?.includes("Configuration"))!.querySelector<HTMLInputElement>("input")!
+  const session = [...app.root.querySelectorAll("label")].find((label) => label.textContent?.includes("Inspect telemetry"))!.querySelector<HTMLInputElement>("input")!
+
+  configuration.focus()
+  configuration.click()
+  await Bun.sleep(1)
+  expect(app.payloads.at(-1)?.categories.find((item) => item.category === "config")?.selected).toBe(false)
+  const replacementConfiguration = configuration.cloneNode(true) as HTMLInputElement
+  configuration.replaceWith(replacementConfiguration)
+  expect(configuration.isConnected).toBe(false)
+  releases.shift()?.()
+  await Bun.sleep(1)
+  expect(document.activeElement).toBe(replacementConfiguration)
+
+  session.focus()
+  session.click()
+  await Bun.sleep(1)
+  expect(app.payloads.at(-1)?.sessions).toContainEqual({ projectID: "project-a", sessionID: "session-a", selected: true })
+  const replacementSession = session.cloneNode(true) as HTMLInputElement
+  session.replaceWith(replacementSession)
+  expect(session.isConnected).toBe(false)
+  releases.shift()?.()
+  await Bun.sleep(1)
+  expect(document.activeElement).toBe(replacementSession)
   app.dispose()
 })
 
@@ -147,9 +184,10 @@ test("keeps the immutable plan controls inactive after execution starts", () => 
   app.dispose()
 })
 
-test("offers a validated migration a return to selection before finalization", () => {
+test("offers a validated migration a return to selection before finalization", async () => {
   const app = mount({ ...draft, status: "ready_to_finalize", canFinalize: true })
   app.root.querySelector<HTMLButtonElement>('[data-action="return-to-draft"]')!.click()
+  await Bun.sleep(1)
   expect(app.payloads).toHaveLength(1)
   expect(app.payloads[0]?.expectedRevision).toBe(draft.revision)
   app.dispose()
@@ -178,16 +216,151 @@ test("provides mobile step navigation and 44px control targets", async () => {
   app.dispose()
 })
 
-function mount(projection: ProductMigrationProjection, calls: string[] = []) {
+test("renders production actions and disables checkpoint races while pending", () => {
+  const undiscovered = mount({ ...draft, status: "undiscovered", source: null, plan: null }, [], true)
+  const discover = [...undiscovered.root.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Discover OpenCode data")!
+  const fresh = undiscovered.root.querySelector<HTMLButtonElement>('[data-action="fresh-start"]')!
+  expect(discover.dataset.variant).toBe("primary")
+  expect(discover.dataset.size).toBe("large")
+  expect(discover.className).toContain("min-h-11")
+  expect(discover.disabled).toBe(true)
+  expect(fresh.dataset.variant).toBe("secondary")
+  expect(fresh.disabled).toBe(true)
+  expect(undiscovered.root.textContent).not.toContain("Applying checkpoint action…")
+  undiscovered.dispose()
+})
+
+test("identifies a delayed action and clears feedback on settlement", async () => {
+  let releaseDiscover = () => {}
+  const discoverBlocked = new Promise<void>((resolve) => {
+    releaseDiscover = resolve
+  })
+  const app = mount({ ...draft, status: "undiscovered", source: null, plan: null }, [], false, {
+    discover: () => discoverBlocked,
+  })
+  const discover = [...app.root.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Discover OpenCode data")!
+
+  discover.click()
+  await Bun.sleep(1)
+  expect(app.root.textContent).toContain("Discovering OpenCode data…")
+  releaseDiscover()
+  await Bun.sleep(1)
+  expect(app.root.textContent).not.toContain("Discovering OpenCode data…")
+  app.dispose()
+})
+
+test("clears action feedback when a controller throws synchronously", async () => {
+  const app = mount({ ...draft, status: "undiscovered", source: null, plan: null }, [], false, {
+    discover: () => {
+      throw new Error("discovery failed")
+    },
+  })
+  const discover = [...app.root.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Discover OpenCode data")!
+
+  expect(() => discover.click()).not.toThrow()
+  await Bun.sleep(1)
+  expect(app.root.textContent).not.toContain("Discovering OpenCode data…")
+  app.dispose()
+})
+
+test("clears action feedback when a controller promise rejects", async () => {
+  let rejectDiscover = (_error: Error) => {}
+  const discoverBlocked = new Promise<void>((_resolve, reject) => {
+    rejectDiscover = reject
+  })
+  const app = mount({ ...draft, status: "undiscovered", source: null, plan: null }, [], false, {
+    discover: () => discoverBlocked,
+  })
+  const discover = [...app.root.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Discover OpenCode data")!
+
+  discover.click()
+  await Bun.sleep(1)
+  expect(app.root.textContent).toContain("Discovering OpenCode data…")
+  rejectDiscover(new Error("discovery failed"))
+  await Bun.sleep(1)
+  expect(app.root.textContent).not.toContain("Discovering OpenCode data…")
+  app.dispose()
+})
+
+test("keeps delayed conflict refresh trapped and restores focus after settlement", async () => {
+  const calls: string[] = []
+  const outside = document.createElement("button")
+  document.body.append(outside)
+  outside.focus()
+  let releaseRefresh = () => {}
+  const refreshBlocked = new Promise<void>((resolve) => {
+    releaseRefresh = resolve
+  })
+  const app = mount(draft, calls, false, {
+    conflict: "The current revision is 3",
+    refresh: () => refreshBlocked,
+  })
+  const dialog = app.root.querySelector<HTMLElement>('[role="dialog"]:not([hidden])')!
+  const review = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Review refreshed plan")!
+
+  review.focus()
+  review.click()
+  await Bun.sleep(1)
+  review.click()
+  expect(calls.filter((call) => call === "refresh")).toHaveLength(1)
+
+  const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })
+  document.dispatchEvent(tab)
+  expect(tab.defaultPrevented).toBe(true)
+  expect(dialog.contains(document.activeElement)).toBe(true)
+
+  releaseRefresh()
+  await Bun.sleep(1)
+  expect(app.root.querySelector('[role="dialog"]:not([hidden])')).toBeNull()
+  expect(document.activeElement).toBe(outside)
+  app.dispose()
+  outside.remove()
+})
+
+test("moves conflict focus inside when controller pending clears", async () => {
+  const outside = document.createElement("button")
+  document.body.append(outside)
+  outside.focus()
+  const app = mount(draft, [], true, { conflict: "The current revision is 3" })
+  const dialog = app.root.querySelector<HTMLElement>('[role="dialog"]:not([hidden])')!
+
+  expect(document.activeElement).toBe(outside)
+  app.setPending(false)
+  await Bun.sleep(1)
+  expect(dialog.contains(document.activeElement)).toBe(true)
+
+  app.dispose()
+  outside.remove()
+})
+
+function mount(
+  projection: ProductMigrationProjection,
+  calls: string[] = [],
+  pending = false,
+  options: {
+    conflict?: string
+    discover?: () => Promise<unknown>
+    refresh?: () => Promise<unknown>
+    updateDraft?: (payload: ProductMigrationDraftPayload) => Promise<unknown>
+  } = {},
+) {
   const container = document.createElement("div")
   document.body.append(container)
   const payloads: ProductMigrationDraftPayload[] = []
+  const [state, setState] = createStore({ conflict: options.conflict, pending })
   const controller: ProductMigrationController = {
     projection: () => projection,
-    conflict: () => undefined,
-    pending: () => false,
-    discover: async () => calls.push("discover"),
-    updateDraft: async (payload) => { payloads.push(payload); calls.push("updateDraft") },
+    conflict: () => state.conflict,
+    pending: () => state.pending,
+    discover: () => {
+      calls.push("discover")
+      return options.discover?.() ?? Promise.resolve()
+    },
+    updateDraft: (payload) => {
+      payloads.push(payload)
+      calls.push("updateDraft")
+      return options.updateDraft?.(payload) ?? Promise.resolve()
+    },
     execute: async () => calls.push("execute"),
     pause: async () => calls.push("pause"),
     retry: async () => calls.push("retry"),
@@ -195,9 +368,19 @@ function mount(projection: ProductMigrationProjection, calls: string[] = []) {
     validate: async () => calls.push("validate"),
     finalize: async () => calls.push("finalize"),
     freshStart: async () => calls.push("freshStart"),
-    refresh: async () => calls.push("refresh"),
+    refresh: async () => {
+      calls.push("refresh")
+      const result = await options.refresh?.()
+      setState("conflict", undefined)
+      return result
+    },
   }
   const dispose = render(() => createComponent(ProductMigrationPage, { controller }), container)
   const root = container.querySelector("main")!
-  return { root, payloads, dispose: () => { dispose(); container.remove() } }
+  return {
+    root,
+    payloads,
+    setPending: (value: boolean) => setState("pending", value),
+    dispose: () => { dispose(); container.remove() },
+  }
 }

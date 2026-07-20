@@ -1,6 +1,6 @@
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { expect, test, type Page, type Route } from "@playwright/test"
-import type { ProductMigrationProjection } from "@opencode-ai/sdk/v2/client"
+import type { ProductMigrationDraftPayload, ProductMigrationProjection } from "@opencode-ai/sdk/v2/client"
 import { mockOpenCodeServer } from "../utils/mock-server"
 
 const directory = "C:/GraphVibe/MigrationFixture"
@@ -15,8 +15,13 @@ for (const route of ["source", "embedded"] as const) {
 
     await expect(page.getByRole("main", { name: "Graph Vibe data transfer checkpoint" })).toBeVisible()
     await expect(page.getByRole("button", { name: /new session/i })).toHaveCount(0)
+    const discover = page.getByRole("button", { name: "Discover OpenCode data" })
+    await expect(discover).toBeVisible()
+    await expect(discover).toHaveAttribute("data-variant", "primary")
+    expect((await discover.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+    expect(await discover.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toMatch(/^(?:transparent|rgba\(0, 0, 0, 0\))$/)
     const discovered = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/product-migration/discover"))
-    await page.getByRole("button", { name: "Discover OpenCode data" }).click()
+    await discover.click()
     await expect.poll(() => fixture.network).toContain("POST /global/product-migration/discover")
     expect(await (await discovered).json()).toMatchObject({ status: "draft" })
 
@@ -31,17 +36,44 @@ for (const route of ["source", "embedded"] as const) {
     expect(await page.textContent("body")).not.toContain(fixture.secret)
     expect(fixture.discoveredProject).toBe(directory)
 
+    fixture.blockNextAction("draft")
+    const sessionImport = page.getByRole("checkbox", { name: "Import", exact: true })
+    await sessionImport.focus()
+    await page.keyboard.press("Space")
+    await expect(page.getByText("Saving migration selection…", { exact: true })).toBeVisible()
+    await expect(sessionImport).toBeDisabled()
+    fixture.releaseAction()
+    await expect(page.getByText("Saving migration selection…", { exact: true })).toHaveCount(0)
+    await expect(sessionImport).toBeFocused()
+
     await page.goto("/new-session")
     await expect(page.getByRole("main", { name: "Graph Vibe data transfer checkpoint" })).toBeVisible()
 
+    fixture.blockNextAction("execute")
     await page.getByRole("button", { name: "Begin transfer" }).click()
+    await expect(page.getByText("Beginning transfer…", { exact: true })).toBeVisible()
+    fixture.releaseAction()
     await expect(page.getByRole("status")).toContainText("Copy complete; validation required")
-    await page.getByRole("button", { name: "Validate copied data" }).click()
+    await expect(page.getByText("Beginning transfer…", { exact: true })).toHaveCount(0)
+    fixture.blockNextAction("validate")
+    const validate = page.getByRole("button", { name: "Validate copied data" })
+    await validate.click()
+    await expect(page.getByText("Validating copied data…", { exact: true })).toBeVisible()
+    await expect(page.getByRole("status")).toContainText("Copy complete; validation required")
+    await expect(validate).toBeVisible()
+    await expect(validate).toBeDisabled()
+    await expect(page.getByRole("button", { name: "Pause transfer" })).toHaveCount(0)
+    await expect(page.getByRole("status")).not.toContainText("Transfer in progress")
+    fixture.releaseAction()
     await expect(page.getByRole("status")).toContainText("Ready to finalize")
+    await expect(page.getByText("Validating copied data…", { exact: true })).toHaveCount(0)
     await expect(page.getByRole("button", { name: /new session/i })).toHaveCount(0)
     await page.getByRole("button", { name: "Finalize validated import" }).click()
     await expect(page.getByRole("dialog")).toContainText("Finalize this import?")
+    fixture.blockNextAction("finalize")
     await page.getByRole("button", { name: "Confirm and unlock" }).click()
+    await expect(page.getByText("Finalizing import…", { exact: true })).toBeVisible()
+    fixture.releaseAction()
 
     await expect(page.getByRole("main", { name: "Graph Vibe data transfer checkpoint" })).toHaveCount(0)
     await expect(page.getByRole("button", { name: /new session/i })).toBeVisible()
@@ -52,23 +84,77 @@ for (const route of ["source", "embedded"] as const) {
 }
 
 test("mobile migration uses step panels, 44px controls, and confirmed fresh start", async ({ page }) => {
-  const fixture = await setup(page)
+  const fixture = await setup(page, "undiscovered", true)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto("/")
 
-  await page.getByRole("button", { name: "Discover OpenCode data" }).click()
+  const discover = page.getByRole("button", { name: "Discover OpenCode data" })
+  const freshStart = page.getByRole("button", { name: "Start Graph Vibe fresh" })
+  await expect(discover).toBeVisible()
+  await expect(discover).toHaveAttribute("data-variant", "primary")
+  expect((await discover.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+  expect(await discover.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toMatch(/^(?:transparent|rgba\(0, 0, 0, 0\))$/)
+  await discover.click()
+  await expect(discover).toBeDisabled()
+  await expect(freshStart).toBeDisabled()
+  await expect(page.getByText("Discovering OpenCode data…", { exact: true })).toBeVisible()
+  fixture.releaseDiscovery()
+  await expect(page.getByText("OpenCode source")).toBeVisible()
+  await expect(page.getByText("Discovering OpenCode data…", { exact: true })).toHaveCount(0)
+  const reviewPanel = page.locator('[data-mobile-panel="review"]')
+  await expect(reviewPanel).toBeHidden()
+  fixture.blockNextAction("draft")
+  const configuration = page.getByLabel("Configuration")
+  await expect(configuration).toHaveAttribute("data-migration-category", "config")
+  const originalConfiguration = await configuration.elementHandle()
+  await configuration.focus()
+  await page.keyboard.press("Space")
+  await expect(page.getByText("Saving migration selection…", { exact: true })).toBeVisible()
+  fixture.releaseAction()
+  await expect(page.getByText("Saving migration selection…", { exact: true })).toHaveCount(0)
+  expect(await originalConfiguration!.evaluate((input) => input.isConnected)).toBe(false)
+  await expect(configuration).toBeFocused()
+
+  await page.getByRole("button", { name: "Sessions" }).click()
+  fixture.blockNextAction("draft")
+  const sessionImport = page.getByRole("checkbox", { name: "Import", exact: true })
+  await sessionImport.focus()
+  await page.keyboard.press("Space")
+  await expect(page.getByText("Saving migration selection…", { exact: true })).toBeVisible()
+  await expect(sessionImport).toBeDisabled()
+  await expect(reviewPanel).toBeHidden()
+  fixture.releaseAction()
+  await expect(page.getByText("Saving migration selection…", { exact: true })).toHaveCount(0)
+  await expect(sessionImport).toBeEnabled()
+  await expect(sessionImport).toBeFocused()
+
+  fixture.blockNextAction("draft")
+  const session = page.getByRole("checkbox", { name: /Inspect telemetry/ })
+  await expect(session).toHaveAttribute("data-migration-project", "project-a")
+  await expect(session).toHaveAttribute("data-migration-session", sessionID)
+  const originalSession = await session.elementHandle()
+  await session.focus()
+  await page.keyboard.press("Space")
+  await expect(page.getByText("Saving migration selection…", { exact: true })).toBeVisible()
+  fixture.releaseAction()
+  await expect(page.getByText("Saving migration selection…", { exact: true })).toHaveCount(0)
+  expect(await originalSession!.evaluate((input) => input.isConnected)).toBe(false)
+  await expect(session).toBeFocused()
   for (const name of ["Manifest", "Projects", "Sessions", "Review"]) {
     const step = page.getByRole("button", { name })
     expect((await step.boundingBox())?.height).toBeGreaterThanOrEqual(44)
   }
   await page.getByRole("button", { name: "Sessions" }).click()
-  await expect(page.getByText("Sessions are off")).toBeVisible()
+  await expect(page.getByText("Explicit import enabled")).toBeVisible()
   await page.getByRole("button", { name: "Review" }).click()
   const fresh = page.getByRole("button", { name: "Start fresh instead" })
   expect((await fresh.boundingBox())?.height).toBeGreaterThanOrEqual(44)
   await fresh.click()
   await expect(page.getByRole("dialog")).toContainText("Start without importing?")
+  fixture.blockNextAction("fresh-start")
   await page.getByRole("button", { name: "Confirm and unlock" }).click()
+  await expect(page.getByText("Starting Graph Vibe fresh…", { exact: true })).toBeVisible()
+  fixture.releaseAction()
   await expect(page.getByRole("main", { name: "Graph Vibe data transfer checkpoint" })).toHaveCount(0)
   await expect(page.getByRole("button", { name: /new session/i })).toBeVisible()
   expect(fixture.freshStarts).toBe(1)
@@ -80,9 +166,24 @@ test("stale revision refreshes the SDK projection before another action", async 
   await page.goto("/")
 
   await page.getByLabel("Configuration").uncheck()
-  await expect(page.getByRole("dialog")).toContainText("The transfer plan changed")
-  await expect(page.getByRole("dialog")).toContainText("revision 3")
-  await expect(page.getByRole("dialog")).toContainText("latest SDK projection")
+  const conflict = page.getByRole("dialog")
+  await expect(conflict).toContainText("The transfer plan changed")
+  await expect(conflict).toContainText("revision 3")
+  await expect(conflict).toContainText("latest SDK projection")
+  const review = conflict.getByRole("button")
+  await expect(review).toHaveText("Review refreshed plan")
+  await expect(review).toBeEnabled()
+  await expect.poll(() => conflict.evaluate((dialog) => dialog.contains(document.activeElement))).toBe(true)
+  fixture.blockNextRefresh()
+  const refreshes = fixture.requests.filter((request) => request === "GET /global/product-migration").length
+  await review.click()
+  await expect(review).toBeDisabled()
+  await expect(review).toHaveText("Refreshing checkpoint…")
+  await expect.poll(() => fixture.requests.filter((request) => request === "GET /global/product-migration").length).toBe(refreshes + 1)
+  await review.evaluate((button) => button.click())
+  expect(fixture.requests.filter((request) => request === "GET /global/product-migration")).toHaveLength(refreshes + 1)
+  fixture.releaseRefresh()
+  await expect(page.getByRole("dialog")).toHaveCount(0)
   expect(fixture.gets).toBeGreaterThanOrEqual(2)
 })
 
@@ -107,7 +208,7 @@ function routeUrl(route: "source" | "embedded") {
   return `/server/${base64Encode(server)}/session/${sessionID}`
 }
 
-async function setup(page: Page, initial: "undiscovered" | "draft" | "unavailable" = "undiscovered") {
+async function setup(page: Page, initial: "undiscovered" | "draft" | "unavailable" = "undiscovered", delayDiscovery = false) {
   const network: string[] = []
   page.on("request", (request) => {
     const url = new URL(request.url())
@@ -128,6 +229,17 @@ async function setup(page: Page, initial: "undiscovered" | "draft" | "unavailabl
   let freshStarts = 0
   let gets = 0
   let discoveredProject: string | undefined
+  let releaseDiscovery = () => {}
+  const discoveryBlocked = delayDiscovery
+    ? new Promise<void>((resolve) => {
+        releaseDiscovery = resolve
+      })
+    : undefined
+  let refreshBlocked: Promise<void> | undefined
+  let resolveRefresh = () => {}
+  let blockedAction: string | undefined
+  let actionBlocked: Promise<void> | undefined
+  let resolveAction = () => {}
   const requests: string[] = []
 
   await page.route("**/global/product-migration**", async (route) => {
@@ -145,11 +257,21 @@ async function setup(page: Page, initial: "undiscovered" | "draft" | "unavailabl
     if (initial === "unavailable")
       return json(route, { _tag: "ProductMigrationUnavailable" }, 404)
     if (path === "/global/product-migration") {
+      const blocked = refreshBlocked
+      refreshBlocked = undefined
+      await blocked
       gets++
       return json(route, projection)
     }
+    if (blockedAction && path.endsWith(`/${blockedAction}`)) {
+      blockedAction = undefined
+      const blocked = actionBlocked
+      actionBlocked = undefined
+      await blocked
+    }
     if (path.endsWith("/discover")) {
       discoveredProject = (route.request().postDataJSON() as { currentProject?: string }).currentProject
+      await discoveryBlocked
       projection = draft(1)
       return json(route, projection)
     }
@@ -158,7 +280,31 @@ async function setup(page: Page, initial: "undiscovered" | "draft" | "unavailabl
       projection = draft(3)
       return json(route, { _tag: "ProductMigrationRevisionConflict", expectedRevision: 2, actualRevision: 3 }, 409)
     }
-    if (path.endsWith("/draft")) return json(route, projection)
+    if (path.endsWith("/draft")) {
+      const payload = route.request().postDataJSON() as ProductMigrationDraftPayload
+      const sessions = new Set(payload.sessions.filter((session) => session.selected).map((session) => `${session.projectID}\0${session.sessionID}`))
+      projection = {
+        ...projection,
+        plan: projection.plan
+          ? {
+              ...projection.plan,
+              categories: projection.plan.categories.map((item) => ({
+                ...item,
+                selected: payload.categories.find((candidate) => candidate.category === item.category)?.selected ?? item.selected,
+              })),
+              sessionsEnabled: payload.sessionsEnabled,
+              projects: projection.plan.projects.map((project) => ({
+                ...project,
+                sessions: project.sessions.map((session) => ({
+                  ...session,
+                  selected: sessions.has(`${project.id}\0${session.id}`),
+                })),
+              })),
+            }
+          : null,
+      }
+      return json(route, projection)
+    }
     if (path.endsWith("/execute")) {
       projection = { ...projection, status: "copying", completedItems: 4 }
       return json(route, projection)
@@ -199,6 +345,24 @@ async function setup(page: Page, initial: "undiscovered" | "draft" | "unavailabl
     },
     get network() {
       return network
+    },
+    releaseDiscovery,
+    blockNextAction(action: string) {
+      blockedAction = action
+      actionBlocked = new Promise<void>((resolve) => {
+        resolveAction = resolve
+      })
+    },
+    releaseAction() {
+      resolveAction()
+    },
+    blockNextRefresh() {
+      refreshBlocked = new Promise<void>((resolve) => {
+        resolveRefresh = resolve
+      })
+    },
+    releaseRefresh() {
+      resolveRefresh()
     },
     conflictNextDraft() {
       conflict = true

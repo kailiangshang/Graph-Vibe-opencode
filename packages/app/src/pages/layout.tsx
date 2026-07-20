@@ -48,6 +48,8 @@ import { setNavigate } from "@/utils/notification-click"
 import { Worktree as WorktreeState } from "@/utils/worktree"
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { SessionRouteKey, SessionStateKey } from "@/utils/server-scope"
+import { useTabs } from "@/context/tabs"
+import { legacySessionHref, sessionHref } from "@/utils/session-route"
 
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme/context"
@@ -83,7 +85,12 @@ import {
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
 
-export default function LegacyLayout(props: ParentProps) {
+export default function LegacyLayout(
+  props: ParentProps<{
+    directory?: Accessor<string | undefined>
+    server?: Accessor<ServerConnection.Any | undefined>
+  }>,
+) {
   const serverSDK = useServerSDK()
   const [store, setStore, , ready] = persisted(
     Persist.serverGlobal(serverSDK().scope, "layout.page", ["layout.page.v1"]),
@@ -113,6 +120,11 @@ export default function LegacyLayout(props: ParentProps) {
   const pickDirectory = useDirectoryPicker()
   const settings = useSettings()
   const server = useServer()
+  const tabs = useTabs()
+  const targetServer = props.server?.()
+  const targetServerKey = targetServer ? ServerConnection.key(targetServer) : undefined
+  const serverProjects = targetServerKey ? server.projects.forServer(targetServerKey) : server.projects
+  const currentServer = () => props.server?.() ?? server.current
   const notification = useNotification()
   const permission = usePermission()
   const navigate = useNavigate()
@@ -123,11 +135,12 @@ export default function LegacyLayout(props: ParentProps) {
   const theme = useTheme()
   const language = useLanguage()
   createEffect(() => setV2Toast(false))
-  const initialDirectory = decode64(params.dir)
+  const initialDirectory = props.directory?.() ?? decode64(params.dir)
   const route = createMemo(() => {
-    const slug = params.dir
+    const target = props.directory?.()
+    const slug = target ? base64Encode(target) : params.dir
     if (!slug) return { slug, dir: "" }
-    const dir = decode64(slug)
+    const dir = target ?? decode64(slug)
     if (!dir) return { slug, dir: "" }
     const store = serverSync().peek(dir, { bootstrap: false })
     return {
@@ -304,7 +317,7 @@ export default function LegacyLayout(props: ParentProps) {
 
   createEffect(() => {
     if (!state.autoselect) return
-    const dir = params.dir
+    const dir = route().slug
     if (!dir) return
     const directory = decode64(dir)
     if (!directory) return
@@ -326,6 +339,21 @@ export default function LegacyLayout(props: ParentProps) {
     clearSidebarHoverState()
     navigate(href)
     layout.mobileSidebar.hide()
+  }
+
+  const sessionRoute = (directory: string, sessionID: string) =>
+    targetServerKey ? sessionHref(targetServerKey, sessionID) : legacySessionHref(directory, sessionID)
+
+  const navigateToNewSession = (directory: string, prompt?: string) => {
+    if (targetServerKey) {
+      layout.mobileSidebar.hide()
+      tabs.newDraft({ server: targetServerKey, directory }, prompt)
+      return
+    }
+    const href = prompt
+      ? `/${base64Encode(directory)}/session?prompt=${encodeURIComponent(prompt)}`
+      : `/${base64Encode(directory)}/session`
+    navigateWithSidebarReset(href)
   }
 
   function cycleTheme(direction = 1) {
@@ -434,7 +462,7 @@ export default function LegacyLayout(props: ParentProps) {
           e.details.type === "permission.asked"
             ? language.t("notification.permission.description", { sessionTitle, projectName })
             : language.t("notification.question.description", { sessionTitle, projectName })
-        const href = `/${base64Encode(directory)}/session/${props.sessionID}`
+        const href = sessionRoute(directory, props.sessionID)
 
         const now = Date.now()
         const lastAlerted = alertedAtBySession.get(sessionKey) ?? 0
@@ -542,7 +570,7 @@ export default function LegacyLayout(props: ParentProps) {
     if (!untrack(() => state.autoselect)) return
 
     const list = layout.projects.list()
-    const last = server.projects.last()
+    const last = serverProjects.last()
 
     if (list.length === 0) {
       if (!last) return
@@ -887,9 +915,9 @@ export default function LegacyLayout(props: ParentProps) {
     )
     if (session.id === params.id) {
       if (nextSession) {
-        navigate(`/${params.dir}/session/${nextSession.id}`)
+        navigate(sessionRoute(nextSession.directory, nextSession.id))
       } else {
-        navigate(`/${params.dir}/session`)
+        navigateToNewSession(session.directory)
       }
     }
   }
@@ -976,7 +1004,7 @@ export default function LegacyLayout(props: ParentProps) {
         title: language.t("command.session.archive"),
         category: language.t("command.category.session"),
         keybind: "mod+shift+backspace",
-        disabled: !params.dir || !params.id,
+        disabled: !route().slug || !params.id,
         onSelect: () => {
           const session = currentSessions().find((s) => s.id === params.id)
           if (session) void archiveSession(session)
@@ -1173,7 +1201,7 @@ export default function LegacyLayout(props: ParentProps) {
   async function navigateToProject(directory: string | undefined) {
     if (!directory) return
     const root = projectRoot(directory)
-    server.projects.touch(root)
+    serverProjects.touch(root)
     const project = layout.projects.list().find((item) => item.worktree === root)
     let dirs = project
       ? effectiveWorkspaceOrder(root, [root, ...(project.sandboxes ?? [])], store.workspaceOrder[root])
@@ -1196,7 +1224,7 @@ export default function LegacyLayout(props: ParentProps) {
       const sync = serverSync().ensureDirSyncContext(target.directory)
       if (sync.session.get(target.id)) {
         setStore("lastProjectSession", root, { directory: target.directory, id: target.id, at: Date.now() })
-        navigateWithSidebarReset(`/${base64Encode(target.directory)}/session/${target.id}`)
+        navigateWithSidebarReset(sessionRoute(target.directory, target.id))
         return true
       }
       const resolved = await sync.session
@@ -1206,7 +1234,7 @@ export default function LegacyLayout(props: ParentProps) {
       if (!resolved?.directory) return false
       if (!canOpen(resolved.directory)) return false
       setStore("lastProjectSession", root, { directory: resolved.directory, id: resolved.id, at: Date.now() })
-      navigateWithSidebarReset(`/${base64Encode(resolved.directory)}/session/${resolved.id}`)
+      navigateWithSidebarReset(sessionRoute(resolved.directory, resolved.id))
       return true
     }
 
@@ -1242,12 +1270,12 @@ export default function LegacyLayout(props: ParentProps) {
       return
     }
 
-    navigateWithSidebarReset(`/${base64Encode(root)}/session`)
+    navigateToNewSession(root)
   }
 
   function navigateToSession(session: Session | undefined) {
     if (!session) return
-    navigateWithSidebarReset(`/${base64Encode(session.directory)}/session/${session.id}`)
+    navigateWithSidebarReset(sessionRoute(session.directory, session.id))
   }
 
   function openProject(directory: string, navigate = true) {
@@ -1256,7 +1284,8 @@ export default function LegacyLayout(props: ParentProps) {
   }
 
   const handleDeepLinks = (urls: string[]) => {
-    if (!server.isLocal()) return
+    const conn = currentServer()
+    if (!ServerConnection.local(conn)) return
 
     for (const directory of collectOpenProjectDeepLinks(urls)) {
       void openProject(directory)
@@ -1265,8 +1294,12 @@ export default function LegacyLayout(props: ParentProps) {
     for (const link of collectNewSessionDeepLinks(urls)) {
       void openProject(link.directory, false)
       const slug = base64Encode(link.directory)
+      if (targetServerKey) {
+        tabs.newDraft({ server: targetServerKey, directory: link.directory }, link.prompt)
+        continue
+      }
       if (link.prompt) {
-        setSessionHandoff(SessionStateKey.from(server.scope(), SessionRouteKey.fromLegacy(slug)), {
+        setSessionHandoff(SessionStateKey.from(server.scope(targetServerKey), SessionRouteKey.fromLegacy(slug)), {
           prompt: link.prompt,
         })
       }
@@ -1326,7 +1359,7 @@ export default function LegacyLayout(props: ParentProps) {
 
     const next = list[index + 1] ?? list[index - 1]
 
-    navigateWithSidebarReset(`/${base64Encode(next.worktree)}/session`)
+    navigateToNewSession(next.worktree)
     layout.projects.close(directory)
     queueMicrotask(() => {
       void navigateToProject(next.worktree)
@@ -1352,7 +1385,7 @@ export default function LegacyLayout(props: ParentProps) {
   }
 
   function chooseProject() {
-    const conn = server.current
+    const conn = currentServer()
     if (!conn) return
     function resolve(result: string | string[] | null) {
       if (Array.isArray(result)) {
@@ -1379,9 +1412,9 @@ export default function LegacyLayout(props: ParentProps) {
     const current = currentDir()
     const currentKey = pathKey(current)
     const deletedKey = pathKey(directory)
-    const shouldLeave = leaveDeletedWorkspace || (!!params.dir && currentKey === deletedKey)
+    const shouldLeave = leaveDeletedWorkspace || (!!route().slug && currentKey === deletedKey)
     if (!leaveDeletedWorkspace && shouldLeave) {
-      navigateWithSidebarReset(`/${base64Encode(root)}/session`)
+      navigateToNewSession(root)
     }
 
     setBusy(directory, true)
@@ -1428,8 +1461,8 @@ export default function LegacyLayout(props: ParentProps) {
       : [root]
     const valid = dirs.some((item) => pathKey(item) === nextKey)
 
-    if (params.dir && projectRoot(nextCurrent) === root && !valid) {
-      navigateWithSidebarReset(`/${base64Encode(root)}/session`)
+    if (route().slug && projectRoot(nextCurrent) === root && !valid) {
+      navigateToNewSession(root)
     }
   }
 
@@ -1501,8 +1534,7 @@ export default function LegacyLayout(props: ParentProps) {
         {
           label: language.t("command.session.new"),
           onClick: () => {
-            const href = `/${base64Encode(directory)}/session`
-            navigate(href)
+            navigateToNewSession(directory)
             layout.mobileSidebar.hide()
           },
         },
@@ -1535,9 +1567,9 @@ export default function LegacyLayout(props: ParentProps) {
     })
 
     const handleDelete = () => {
-      const leaveDeletedWorkspace = !!params.dir && pathKey(currentDir()) === pathKey(props.directory)
+      const leaveDeletedWorkspace = !!route().slug && pathKey(currentDir()) === pathKey(props.directory)
       if (leaveDeletedWorkspace) {
-        navigateWithSidebarReset(`/${base64Encode(props.root)}/session`)
+        navigateToNewSession(props.root)
       }
       dialog.close()
       void deleteWorkspace(props.root, props.directory, leaveDeletedWorkspace)
@@ -1683,7 +1715,7 @@ export default function LegacyLayout(props: ParentProps) {
           return
         }
 
-        if (server.projects.last() !== root) server.projects.touch(root)
+        if (serverProjects.last() !== root) serverProjects.touch(root)
 
         const changed = session !== activeRoute.session || dir !== activeRoute.directory
         if (changed) {
@@ -1856,7 +1888,7 @@ export default function LegacyLayout(props: ParentProps) {
     })
 
     serverSync().child(created.directory)
-    navigateWithSidebarReset(`/${base64Encode(created.directory)}/session`)
+    navigateToNewSession(created.directory)
   }
 
   const workspaceSidebarCtx: WorkspaceSidebarContext = {
@@ -1902,7 +1934,7 @@ export default function LegacyLayout(props: ParentProps) {
     navigateToProject,
     openSidebar: () => layout.sidebar.open(),
     closeProject,
-    showEditProjectDialog: (proj) => showEditProjectDialog(server.current!, proj),
+    showEditProjectDialog: (proj) => showEditProjectDialog(currentServer()!, proj),
     toggleProjectWorkspaces,
     workspacesEnabled: (project) => project.vcs === "git" && layout.sidebar.workspaces(project.worktree)(),
     workspaceIds,
@@ -1924,7 +1956,7 @@ export default function LegacyLayout(props: ParentProps) {
     const project = panelProps.project
     const merged = createMemo(() => panelProps.mobile || (panelProps.merged ?? layout.sidebar.opened()))
     const hover = createMemo(() => !panelProps.mobile && panelProps.merged === false && !layout.sidebar.opened())
-    const empty = createMemo(() => !params.dir && layout.projects.list().length === 0)
+    const empty = createMemo(() => !route().slug && layout.projects.list().length === 0)
     const projectName = createMemo(() => {
       const item = project()
       if (!item) return ""
@@ -2049,7 +2081,7 @@ export default function LegacyLayout(props: ParentProps) {
                       <DropdownMenu.Content class="mt-1">
                         <DropdownMenu.Item
                           onSelect={() => {
-                            showEditProjectDialog(server.current!, project)
+                            showEditProjectDialog(currentServer()!, project)
                           }}
                         >
                           <DropdownMenu.ItemLabel>{language.t("common.edit")}</DropdownMenu.ItemLabel>
@@ -2108,7 +2140,7 @@ export default function LegacyLayout(props: ParentProps) {
                           onClick={() => {
                             const dir = worktree()
                             if (!dir) return
-                            navigateWithSidebarReset(`/${base64Encode(dir)}/session`)
+                            navigateToNewSession(dir)
                           }}
                         >
                           <IconV2 name="edit" size="small" />

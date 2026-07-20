@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { ServerConnection } from "@/context/server"
-import { checkServerHealth } from "./server-health"
+import { checkServerHealth, preserveServerHealthProduct } from "./server-health"
 
 const server: ServerConnection.HttpBase = {
   url: "http://localhost:4096",
@@ -23,6 +23,36 @@ describe("checkServerHealth", () => {
     const result = await checkServerHealth(server, fetch)
 
     expect(result).toEqual({ healthy: true, version: "1.2.3" })
+  })
+
+  test("retains product data from a healthy response", async () => {
+    const product = {
+      id: "graph-vibe" as const,
+      name: "Graph Vibe",
+      capability: "Graph-guided development",
+    }
+    const fetch = (async () =>
+      new Response(JSON.stringify({ healthy: true, version: "1.2.3", product }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof globalThis.fetch
+
+    const result = await checkServerHealth(server, fetch)
+
+    expect(result).toEqual({ healthy: true, version: "1.2.3", product })
+  })
+
+  test("keeps old healthy responses compatible without product data", async () => {
+    const fetch = (async () =>
+      new Response(JSON.stringify({ healthy: true, version: "1.2.3" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof globalThis.fetch
+
+    const result = await checkServerHealth(server, fetch)
+
+    expect(result.healthy).toBe(true)
+    expect(result.product).toBeUndefined()
   })
 
   test("allows slow servers thirty seconds by default", async () => {
@@ -58,6 +88,7 @@ describe("checkServerHealth", () => {
     const result = await checkServerHealth(server, fetch)
 
     expect(result).toEqual({ healthy: false })
+    expect(result.product).toBeUndefined()
   })
 
   test("uses timeout fallback when AbortSignal.timeout is unavailable", async () => {
@@ -144,5 +175,31 @@ describe("checkServerHealth", () => {
 
     expect(count).toBe(3)
     expect(result).toEqual({ healthy: false })
+  })
+})
+
+describe("preserveServerHealthProduct", () => {
+  const product = {
+    id: "graph-vibe" as const,
+    name: "Graph Vibe",
+    capability: "Graph-guided development",
+  }
+
+  test("retains only product after a failed health check", () => {
+    expect(
+      preserveServerHealthProduct(
+        { healthy: true, version: "1.2.3", product },
+        { healthy: false },
+      ),
+    ).toEqual({ healthy: false, product })
+  })
+
+  test("does not retain product when a healthy response omits it", () => {
+    expect(
+      preserveServerHealthProduct(
+        { healthy: true, version: "1.2.3", product },
+        { healthy: true, version: "2.0.0" },
+      ),
+    ).toEqual({ healthy: true, version: "2.0.0" })
   })
 })

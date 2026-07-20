@@ -149,23 +149,34 @@ export function SessionPage() {
 // remount around the server-scoped providers. Nothing here may key on the
 // session ID: session tabs on the same server share this route instance, and
 // workspace-scoped state (terminal, directory providers) lives below.
-export function TargetSessionRouteContent() {
+export function TargetSessionRouteContent(props: { padded?: boolean; newLayout: () => boolean }) {
   const params = useParams<{ serverKey: string; id: string }>()
   return (
-    <SessionRouteErrorBoundary sessionID={params.id} serverKey={requireServerKey(params.serverKey)} padded>
+    <SessionRouteErrorBoundary
+      sessionID={params.id}
+      serverKey={requireServerKey(params.serverKey)}
+      padded={props.padded}
+      newLayout={props.newLayout}
+    >
       <ResolvedTargetSessionRoute />
     </SessionRouteErrorBoundary>
   )
 }
 
 export function SessionRouteErrorBoundary(
-  props: ParentProps<{ sessionID?: string; serverKey?: ServerConnection.Key; padded?: boolean }>,
+  props: ParentProps<{
+    sessionID?: string
+    serverKey?: ServerConnection.Key
+    padded?: boolean
+    newLayout?: () => boolean
+  }>,
 ) {
   const settings = useSettings()
+  const newLayout = () => props.newLayout?.() ?? settings.general.newLayoutDesigns()
   return (
     <ErrorBoundary
       fallback={(error) =>
-        settings.general.newLayoutDesigns() ? (
+        newLayout() ? (
           <SessionRouteFrame padded={props.padded}>
             <SessionPanelFrame newLayout raised={!!props.sessionID}>
               <SessionErrorFallback error={error} sessionID={props.sessionID} serverKey={props.serverKey} />

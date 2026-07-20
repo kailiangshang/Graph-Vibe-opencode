@@ -49,6 +49,23 @@ const apiLayer = HttpRouter.serve(
 const it = testEffect(apiLayer)
 
 describe("global HttpApi", () => {
+  it.live("reports the OpenCode product profile", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClient.get(GlobalPaths.health)
+
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({
+        healthy: true,
+        version: expect.any(String),
+        product: {
+          id: "opencode",
+          name: "OpenCode",
+          capability: "The AI coding agent built for the terminal",
+        },
+      })
+    }),
+  )
+
   it.live("upgrades to latest when the request body is omitted", () =>
     Effect.gen(function* () {
       const response = yield* HttpClient.post(GlobalPaths.upgrade)

@@ -5,6 +5,7 @@ import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { Spinner } from "@opencode-ai/ui/spinner"
+import { Button } from "@opencode-ai/ui/button"
 import { GraphCockpit, cockpitViewState } from "./graph-cockpit"
 import {
   CURRENT_PLAN_EMPTY_MESSAGE,
@@ -139,14 +140,15 @@ export default function GraphPage() {
     onError: (error) => mutationError("pause", error),
   }))
 
-  const viewState = () =>
-    cockpitViewState({
-      loading: graphQuery.isLoading || workflowQuery.isLoading,
+  const viewState = () => {
+    if (graphQuery.isLoading || workflowQuery.isLoading) return "loading"
+    return cockpitViewState({
       disconnected: graphQuery.isPaused || workflowQuery.isPaused,
       error: graphQuery.isError || workflowQuery.isError,
       conflict: !!state.conflict,
       workflow: workflowQuery.data,
     })
+  }
 
   return (
     <div
@@ -181,7 +183,16 @@ export default function GraphPage() {
         </GraphState>
       </Show>
       <Show when={viewState() === "empty"}>
-        <GraphState title="No plan admitted" detail={CURRENT_PLAN_EMPTY_MESSAGE} />
+        <GraphState title="No plan admitted" detail={CURRENT_PLAN_EMPTY_MESSAGE}>
+          <Button
+            variant="primary"
+            size="large"
+            class="graph-action primary"
+            onClick={() => navigate(location.pathname.replace(/\/graph\/?$/, ""))}
+          >
+            Describe a goal
+          </Button>
+        </GraphState>
       </Show>
       <Show
         when={
@@ -250,7 +261,9 @@ function GraphState(props: { title: string; detail: string; children?: JSX.Eleme
         <div class="mx-auto mb-4 h-px w-16 bg-[var(--graph-current)]" />
         <h1 class="text-lg font-semibold">{props.title}</h1>
         <p class="mt-2 text-sm leading-6 text-text-weak">{props.detail}</p>
-        <div class="mt-5 flex justify-center">{props.children}</div>
+        <Show when={props.children}>
+          <div class="mt-5 flex justify-center">{props.children}</div>
+        </Show>
       </div>
     </div>
   )

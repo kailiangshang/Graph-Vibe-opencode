@@ -4,6 +4,7 @@ const emptyList = new Set(["/skill", "/command", "/lsp", "/formatter", "/vcs/sta
 const emptyObject = new Set(["/global/config", "/config", "/provider/auth", "/mcp", "/experimental/resource"])
 
 export interface MockServerConfig {
+  health?: unknown
   provider: unknown
   directory: string
   project: unknown
@@ -55,7 +56,9 @@ export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
 
     const path = url.pathname
     if (path === "/global/event" || path === "/event") return sse(route, config.events?.(), config.eventRetry)
-    if (path === "/global/health") return json(route, { healthy: true })
+    if (path === "/global/health") return json(route, config.health ?? { healthy: true })
+    if (path === "/global/product-migration")
+      return json(route, { _tag: "ProductMigrationUnavailable" }, undefined, 404)
     if (path === "/experimental/capabilities") return json(route, { backgroundSubagents: false })
     if (path === "/permission")
       return json(route, typeof config.permissions === "function" ? config.permissions() : (config.permissions ?? []))

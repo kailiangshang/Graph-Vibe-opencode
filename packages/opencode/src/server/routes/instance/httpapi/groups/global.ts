@@ -12,6 +12,11 @@ import { ProductMigrationGroup } from "./product-migration"
 const GlobalHealth = Schema.Struct({
   healthy: Schema.Literal(true),
   version: Schema.String,
+  product: Schema.Struct({
+    id: Schema.Literals(["opencode", "graph-vibe"]),
+    name: Schema.String,
+    capability: Schema.String,
+  }),
 })
 
 const SyncEventSchemas = EventManifest.Latest.values()
@@ -80,7 +85,7 @@ export const GlobalApi = HttpApi.make("global").add(
         OpenApi.annotations({
           identifier: "global.health",
           summary: "Get health",
-          description: "Get health information about the OpenCode server.",
+          description: "Get health information about the current server.",
         }),
       ),
       HttpApiEndpoint.get("event", GlobalPaths.event, {

@@ -7796,6 +7796,11 @@ export type GlobalHealthResponses = {
   200: {
     healthy: true
     version: string
+    product: {
+      id: "opencode" | "graph-vibe"
+      name: string
+      capability: string
+    }
   }
 }
 

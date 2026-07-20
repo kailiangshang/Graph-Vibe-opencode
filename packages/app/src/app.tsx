@@ -9,15 +9,15 @@ import { Font } from "@opencode-ai/ui/font"
 import { Splash } from "@opencode-ai/ui/logo"
 import { ThemeProvider } from "@opencode-ai/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
-import { type BaseRouterProps, Navigate, Route, Router, useNavigate, useParams, useSearchParams } from "@solidjs/router"
+import { type BaseRouterProps, Navigate, Route, Router, useLocation, useParams, useSearchParams } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { Effect } from "effect"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import {
+  type Accessor,
   type Component,
   createEffect,
   createMemo,
-  createRenderEffect,
   createResource,
   createSignal,
   ErrorBoundary,
@@ -55,25 +55,35 @@ import LegacyLayout from "@/pages/layout"
 import NewLayout from "@/pages/layout-new"
 import { ErrorPage } from "./pages/error"
 import { useCheckServerHealth } from "./utils/server-health"
-import { legacySessionHref, legacySessionServer, requireServerKey, sessionHref } from "./utils/session-route"
+import { legacySessionServer, requireServerKey, sessionHref } from "./utils/session-route"
 import { createSessionLineage } from "@/pages/session/session-lineage"
 import { SessionPage, SessionRouteErrorBoundary, TargetSessionRouteContent } from "@/pages/session"
 import { ProductMigrationPage } from "@/pages/product-migration"
+import { ProductProvider, useProduct } from "@/context/product"
+import { ServerAvailabilityGate } from "@/components/server-availability-gate"
+import { syncBodyDesignMode } from "@/utils/body-design"
+import { isTargetScopedRoute } from "@/utils/route-scope"
 
 import { NewHome, LegacyHome } from "@/pages/home"
 
 const NewSession = lazy(() => import("@/pages/new-session"))
 const GraphPage = lazy(() => import("@/pages/graph"))
 
-const SessionRoute = () => {
+function useProductLayout() {
   const settings = useSettings()
+  const product = useProduct()
+  return createMemo(() => settings.general.newLayoutDesigns() || product.graphVibe())
+}
+
+const SessionRoute = () => {
+  const newLayout = useProductLayout()
   const params = useParams()
   const [search] = useSearchParams<{ draftId?: string; prompt?: string }>()
   const sdk = useSDK()
   const server = useServer()
   const tabs = useTabs()
 
-  if (params.id && settings.general.newLayoutDesigns()) {
+  if (params.id && newLayout()) {
     const sessionID = params.id
     return (
       <Show when={tabs.ready()}>
@@ -88,7 +98,7 @@ const SessionRoute = () => {
   // When the new layout is enabled, the legacy new-session route (/:dir/session with no id)
   // is replaced by a draft at /new-session?draftId=…
   createEffect(() => {
-    if (!settings.general.newLayoutDesigns()) return
+    if (!newLayout()) return
     if (params.id || search.draftId) return
     if (!tabs.ready() || !sdk().directory) return
     tabs.newDraft({ server: server.key, directory: sdk().directory }, search.prompt)
@@ -101,61 +111,98 @@ const SessionRoute = () => {
   )
 }
 
-function TargetServerRoute(props: ParentProps) {
+function TargetServerRoute(props: {
+  render: (newLayout: Accessor<boolean>, server: Accessor<ServerConnection.Any | undefined>) => JSX.Element
+}) {
   const params = useParams<{ serverKey: string; id: string }>()
   const global = useGlobal()
+  const key = () => requireServerKey(params.serverKey)
   const conn = createMemo(() => {
-    const key = requireServerKey(params.serverKey)
-    return global.servers.list().find((item) => ServerConnection.key(item) === key)
+    return global.servers.list().find((item) => ServerConnection.key(item) === key())
   })
+  const available = () => !!conn() && global.servers.health[key()] !== undefined
 
   return (
     // Owns the server-identity remount. Session changes must NOT remount this
     // subtree (SessionRouteErrorBoundary resets and createSessionLineage
     // re-resolves reactively instead); both rely on this key for server changes.
-    <Show when={requireServerKey(params.serverKey)} keyed>
-      <ServerSDKProvider server={conn}>
-        <ServerSyncProvider server={conn}>
-          <ProductMigrationGate>{props.children}</ProductMigrationGate>
+    <ServerAvailabilityGate serverKey={key} available={available}>
+      <ProductProvider server={conn}>
+        <TargetServerRouteContent conn={conn} render={props.render} />
+      </ProductProvider>
+    </ServerAvailabilityGate>
+  )
+}
+
+function TargetServerRouteContent(props: {
+  conn: () => ServerConnection.Any | undefined
+  render: (
+    newLayout: Accessor<boolean>,
+    server: Accessor<ServerConnection.Any | undefined>,
+  ) => JSX.Element
+}) {
+  const newLayout = useProductLayout()
+  return (
+    <>
+      <BodyDesignClass newLayout={newLayout} />
+      <ServerSDKProvider server={props.conn}>
+        <ServerSyncProvider server={props.conn}>
+          <ProductMigrationGate>
+            {props.render(newLayout, props.conn)}
+          </ProductMigrationGate>
         </ServerSyncProvider>
       </ServerSDKProvider>
-    </Show>
+    </>
   )
 }
 
-const TargetSessionRoute = () => (
-  <TargetServerRoute>
-    <TargetSessionRouteContent />
-  </TargetServerRoute>
-)
-
-function LegacyTargetSessionRoute() {
+function TargetSessionRoute(props: { serverScoped?: JSX.Element }) {
   const params = useParams<{ serverKey: string; id: string }>()
   return (
-    <TargetServerRoute>
-      <SessionRouteErrorBoundary sessionID={params.id} serverKey={requireServerKey(params.serverKey)}>
-        <LegacyTargetSessionRedirect />
-      </SessionRouteErrorBoundary>
-    </TargetServerRoute>
+    <TargetServerRoute
+      render={(newLayout, server) => (
+        <SessionRouteErrorBoundary
+          sessionID={params.id}
+          serverKey={requireServerKey(params.serverKey)}
+          padded={newLayout()}
+          newLayout={newLayout}
+        >
+          <TargetRouteLayout newLayout={newLayout} server={server} serverScoped={props.serverScoped}>
+            <TargetSessionRouteContent padded={newLayout()} newLayout={newLayout} />
+          </TargetRouteLayout>
+        </SessionRouteErrorBoundary>
+      )}
+    />
   )
 }
 
-function LegacyTargetSessionRedirect() {
+function TargetRouteLayout(
+  props: ParentProps<{
+    newLayout: Accessor<boolean>
+    server: Accessor<ServerConnection.Any | undefined>
+    serverScoped?: JSX.Element
+  }>,
+) {
   const params = useParams<{ id: string }>()
-  const navigate = useNavigate()
   const sync = useServerSync()
   const current = createSessionLineage(
     () => params.id,
     () => sync().session.lineage,
   )
+  const directory = createMemo(() => current()?.session.directory)
 
-  createEffect(() => {
-    const directory = current()?.session.directory
-    if (!directory) return
-    navigate(legacySessionHref(directory, params.id), { replace: true })
-  })
-
-  return null
+  return (
+    <Show when={props.newLayout() || directory()}>
+      <ProductRouteLayout
+        newLayout={props.newLayout}
+        directory={directory}
+        server={props.server}
+        serverScoped={props.serverScoped}
+      >
+        {props.children}
+      </ProductRouteLayout>
+    </Show>
+  )
 }
 
 // Wraps the non-draft routes. They are gated on (and keyed to) the globally selected
@@ -181,9 +228,8 @@ function LegacyServerLayout(props: ParentProps<{ serverScoped?: JSX.Element }>) 
   )
 }
 
-function DraftRoute() {
+function DraftRoute(props: { serverScoped?: JSX.Element }) {
   const [search] = useSearchParams<{ draftId?: string }>()
-  const settings = useSettings()
   const tabs = useTabs()
   return (
     <Show when={tabs.ready()}>
@@ -192,42 +238,81 @@ function DraftRoute() {
         keyed
         fallback={<Navigate href="/" />}
       >
-        {(draft) => (
-          <Show
-            when={settings.general.newLayoutDesigns()}
-            fallback={<Navigate href={`/${base64Encode(draft.directory)}/session`} />}
-          >
-            <ResolvedDraftRoute draft={draft} />
-          </Show>
-        )}
+        {(draft) => <ResolvedDraftRoute draft={draft} serverScoped={props.serverScoped} />}
       </Show>
     </Show>
   )
 }
 
-function ResolvedDraftRoute(props: { draft: DraftTab }) {
+function ResolvedDraftRoute(props: { draft: DraftTab; serverScoped?: JSX.Element }) {
   const global = useGlobal()
   const conn = createMemo(() => global.servers.list().find((item) => ServerConnection.key(item) === props.draft.server))
   const directory = () => props.draft.directory
   const serverKey = () => props.draft.server
 
+  const available = () => !!conn() && global.servers.health[props.draft.server] !== undefined
+
   return (
-    <Show when={`${props.draft.server}\0${props.draft.directory}`} keyed>
-        <ServerSDKProvider server={conn}>
-          <ServerSyncProvider server={conn}>
+    <ServerAvailabilityGate serverKey={serverKey} available={available}>
+      <ProductProvider server={conn}>
+        <ResolvedDraftRouteContent
+          conn={conn}
+          directory={directory}
+          serverKey={serverKey}
+          serverScoped={props.serverScoped}
+        />
+      </ProductProvider>
+    </ServerAvailabilityGate>
+  )
+}
+
+function ResolvedDraftRouteContent(props: {
+  conn: () => ServerConnection.Any | undefined
+  directory: () => string
+  serverKey: () => ServerConnection.Key
+  serverScoped?: JSX.Element
+}) {
+  const newLayout = useProductLayout()
+  const server = useServer()
+  const direct = () => newLayout() || props.serverKey() !== server.key
+  return (
+    <Show when={direct()} fallback={<Navigate href={`/${base64Encode(props.directory())}/session`} />}>
+      <>
+        <BodyDesignClass newLayout={newLayout} />
+        <ServerSDKProvider server={props.conn}>
+          <ServerSyncProvider server={props.conn}>
             <ProductMigrationGate>
-              <DraftServerScopedProviders directory={directory}>
-                <SDKProvider directory={directory}>
-                  <DirectoryDataProvider directory={directory} server={serverKey}>
-                    <DraftProviders>
-                      <NewSession />
-                    </DraftProviders>
-                  </DirectoryDataProvider>
-                </SDKProvider>
-              </DraftServerScopedProviders>
+              <ProductRouteLayout
+                newLayout={newLayout}
+                directory={props.directory}
+                server={props.conn}
+                serverScoped={props.serverScoped}
+              >
+              <Show
+                when={newLayout()}
+                fallback={
+                  <SDKProvider directory={props.directory}>
+                    <DirectoryDataProvider directory={props.directory} server={props.serverKey}>
+                      <SessionPage />
+                    </DirectoryDataProvider>
+                  </SDKProvider>
+                }
+              >
+                <DraftServerScopedProviders directory={props.directory}>
+                  <SDKProvider directory={props.directory}>
+                    <DirectoryDataProvider directory={props.directory} server={props.serverKey}>
+                      <DraftProviders>
+                        <NewSession />
+                      </DraftProviders>
+                    </DirectoryDataProvider>
+                  </SDKProvider>
+                </DraftServerScopedProviders>
+              </Show>
+              </ProductRouteLayout>
             </ProductMigrationGate>
           </ServerSyncProvider>
-      </ServerSDKProvider>
+        </ServerSDKProvider>
+      </>
     </Show>
   )
 }
@@ -262,19 +347,9 @@ function QueryProvider(props: ParentProps) {
   return <QueryClientProvider client={client}>{props.children}</QueryClientProvider>
 }
 
-function BodyDesignClass() {
-  const settings = useSettings()
-
-  createRenderEffect(() => {
-    if (typeof document === "undefined") return
-
-    const enabled = settings.general.newLayoutDesigns()
-    document.body.toggleAttribute("data-new-layout", enabled)
-    document.body.classList.toggle("text-12-regular", !enabled)
-    document.body.classList.toggle("font-(family-name:--font-family-text)", enabled)
-    document.body.classList.toggle("text-[13px]", enabled)
-    document.body.classList.toggle("font-[440]", enabled)
-  })
+function BodyDesignClass(props: { newLayout?: Accessor<boolean> }) {
+  const productLayout = useProductLayout()
+  if (typeof document !== "undefined") syncBodyDesignMode(props.newLayout ?? productLayout, document.body)
 
   return null
 }
@@ -320,13 +395,14 @@ function DesktopCommands() {
 type ServerScopedShellProps = ParentProps<{
   directory?: () => string | undefined
   sessionID?: () => string | undefined
+  server?: Accessor<ServerConnection.Any | undefined>
   serverScoped?: JSX.Element
 }>
 
 function ServerScopedProviders(props: ServerScopedShellProps) {
   return (
     <PermissionProvider directory={props.directory}>
-      <LayoutProvider>
+      <LayoutProvider server={props.server}>
         {props.serverScoped}
         <ModelsProvider directory={props.directory}>{props.children}</ModelsProvider>
       </LayoutProvider>
@@ -336,8 +412,13 @@ function ServerScopedProviders(props: ServerScopedShellProps) {
 
 function LegacyServerScopedShell(props: ServerScopedShellProps) {
   return (
-    <ServerScopedProviders directory={props.directory} sessionID={props.sessionID} serverScoped={props.serverScoped}>
-      <LegacyLayout>{props.children}</LegacyLayout>
+    <ServerScopedProviders
+      directory={props.directory}
+      sessionID={props.sessionID}
+      server={props.server}
+      serverScoped={props.serverScoped}
+    >
+      <LegacyLayout directory={props.directory} server={props.server}>{props.children}</LegacyLayout>
     </ServerScopedProviders>
   )
 }
@@ -351,6 +432,34 @@ function NewAppLayout(props: ParentProps<{ serverScoped?: JSX.Element }>) {
         </ServerScopedProviders>
       </ProductMigrationGate>
     </SelectedServerProviders>
+  )
+}
+
+function ProductRouteLayout(
+  props: ParentProps<{
+    newLayout: Accessor<boolean>
+    directory?: () => string | undefined
+    server?: Accessor<ServerConnection.Any | undefined>
+    serverScoped?: JSX.Element
+  }>,
+) {
+  return (
+    <Show
+      when={props.newLayout()}
+      fallback={
+        <LegacyServerScopedShell
+          directory={props.directory}
+          server={props.server}
+          serverScoped={props.serverScoped}
+        >
+          {props.children}
+        </LegacyServerScopedShell>
+      }
+    >
+      <ServerScopedProviders directory={props.directory} server={props.server} serverScoped={props.serverScoped}>
+        <NewLayout>{props.children}</NewLayout>
+      </ServerScopedProviders>
+    </Show>
   )
 }
 
@@ -604,6 +713,43 @@ export function AppInterface(props: {
     </QueryProvider>
   )
 
+  const RouterShell = () => {
+    const settings = useSettings()
+    const productLayout = useProductLayout()
+    const global = useGlobal()
+    const server = useServer()
+    const ready = () => settings.general.newLayoutDesigns() || global.servers.health[server.key] !== undefined
+    const RoutedLayout = (layoutProps: ParentProps) => {
+      const location = useLocation()
+      const routeScoped = () => isTargetScopedRoute(location.pathname)
+      return (
+        <Show when={!routeScoped() && productLayout()} fallback={layoutProps.children}>
+          <NewAppLayout serverScoped={props.serverScoped}>{layoutProps.children}</NewAppLayout>
+        </Show>
+      )
+    }
+    return (
+      <Show when={ready()}>
+        <Show when={productLayout().toString()} keyed>
+          <Dynamic
+            component={props.router ?? Router}
+            root={(routerProps) => (
+              <TabsProvider>
+                <NotificationProvider>
+                  <ServerShell>
+                    <RoutedLayout>{routerProps.children}</RoutedLayout>
+                  </ServerShell>
+                </NotificationProvider>
+              </TabsProvider>
+            )}
+          >
+            <Routes serverScoped={props.serverScoped} />
+          </Dynamic>
+        </Show>
+      </Show>
+    )
+  }
+
   return (
     <ServerProvider
       defaultServer={props.defaultServer}
@@ -611,35 +757,20 @@ export function AppInterface(props: {
       servers={props.servers}
     >
       <GlobalProvider>
-        <SettingsProvider>
-          <ConnectionGate disableHealthCheck={props.disableHealthCheck} startup={props.startup}>
-            <Show when={useSettings().general.newLayoutDesigns().toString()} keyed>
-              <Dynamic
-                component={props.router ?? Router}
-                root={(routerProps) => (
-                  <TabsProvider>
-                    <NotificationProvider>
-                      <ServerShell>
-                        <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
-                          <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
-                        </Show>
-                      </ServerShell>
-                    </NotificationProvider>
-                  </TabsProvider>
-                )}
-              >
-                <Routes serverScoped={props.serverScoped} />
-              </Dynamic>
-            </Show>
-          </ConnectionGate>
-        </SettingsProvider>
+        <ProductProvider>
+          <SettingsProvider>
+            <ConnectionGate disableHealthCheck={props.disableHealthCheck} startup={props.startup}>
+              <RouterShell />
+            </ConnectionGate>
+          </SettingsProvider>
+        </ProductProvider>
       </GlobalProvider>
     </ServerProvider>
   )
 }
 
 function Routes(props: { serverScoped?: JSX.Element }) {
-  const settings = useSettings()
+  const newLayout = useProductLayout()
 
   return (
     <>
@@ -648,12 +779,9 @@ function Routes(props: { serverScoped?: JSX.Element }) {
           <LegacyServerLayout serverScoped={props.serverScoped}>{routeProps.children}</LegacyServerLayout>
         )}
       >
-        <Show when={!settings.general.newLayoutDesigns()}>
+        <Show when={!newLayout()}>
           {
-            <>
-              <Route path="/" component={LegacyHome} />
-              <Route path="/server/:serverKey/session/:id" component={LegacyTargetSessionRoute} />
-            </>
+            <Route path="/" component={LegacyHome} />
           }
         </Show>
         <Route path="/:dir" component={DirectoryLayout}>
@@ -662,13 +790,19 @@ function Routes(props: { serverScoped?: JSX.Element }) {
           <Route path="/session/:id/graph" component={GraphPage} />
         </Route>
       </Route>
-      <Show when={settings.general.newLayoutDesigns()}>
+      <Show when={newLayout()}>
         <Route path="/" component={NewHome} />
         <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
-        <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
       </Show>
-      <Route path="/new-session" component={DraftRoute} />
-      <Route path="/server/:serverKey/session/:id/graph" component={TargetGraphRoute} />
+      <Route path="/new-session" component={() => <DraftRoute serverScoped={props.serverScoped} />} />
+      <Route
+        path="/server/:serverKey/session/:id"
+        component={() => <TargetSessionRoute serverScoped={props.serverScoped} />}
+      />
+      <Route
+        path="/server/:serverKey/session/:id/graph"
+        component={() => <TargetGraphRoute serverScoped={props.serverScoped} />}
+      />
     </>
   )
 }
@@ -694,24 +828,27 @@ function NewLayoutLegacySessionRedirect() {
   )
 }
 
-function TargetGraphRoute() {
+function TargetGraphRoute(props: { serverScoped?: JSX.Element }) {
   const params = useParams<{ serverKey: string; id: string }>()
-  const global = useGlobal()
-  const conn = createMemo(() => {
-    const key = requireServerKey(params.serverKey)
-    return global.servers.list().find((item) => ServerConnection.key(item) === key)
-  })
-
   return (
-    <Show when={requireServerKey(params.serverKey)} keyed>
-      <ServerSDKProvider server={conn}>
-        <ServerSyncProvider server={conn}>
-          <ProductMigrationGate>
+    <TargetServerRoute
+      render={(newLayout, server) => (
+        <SessionRouteErrorBoundary
+          sessionID={params.id}
+          serverKey={requireServerKey(params.serverKey)}
+          padded={newLayout()}
+          newLayout={newLayout}
+        >
+          <TargetRouteLayout
+            newLayout={newLayout}
+            server={server}
+            serverScoped={props.serverScoped}
+          >
             <TargetGraphRouteContent />
-          </ProductMigrationGate>
-        </ServerSyncProvider>
-      </ServerSDKProvider>
-    </Show>
+          </TargetRouteLayout>
+        </SessionRouteErrorBoundary>
+      )}
+    />
   )
 }
 

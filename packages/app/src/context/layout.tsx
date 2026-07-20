@@ -150,10 +150,12 @@ const currentRoute = (pathname: string, search: string): LayoutRoute => {
 export const { use: useLayout, provider: LayoutProvider } = createSimpleContext({
   name: "Layout",
   gate: false,
-  init: () => {
+  init: (props: { server?: Accessor<ServerConnection.Any | undefined> }) => {
     const serverSdk = useServerSDK()
     const serverSync = useServerSync()
     const server = useServer()
+    const conn = props.server?.()
+    const serverProjects = conn ? server.projects.forServer(ServerConnection.key(conn)) : server.projects
     const tabs = useTabs()
     const platform = usePlatform()
     const location = useLocation()
@@ -484,7 +486,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
     }
 
     createEffect(() => {
-      const projects = server.projects.list()
+      const projects = serverProjects.list()
       const seen = new Set(projects.map((project) => project.worktree))
 
       batch(() => {
@@ -492,19 +494,19 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           const root = rootFor(project.worktree)
           if (root === project.worktree) continue
 
-          server.projects.remove(project.worktree)
+          serverProjects.remove(project.worktree)
 
           if (!seen.has(root)) {
-            server.projects.open(root)
+            serverProjects.open(root)
             seen.add(root)
           }
 
-          if (project.expanded) server.projects.expand(root)
+          if (project.expanded) serverProjects.expand(root)
         }
       })
     })
 
-    const enriched = createMemo(() => server.projects.list().map(enrich))
+    const enriched = createMemo(() => serverProjects.list().map(enrich))
     const list = createMemo(() => {
       const projects = enriched()
       return projects.map((project) => {
@@ -578,7 +580,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         sessionTimer = window.setTimeout(() => {
           sessionTimer = undefined
           void Promise.all(
-            server.projects.list().map((project) => {
+            serverProjects.list().map((project) => {
               return serverSync().project.loadSessions(project.worktree)
             }),
           )
@@ -614,7 +616,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         list,
         recentlyClosed: createMemo(() => {
           const known = new Set(serverSync().data.project.map((project) => pathKey(project.worktree)))
-          return server.projects
+          return serverProjects
             .recentlyClosed()
             .filter((worktree) => known.has(pathKey(worktree)))
             .slice(0, RECENTLY_CLOSED_DISPLAY_LIMIT)
@@ -622,21 +624,21 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         }),
         open(directory: string) {
           const root = rootFor(directory)
-          if (server.projects.list().find((x) => x.worktree === root)) return
+          if (serverProjects.list().find((x) => x.worktree === root)) return
           void serverSync().project.loadSessions(root)
-          server.projects.open(root)
+          serverProjects.open(root)
         },
         close(directory: string) {
-          server.projects.close(directory)
+          serverProjects.close(directory)
         },
         expand(directory: string) {
-          server.projects.expand(directory)
+          serverProjects.expand(directory)
         },
         collapse(directory: string) {
-          server.projects.collapse(directory)
+          serverProjects.collapse(directory)
         },
         move(directory: string, toIndex: number) {
-          server.projects.move(directory, toIndex)
+          serverProjects.move(directory, toIndex)
         },
       },
       sidebar: {

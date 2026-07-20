@@ -59,6 +59,8 @@ async function mockServers(page: Page) {
     if (directory && directory !== current.directory) return json(route, { name: "InvalidDirectory" }, 500)
     if (url.pathname === "/global/event" || url.pathname === "/event") return sse(route)
     if (url.pathname === "/global/health") return json(route, { healthy: true })
+    if (url.pathname === "/global/product-migration")
+      return json(route, { _tag: "ProductMigrationUnavailable" }, 404)
     if (url.pathname === "/session/status")
       return json(route, url.origin === serverB ? { [sessionB.id]: { type: "busy" } } : {})
     if (url.pathname === "/session") return json(route, [current])

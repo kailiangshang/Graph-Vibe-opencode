@@ -10,15 +10,30 @@ npm install -g graph-vibe
 
 ## 本地身份
 
-| 资源 | Graph Vibe | OpenCode |
-| --- | --- | --- |
-| 默认后端端口 | `4097` | `4096` |
-| mDNS 域名 | `graph-vibe.local` | `opencode.local` |
-| 数据 | `~/.local/share/graph-vibe` | `~/.local/share/opencode` |
-| 配置 | `~/.config/graph-vibe` | `~/.config/opencode` |
-| 状态 | `~/.local/state/graph-vibe` | `~/.local/state/opencode` |
-| 缓存 | `~/.cache/graph-vibe` | `~/.cache/opencode` |
-| 数据库 | `graph-vibe.db` | `opencode.db` |
+| 资源         | Graph Vibe                  | OpenCode                  |
+| ------------ | --------------------------- | ------------------------- |
+| 默认后端端口 | `4097`                      | `4096`                    |
+| mDNS 域名    | `graph-vibe.local`          | `opencode.local`          |
+| 数据         | `~/.local/share/graph-vibe` | `~/.local/share/opencode` |
+| 配置         | `~/.config/graph-vibe`      | `~/.config/opencode`      |
+| 状态         | `~/.local/state/graph-vibe` | `~/.local/state/opencode` |
+| 缓存         | `~/.cache/graph-vibe`       | `~/.cache/opencode`       |
+| 数据库       | `graph-vibe.db`             | `opencode.db`             |
+
+## 启动 Graph 工作流
+
+启动 Web 界面并完成首次启动后，在 Home 选择项目，然后点击 `Start Graph Workflow`。Graph Vibe 会创建该项目的 session 并打开空 Graph；点击 `Describe a goal` 返回同一 session 的 composer，再输入目标即可开始规划。
+
+优先保留默认 loopback 绑定，并使用 WSL localhost forwarding。`--hostname 0.0.0.0` 会向可访问主机网络的设备开放包含文件、session 和执行能力的 API。
+
+只有在 localhost forwarding 无法使用、WSL 网络受信且仅主机可达，并已通过防火墙将访问限制到所需客户端时，才可生成仅用于本次运行的强密码并显式绑定所有接口：
+
+```bash
+export OPENCODE_SERVER_PASSWORD="$(openssl rand -base64 48)"
+graph-vibe web --hostname 0.0.0.0
+```
+
+打开命令输出的 Network URL。在 Graph Vibe 的 server connection 设置中使用用户名 `opencode` 和当前 `OPENCODE_SERVER_PASSWORD` 完成认证。Basic auth 只提供访问控制，不会加密 HTTP 凭据或流量；绝不能在不受信任的 LAN 上使用此方式。远程或非私有网络访问必须通过终止 TLS 且要求认证的反向代理，或 SSH/VPN 等安全隧道，并让 Graph Vibe 在其后保持 loopback 绑定。停止 Graph Vibe 后运行 `unset OPENCODE_SERVER_PASSWORD`；不要复用、记录或分享这个临时密码。
 
 首次启动时，Graph Vibe 在自身命名空间中运行，并在迁移完成或选择 fresh start 前阻止 session、Graph、permission 和 PTY 写入。迁移器通过只读 SQLite online snapshot 发现 OpenCode 数据；配置和凭据默认选择。
 

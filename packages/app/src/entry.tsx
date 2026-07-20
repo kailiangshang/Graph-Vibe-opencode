@@ -8,6 +8,7 @@ import { dict as en } from "@/i18n/en"
 import { dict as zh } from "@/i18n/zh"
 import { handleNotificationClick } from "@/utils/notification-click"
 import { authFromToken } from "@/utils/server"
+import { resolveStartupAuthToken } from "@/utils/startup-auth-token"
 import { developmentServerUrl } from "@/utils/development-server-url"
 import pkg from "../package.json"
 import { ServerConnection } from "./context/server"
@@ -159,13 +160,20 @@ if (import.meta.env.VITE_SENTRY_DSN) {
 }
 
 if (root instanceof HTMLElement) {
-  const auth = authFromToken(new URLSearchParams(location.search).get("auth_token"))
+  const serverUrl = getCurrentUrl()
+  const auth = authFromToken(
+    resolveStartupAuthToken({
+      serverUrl,
+      search: new URLSearchParams(location.search),
+      storage: () => sessionStorage,
+    }) ?? null,
+  )
   clearAuthToken()
   const server: ServerConnection.Http = {
     type: "http",
     authToken: !!auth,
     http: {
-      url: getCurrentUrl(),
+      url: serverUrl,
       ...auth,
     },
   }
