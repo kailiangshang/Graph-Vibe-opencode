@@ -15,7 +15,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Session } from "@/session/session"
 import { Tool } from "../tool"
-import { Artifact } from "./build-gate"
+import { ArtifactInput } from "./build-gate"
 import {
   blockedArtifactDraft,
   blockedArtifactPath,
@@ -29,7 +29,7 @@ import {
 
 export const Parameters = Schema.Struct({
   targetNodeID: GraphStorage.NodeID,
-  artifact: Artifact.pipe(Schema.optional),
+  artifact: ArtifactInput.pipe(Schema.optional),
   draftID: Schema.String.pipe(Schema.optional),
 })
 

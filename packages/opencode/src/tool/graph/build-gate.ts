@@ -36,10 +36,11 @@ export const PatchArtifact = Schema.Struct({
 })
 
 export const Artifact = Schema.Union([FullArtifact, FilesArtifact, PatchArtifact])
+export const ArtifactInput = Schema.Union([Artifact, Schema.fromJsonString(Artifact)])
 
 export const Parameters = Schema.Struct({
   targetNodeID: GraphStorage.NodeID,
-  artifact: Artifact.pipe(Schema.optional),
+  artifact: ArtifactInput.pipe(Schema.optional),
   diagnosticsRequested: Schema.Boolean.pipe(Schema.optional),
   dryRun: Schema.Boolean.pipe(Schema.optional),
 })

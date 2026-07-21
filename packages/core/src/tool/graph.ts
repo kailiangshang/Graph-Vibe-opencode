@@ -91,10 +91,11 @@ const PatchArtifact = Schema.Struct({
 })
 
 const Artifact = Schema.Union([FullArtifact, FilesArtifact, PatchArtifact])
+const ArtifactInput = Schema.Union([Artifact, Schema.fromJsonString(Artifact)])
 
 const BuildGateInput = Schema.Struct({
   targetNodeID: GraphStorage.NodeID,
-  artifact: Artifact.pipe(Schema.optional),
+  artifact: ArtifactInput.pipe(Schema.optional),
   diagnosticsRequested: Schema.Boolean.pipe(Schema.optional),
   dryRun: Schema.Boolean.pipe(Schema.optional),
 })
@@ -124,7 +125,7 @@ const ArtifactSealInput = Schema.Struct({
 
 const ArtifactApplyInput = Schema.Struct({
   targetNodeID: GraphStorage.NodeID,
-  artifact: Artifact.pipe(Schema.optional),
+  artifact: ArtifactInput.pipe(Schema.optional),
   draftID: Schema.String.pipe(Schema.optional),
 })
 

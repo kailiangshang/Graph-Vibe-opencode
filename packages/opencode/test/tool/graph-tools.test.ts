@@ -10,7 +10,7 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionTable } from "@opencode-ai/core/session/sql"
-import { Effect } from "effect"
+import { Effect, Exit, Schema } from "effect"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -18,7 +18,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
 import { Tool } from "@/tool/tool"
-import { GraphBuildGateTool } from "@/tool/graph/build-gate"
+import { GraphBuildGateTool, Parameters } from "@/tool/graph/build-gate"
 import { GraphPlanAdmitTool } from "@/tool/graph/plan-admit"
 import { fromTool } from "@/tool/json-schema"
 import { Truncate } from "@/tool/truncate"
@@ -101,6 +101,40 @@ function context(): Tool.Context {
 }
 
 describe("graph tools", () => {
+  it.effect("decodes a JSON-string artifact for graph_build_gate", () =>
+    Effect.gen(function* () {
+      const artifact = {
+        mode: "full",
+        path: "src/example.ts",
+        code: "export const value = 1\n",
+        test: "bun test\n",
+      } as const
+      const input = yield* Schema.decodeUnknownEffect(Parameters)({
+        targetNodeID: firstNodeID,
+        artifact: JSON.stringify(artifact),
+      })
+
+      expect(input.artifact).toEqual(artifact)
+    }),
+  )
+
+  it.effect("rejects malformed or schema-invalid JSON-string artifacts for graph_build_gate", () =>
+    Effect.gen(function* () {
+      const malformed = yield* Effect.exit(
+        Schema.decodeUnknownEffect(Parameters)({ targetNodeID: firstNodeID, artifact: "{not-json" }),
+      )
+      const invalid = yield* Effect.exit(
+        Schema.decodeUnknownEffect(Parameters)({
+          targetNodeID: firstNodeID,
+          artifact: JSON.stringify({ mode: "full", path: "src/example.ts", test: "bun test\n" }),
+        }),
+      )
+
+      expect(Exit.isFailure(malformed)).toBe(true)
+      expect(Exit.isFailure(invalid)).toBe(true)
+    }),
+  )
+
   it.instance("graph_plan_admit does not expose status fields", () =>
     Effect.gen(function* () {
       const info = yield* GraphPlanAdmitTool

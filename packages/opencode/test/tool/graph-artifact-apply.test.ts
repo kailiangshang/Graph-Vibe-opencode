@@ -16,14 +16,14 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionTable } from "@opencode-ai/core/session/sql"
-import { Deferred, Effect, Fiber } from "effect"
+import { Deferred, Effect, Fiber, Schema } from "effect"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
-import { artifactOperationID, GraphArtifactApplyTool } from "@/tool/graph/artifact-apply"
+import { artifactOperationID, GraphArtifactApplyTool, Parameters } from "@/tool/graph/artifact-apply"
 import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { TestConfig } from "../fixture/config"
@@ -134,6 +134,23 @@ const authorize = Effect.fn("GraphArtifactApplyTest.authorize")(function* (targe
 })
 
 describe("graph_artifact_apply", () => {
+  it.effect("decodes a JSON-string artifact", () =>
+    Effect.gen(function* () {
+      const artifact = {
+        mode: "full",
+        path: "src/example.ts",
+        code: "export const value = 1\n",
+        test: "bun test\n",
+      } as const
+      const input = yield* Schema.decodeUnknownEffect(Parameters)({
+        targetNodeID: GraphStorage.NodeID.create(),
+        artifact: JSON.stringify(artifact),
+      })
+
+      expect(input.artifact).toEqual(artifact)
+    }),
+  )
+
   it.effect("gives two no-callID artifact calls in one message distinct operation IDs", () =>
     Effect.sync(() => {
       const messageID = MessageID.ascending()

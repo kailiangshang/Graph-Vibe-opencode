@@ -859,6 +859,66 @@ describe("LocationServiceMap", () => {
     ),
   )
 
+  unixLive("decodes JSON-string graph artifact inputs", () =>
+    withGraphMode(
+      Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
+        Effect.flatMap((dir) => Effect.gen(function* () {
+          const destination = path.join(dir.path, "src/string-artifact.ts")
+          yield* setupGraphDiagnostics(dir.path, [
+            { action: "graph.artifact_write", resource: "*", effect: "allow" },
+          ]).pipe(
+            Effect.flatMap((state) => executeTool(state.registry, {
+              sessionID: state.sessionID,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-string-artifact",
+                name: "graph_artifact_apply",
+                input: {
+                  targetNodeID: state.targetNodeID,
+                  artifact: JSON.stringify({
+                    mode: "full",
+                    path: "src/string-artifact.ts",
+                    code: "export const decoded = true\n",
+                    test: "test\n",
+                  }),
+                },
+              },
+            })),
+            Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+          )
+          expect(yield* Effect.promise(() => fs.readFile(destination, "utf8"))).toBe("export const decoded = true\n")
+        })),
+      ),
+    ),
+  )
+
+  it.live("rejects schema-invalid JSON-string graph artifact inputs", () =>
+    withGraphMode(
+      Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
+        Effect.flatMap((dir) => setupGraphDiagnostics(dir.path, []).pipe(
+          Effect.flatMap((state) => executeTool(state.registry, {
+            sessionID: state.sessionID,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-invalid-string-artifact",
+              name: "graph_build_gate",
+              input: {
+                targetNodeID: state.targetNodeID,
+                artifact: JSON.stringify({ mode: "full", path: "src/invalid.ts", test: "test\n" }),
+              },
+            },
+          })),
+          Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+        )),
+        Effect.tap((result) => Effect.sync(() => {
+          expect(result).toMatchObject({ type: "error", value: expect.stringContaining("Invalid tool input") })
+        })),
+      ),
+    ),
+  )
+
   it.live("reuses cached services for constructed and decoded location refs", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
