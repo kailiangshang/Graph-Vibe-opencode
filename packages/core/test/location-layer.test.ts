@@ -828,6 +828,55 @@ describe("LocationServiceMap", () => {
     ),
   )
 
+  unixLive("reports skipped focused diagnostics without fabricated evidence", () =>
+    withGraphMode(
+      Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
+        Effect.flatMap((dir) => Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(dir.path, "node_modules/.bin"), { recursive: true })
+            await fs.writeFile(path.join(dir.path, "node_modules/.bin/oxlint"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+            await fs.writeFile(path.join(dir.path, "README.md"), "# Readme\n")
+            await fs.writeFile(path.join(dir.path, "package.json"), JSON.stringify({ scripts: { lint: "oxlint" } }))
+          })
+          const state = yield* setupGraphDiagnostics(
+            dir.path,
+            [{ action: "graph.diagnostics_run", resource: "*", effect: "allow" }],
+            { criteria: ["README is valid"], diagnostics: [{ name: "lint", paths: ["README.md"] }] },
+          ).pipe(
+            Effect.flatMap((state) => executeTool(state.registry, {
+              sessionID: state.sessionID,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-skipped-focused-diagnostics",
+                name: "graph_diagnostics_run",
+                input: { targetNodeID: state.targetNodeID },
+              },
+            }).pipe(Effect.map((result) => ({ ...state, result })))),
+            Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+          )
+          expect(state.result.type).toBe("text")
+          if (state.result.type !== "text") return
+          expect(JSON.parse(state.result.value)).toMatchObject({
+            ran: true,
+            verified: true,
+            skipped: [{ name: "lint", paths: ["README.md"], reason: "unsupported_focused_paths" }],
+          })
+          const audit = yield* state.db
+            .select()
+            .from(GraphToolRunTable)
+            .where(eq(GraphToolRunTable.node_id, state.targetNodeID))
+            .all()
+            .pipe(Effect.orDie)
+          const evidence = audit.find((record) => record.evidence?.kind === "diagnostics")?.evidence
+          expect(evidence?.kind === "diagnostics" ? evidence.commands.map((command) => command.command) : []).toEqual([
+            "bun run lint",
+          ])
+        })),
+      ),
+    ),
+  )
+
   unixLive("preserves executable mode in the current artifact adapter", () =>
     withGraphMode(
       Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(

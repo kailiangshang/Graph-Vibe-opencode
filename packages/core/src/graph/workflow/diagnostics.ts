@@ -21,10 +21,17 @@ export interface Target {
   readonly fingerprint: string
 }
 
+export interface Skipped {
+  readonly name: DiagnosticName
+  readonly paths: ReadonlyArray<string>
+  readonly reason: "unsupported_focused_paths"
+}
+
 export type Resolution =
   | {
       readonly ok: true
       readonly commands: ReadonlyArray<Command>
+      readonly skipped: ReadonlyArray<Skipped>
       readonly complete: boolean
       readonly projectChecksOnly: boolean
     }
@@ -43,18 +50,19 @@ export async function resolve(input: {
   const scripts = ((await Bun.file(path.join(input.directory, "package.json")).json().catch(() => ({ scripts: {} }))) as {
     scripts?: Record<string, string>
   }).scripts ?? {}
-  const detected = (["test", "typecheck", "lint"] as const).filter((name) => typeof scripts[name] === "string")
+  const configured = (["test", "typecheck", "lint"] as const).filter((name) => typeof scripts[name] === "string")
+  const detected = configured.filter((name) => isRunnableScript(scripts[name]))
   const required = input.verification?.diagnostics ?? []
   const missing = required.find((diagnostic) => !detected.includes(diagnostic.name))
   if (missing) return { ok: false, reason: "diagnostic_script_missing", diagnostic: missing.name }
 
   const root = realpathSync.native(input.directory)
   const targets = new Map<string, Target>()
-  const focused = required.flatMap((diagnostic) => {
+  const requestedFocused = required.flatMap((diagnostic) => {
     if (!diagnostic.paths || diagnostic.paths.length === 0) return []
     return [{ diagnostic, paths: diagnostic.paths }]
   })
-  for (const item of focused) {
+  for (const item of requestedFocused) {
     for (const relative of item.paths) {
       const segments = relative.split("/")
       if (segments[0]?.startsWith("-")) return { ok: false, reason: "verification_path_option", path: relative }
@@ -76,6 +84,21 @@ export async function resolve(input: {
     }
   }
 
+  const focused = requestedFocused.flatMap((item) => {
+    const script = scripts[item.diagnostic.name]
+    if (typeof script !== "string") return []
+    const paths = item.paths.filter((relative) => supportsFocusedPath(item.diagnostic.name, scripts, relative))
+    return paths.length > 0 ? [{ diagnostic: item.diagnostic, paths }] : []
+  })
+  const skipped = requestedFocused.flatMap((item) => {
+    const script = scripts[item.diagnostic.name]
+    if (typeof script !== "string") return []
+    const paths = item.paths.filter((relative) => !supportsFocusedPath(item.diagnostic.name, scripts, relative))
+    return paths.length > 0
+      ? [{ name: item.diagnostic.name, paths, reason: "unsupported_focused_paths" as const }]
+      : []
+  })
+
   const focusedCommands = focused.map((item) =>
     command(
       item.diagnostic.name,
@@ -84,17 +107,52 @@ export async function resolve(input: {
       item.paths.flatMap((item) => targets.get(item) ?? []),
     ),
   )
-  const completeCommands = detected.length === 0 && input.verification === null
+  const completeCommands = configured.length === 0 && input.verification === null
     ? [command("test", ["test"], false, [])]
     : detected.map((name) => command(name, ["run", name], false, []))
   const commands = [...focusedCommands, ...completeCommands]
   const selected = input.filter ? commands.filter((item) => item.name.includes(input.filter ?? "")) : commands
+  const selectedSkipped = input.filter ? skipped.filter((item) => item.name.includes(input.filter ?? "")) : skipped
   return {
     ok: true,
     commands: selected,
+    skipped: selectedSkipped,
     complete: input.filter === undefined && selected.length === commands.length && completeCommands.length > 0,
     projectChecksOnly: input.verification === null,
   }
+}
+
+function isRunnableScript(script: string | undefined) {
+  if (!script) return false
+  const guard = /^\s*(?:echo|printf)\s+("[^"]*"|'[^']*'|[^;&\n]+?)\s*(?:&&|;|\n)\s*exit\s+1\s*;?\s*(?:#.*)?$/is.exec(script)
+  if (!guard) return true
+  const message = guard[1]
+  if (message.startsWith("'") && !message.endsWith("'")) return true
+  if (message.startsWith('"') && (!message.endsWith('"') || /[$`\\]/.test(message))) return true
+  if (!message.startsWith("'") && !message.startsWith('"') && /[|<>$`()\\]/.test(message)) return true
+  return !/(?:do not|don't|must not|cannot|can't)(?:\s+be)?\s+run/i.test(message)
+}
+
+function supportsFocusedPath(name: DiagnosticName, scripts: Record<string, string>, relative: string) {
+  if (name !== "lint" || !isOxlintScript("lint", scripts, new Set())) return true
+  return !/\.mdx?$/i.test(relative)
+}
+
+function isOxlintScript(name: string, scripts: Record<string, string>, seen: Set<string>): boolean {
+  if (seen.has(name)) return false
+  seen.add(name)
+  const script = scripts[name]?.trim()
+  if (!script) return false
+  const executable = /^(?:"([^"]+)"|'([^']+)'|([^\s]+))/.exec(script)
+  if (path.basename(executable?.[1] ?? executable?.[2] ?? executable?.[3] ?? "") === "oxlint") return true
+  if (/^(?:bunx|npx)(?:\s+--?(?:[\w-]+(?:=[^\s]+)?)?)*\s+oxlint(?:@[^\s]+)?(?:\s|$)/.test(script)) return true
+  if (/^(?:npm|pnpm)\s+exec(?:\s+--?(?:[\w-]+(?:=[^\s]+)?)?)*\s+oxlint(?:@[^\s]+)?(?:\s|$)/.test(script)) return true
+  if (/^(?:pnpm|yarn)\s+dlx(?:\s+--?(?:[\w-]+(?:=[^\s]+)?)?)*\s+oxlint(?:@[^\s]+)?(?:\s|$)/.test(script)) return true
+  if (/^bun\s+x(?:\s+--?(?:[\w-]+(?:=[^\s]+)?)?)*\s+oxlint(?:@[^\s]+)?(?:\s|$)/.test(script)) return true
+  const delegated = /^(?:bun|npm|pnpm|yarn)\s+run\s+([^\s;&]+)/.exec(script)
+  if (delegated) return isOxlintScript(delegated[1], scripts, seen)
+  const shorthand = /^(?:pnpm|yarn)\s+([^\s;&]+)/.exec(script)
+  return shorthand && scripts[shorthand[1]] ? isOxlintScript(shorthand[1], scripts, seen) : false
 }
 
 function command(name: DiagnosticName, args: ReadonlyArray<string>, focused: boolean, targets: ReadonlyArray<Target>): Command {

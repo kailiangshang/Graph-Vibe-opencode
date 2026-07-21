@@ -555,8 +555,13 @@ const layer = Layer.effectDiscard(
               }
               const commands = resolution.commands
               const completeDiagnostics = resolution.complete
-              if (commands.length === 0 && input.filter) {
-                return toolOutput("Diagnostics skipped", { gate: summarizeGate(gate), ran: false, passed: false, results: [] }, { ran: false, reason: `No commands matched filter: ${input.filter}` })
+              if (commands.length === 0) {
+                const reason = input.filter ? `No commands matched filter: ${input.filter}` : "No runnable diagnostic commands"
+                return toolOutput(
+                  "Diagnostics skipped",
+                  { gate: summarizeGate(gate), ran: false, passed: false, skipped: resolution.skipped, results: [] },
+                  { ran: false, complete: false, verified: false, skipped: resolution.skipped, reason },
+                )
               }
               yield* permission.assert({
                 action: "graph.diagnostics_run",
@@ -596,7 +601,10 @@ const layer = Layer.effectDiscard(
                   excerpt: result.output.slice(0, 8_192),
                 })),
               }
-              const inputSummary = commands.map((command) => command.name).join("; ")
+              const inputSummary = [
+                ...commands.map((command) => command.name),
+                ...(resolution.skipped.length > 0 ? [`skipped=${resolution.skipped.length}`] : []),
+              ].join("; ")
               const outputSummary = results.map((result) => `${result.name}:${result.failureReason ?? result.exitCode}`).join(", ")
               if (verified) {
                 const completion = yield* workflow.completeVerification({
@@ -657,6 +665,7 @@ const layer = Layer.effectDiscard(
                 passed: allPassed,
                 complete: completeDiagnostics,
                 verified,
+                skipped: resolution.skipped,
                 results: results.map((result) => ({
                   name: result.name,
                   exitCode: result.exitCode,
@@ -664,7 +673,14 @@ const layer = Layer.effectDiscard(
                   passed: result.passed,
                   ...(result.failureReason ? { failureReason: result.failureReason } : {}),
                 })),
-              }, { ran: true, passed: allPassed, complete: completeDiagnostics, verified, results })
+              }, {
+                ran: true,
+                passed: allPassed,
+                complete: completeDiagnostics,
+                verified,
+                skipped: resolution.skipped,
+                results,
+              })
             }).pipe(toToolFailure),
         }),
       })

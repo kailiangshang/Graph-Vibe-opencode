@@ -33,6 +33,8 @@ interface CommandResult {
   failureReason?: string
 }
 
+type CommandMetadata = Pick<CommandResult, "name" | "exitCode" | "timedOut" | "passed" | "failureReason">
+
 type ExitKind = { kind: "exit"; code: number } | { kind: "timeout"; code: null } | { kind: "abort"; code: null }
 
 interface NamedCommand {
@@ -140,7 +142,15 @@ export const GraphDiagnosticsRunTool = Tool.define(
             })
             return {
               title: "Diagnostics blocked",
-              metadata: { gate: summarizeGate(gate), ran: false, passed: false, complete: false, verified: false, results: [] as CommandResult[] },
+              metadata: {
+                gate: summarizeGate(gate),
+                ran: false,
+                passed: false,
+                complete: false,
+                verified: false,
+                skipped: [] as GraphDiagnostics.Skipped[],
+                results: [] as CommandMetadata[],
+              },
               output: formatJson({ ran: false, complete: false, verified: false, gate }),
             }
           }
@@ -172,7 +182,8 @@ export const GraphDiagnosticsRunTool = Tool.define(
                 passed: false,
                 complete: false,
                 verified: false,
-                results: [] as CommandResult[],
+                skipped: [] as GraphDiagnostics.Skipped[],
+                results: [] as CommandMetadata[],
               },
               output: formatJson({
                 ran: false,
@@ -214,17 +225,35 @@ export const GraphDiagnosticsRunTool = Tool.define(
             })
             return {
               title: "Diagnostics blocked",
-              metadata: { gate: summarizeGate(gate), ran: false, passed: false, complete: false, verified: false, results: [], ...resolution },
+              metadata: {
+                gate: summarizeGate(gate),
+                ran: false,
+                passed: false,
+                complete: false,
+                verified: false,
+                skipped: [] as GraphDiagnostics.Skipped[],
+                results: [] as CommandMetadata[],
+                ...resolution,
+              },
               output: formatJson({ ran: false, passed: false, complete: false, verified: false, ...resolution }),
             }
           }
           const cmds = resolution.commands
           const completeDiagnostics = resolution.complete
-          if (cmds.length === 0 && params.filter) {
+          if (cmds.length === 0) {
+            const reason = params.filter ? `No commands matched filter: ${params.filter}` : "No runnable diagnostic commands"
             return {
               title: "Diagnostics skipped",
-              metadata: { gate: summarizeGate(gate), ran: false, passed: false, complete: false, verified: false, results: [] as CommandResult[] },
-              output: formatJson({ ran: false, complete: false, verified: false, reason: `No commands matched filter: ${params.filter}` }),
+              metadata: {
+                gate: summarizeGate(gate),
+                ran: false,
+                passed: false,
+                complete: false,
+                verified: false,
+                skipped: resolution.skipped,
+                results: [] as CommandMetadata[],
+              },
+              output: formatJson({ ran: false, complete: false, verified: false, skipped: resolution.skipped, reason }),
             }
           }
 
@@ -270,7 +299,10 @@ export const GraphDiagnosticsRunTool = Tool.define(
               excerpt: result.output.slice(0, 8_192),
             })),
           }
-          const inputSummary = cmds.map((command) => command.name).join("; ")
+          const inputSummary = [
+            ...cmds.map((command) => command.name),
+            ...(resolution.skipped.length > 0 ? [`skipped=${resolution.skipped.length}`] : []),
+          ].join("; ")
           const outputSummary = results.map((result) => `${result.name}:${result.failureReason ?? result.exitCode}`).join(", ")
 
           let nextHint = ""
@@ -301,7 +333,15 @@ export const GraphDiagnosticsRunTool = Tool.define(
               })
               return {
                 title: "Diagnostics superseded by workflow change",
-                metadata: { gate: summarizeGate(gate), ran: true, passed: true, complete: true, verified: false, results: [] as CommandResult[] },
+                metadata: {
+                  gate: summarizeGate(gate),
+                  ran: true,
+                  passed: true,
+                  complete: true,
+                  verified: false,
+                  skipped: resolution.skipped,
+                  results: [] as CommandMetadata[],
+                },
                 output: formatJson({ ran: true, passed: true, complete: true, verified: false, reason: "workflow_revision_conflict" }),
               }
             }
@@ -341,6 +381,7 @@ export const GraphDiagnosticsRunTool = Tool.define(
               passed: allPassed,
               complete: completeDiagnostics,
               verified,
+              skipped: resolution.skipped,
               results: results.map((r) => ({
                 name: r.name,
                 exitCode: r.exitCode,
@@ -349,7 +390,14 @@ export const GraphDiagnosticsRunTool = Tool.define(
                 ...(r.failureReason ? { failureReason: r.failureReason } : {}),
               })),
             },
-            output: formatJson({ ran: true, passed: allPassed, complete: completeDiagnostics, verified, results }),
+            output: formatJson({
+              ran: true,
+              passed: allPassed,
+              complete: completeDiagnostics,
+              verified,
+              skipped: resolution.skipped,
+              results,
+            }),
           }
         }).pipe(Effect.orDie),
     }

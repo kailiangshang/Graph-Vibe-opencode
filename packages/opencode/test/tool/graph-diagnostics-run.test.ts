@@ -1,6 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import path from "node:path"
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { Database } from "@opencode-ai/core/database/database"
@@ -191,6 +191,86 @@ describe("graph_diagnostics_run", () => {
       expect(node.status).toBe("verified")
       const workflow = yield* GraphWorkflowState.Service
       expect((yield* workflow.get(sessionID))?.currentNodeID).toBeNull()
+    }),
+  )
+
+  it.instance("reports unsupported focused paths without adding fabricated evidence", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(async () => {
+        await mkdir(path.join(test.directory, "node_modules/.bin"), { recursive: true })
+        await Bun.write(path.join(test.directory, "node_modules/.bin/oxlint"), "#!/bin/sh\nexit 0\n")
+        await chmod(path.join(test.directory, "node_modules/.bin/oxlint"), 0o755)
+        await Bun.write(path.join(test.directory, "README.md"), "# Readme\n")
+        await Bun.write(path.join(test.directory, "package.json"), JSON.stringify({ scripts: { lint: "oxlint" } }))
+      })
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Markdown lint",
+        level: "L2",
+        status: "implemented",
+        verification: {
+          criteria: ["README is valid"],
+          diagnostics: [{ name: "lint", paths: ["README.md"] }],
+        },
+      })
+      yield* authorize(targetNodeID)
+
+      const permissionRequests: PermissionRequest[] = []
+      const result = yield* (yield* init()).execute({ targetNodeID }, context(permissionRequests))
+      const records = yield* (yield* GraphAudit.Service).tool.list({ projectID, nodeID: targetNodeID })
+      const evidence = records.find(
+        (record) => record.toolName === "graph.diagnostics.run" && record.evidence?.kind === "diagnostics",
+      )?.evidence
+
+      expect(JSON.parse(result.output)).toMatchObject({
+        ran: true,
+        verified: true,
+        skipped: [{ name: "lint", paths: ["README.md"], reason: "unsupported_focused_paths" }],
+      })
+      expect(permissionRequests[0]?.patterns).toEqual(["bun run lint"])
+      expect(evidence?.kind === "diagnostics" ? evidence.commands.map((command) => command.command) : []).toEqual([
+        "bun run lint",
+      ])
+    }),
+  )
+
+  it.instance("skips execution when only a root diagnostic guard is configured", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* seed(test.directory)
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(test.directory, "package.json"),
+          JSON.stringify({ scripts: { test: "echo 'do not run tests from root' && exit 1" } }),
+        ),
+      )
+      const storage = yield* GraphStorage.Service
+      const targetNodeID = yield* storage.node.create({
+        projectID,
+        sessionID,
+        type: "atomic",
+        name: "Guarded diagnostics",
+        level: "L2",
+        status: "implemented",
+      })
+      yield* authorize(targetNodeID)
+
+      const permissionRequests: PermissionRequest[] = []
+      const result = yield* (yield* init()).execute({ targetNodeID }, context(permissionRequests))
+
+      expect(JSON.parse(result.output)).toMatchObject({
+        ran: false,
+        complete: false,
+        verified: false,
+        reason: "No runnable diagnostic commands",
+      })
+      expect(permissionRequests).toEqual([])
+      expect((yield* storage.node.get(targetNodeID)).status).toBe("implemented")
     }),
   )
 
