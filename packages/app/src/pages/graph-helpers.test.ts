@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   CURRENT_PLAN_EMPTY_MESSAGE,
   type GraphView,
+  canPublishToMain,
   countByStatus,
   deterministicPosition,
   filterByLevel,
@@ -11,6 +12,22 @@ import {
   workflowMutationFailure,
   prefersReducedTransparency,
 } from "./graph-helpers"
+
+describe("canPublishToMain", () => {
+  test("allows only a non-empty completed live plan", () => {
+    expect(canPublishToMain({ phase: "complete", planSource: "currentPlan", nodeCount: 1 })).toBe(true)
+  })
+
+  test("rejects every ineligible phase, source, and node-count case", () => {
+    expect(canPublishToMain({ phase: "planning", planSource: "currentPlan", nodeCount: 1 })).toBe(false)
+    expect(canPublishToMain({ phase: "building", planSource: "currentPlan", nodeCount: 1 })).toBe(false)
+    expect(canPublishToMain({ phase: "checkpoint", planSource: "currentPlan", nodeCount: 1 })).toBe(false)
+    expect(canPublishToMain({ phase: "failed", planSource: "currentPlan", nodeCount: 1 })).toBe(false)
+    expect(canPublishToMain({ phase: "complete", planSource: "version", nodeCount: 1 })).toBe(false)
+    expect(canPublishToMain({ phase: "complete", planSource: "currentPlan", nodeCount: 0 })).toBe(false)
+    expect(canPublishToMain({ phase: "complete", planSource: "currentPlan", nodeCount: -1 })).toBe(false)
+  })
+})
 
 describe("countByStatus", () => {
   test("keeps internal tool names out of beginner guidance", () => {

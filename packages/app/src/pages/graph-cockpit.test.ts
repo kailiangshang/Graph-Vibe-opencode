@@ -3,6 +3,7 @@ import {
   COCKPIT_REGIONS,
   MOBILE_TABS,
   cockpitActions,
+  cockpitGraphID,
   cockpitViewState,
   enrichWorkflowNodes,
   workflowPhaseStep,
@@ -96,6 +97,9 @@ describe("Graph cockpit view state", () => {
     expect(
       cockpitActions({ mode: "atomic", phase: "checkpoint", checkpoint: { status: "pending", kind: "module" } }),
     ).toMatchObject({ mode: true, continue: true })
+    expect(
+      cockpitActions({ mode: "module", phase: "complete", checkpoint: { status: "pending", kind: "module" } }),
+    ).toMatchObject({ mode: false, continue: false, pause: false })
   })
 
   test("announces current task, mode, and progress without internal names", () => {
@@ -119,6 +123,16 @@ describe("Graph cockpit view state", () => {
   test("renders task, graph, and details instruments with synchronized selection", () => {
     expect(COCKPIT_REGIONS).toEqual(["Task rail", "Workflow graph", "Task details"])
     expect(MOBILE_TABS).toEqual(["tasks", "graph", "details"])
+  })
+
+  test("includes the Plan read-model source and published version in canvas identity", () => {
+    expect(cockpitGraphID({ source: "currentPlan", planSource: "currentPlan", revision: 8 })).toBe(
+      "currentPlan-currentPlan-8",
+    )
+    expect(cockpitGraphID({ source: "currentPlan", planSource: "version", versionNumber: 3, revision: 8 })).toBe(
+      "currentPlan-version-3",
+    )
+    expect(cockpitGraphID({ source: "main", planSource: "version", versionNumber: 3, revision: 8 })).toBe("main")
   })
 
   test("rolls composite and PRD display status up from atomic task verification", () => {

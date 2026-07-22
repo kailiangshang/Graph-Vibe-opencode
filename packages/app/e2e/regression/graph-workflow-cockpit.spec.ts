@@ -30,6 +30,8 @@ for (const route of ["source", "embedded"] as const) {
     await expect(page.getByLabel("Execution mode")).toHaveCount(0)
     await expect(page.getByRole("button", { name: "Continue" })).toHaveCount(0)
     await expect(page.getByRole("button", { name: "Pause" })).toHaveCount(0)
+    await expect(page.getByRole("button", { name: "Plan", exact: true })).toHaveCount(0)
+    await expect(page.getByRole("button", { name: "Main", exact: true })).toHaveCount(0)
     const describe = page.getByRole("button", { name: "Describe a goal", exact: true })
     await expect(describe).toBeVisible()
     expect((await describe.boundingBox())?.height).toBeGreaterThanOrEqual(44)
@@ -157,27 +159,114 @@ for (const route of ["source", "embedded"] as const) {
   })
 }
 
+test("publishes a completed Plan through confirmation and reloads its version-backed read model", async ({ page }) => {
+  const state = await setup(page, false, "complete", { emptyMain: true, promotion: "delayed" })
+  await page.goto(routeUrl("source"))
+
+  await page.getByRole("button", { name: "Main", exact: true }).click()
+  await expect(page.getByRole("status")).toContainText("No published topology")
+  await expect(page.getByRole("status")).toContainText("ready to publish")
+  await expect(page.getByRole("region", { name: "Graph workflow cockpit" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Plan", exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "Return to Plan" }).click()
+
+  await page.getByRole("button", { name: "Publish to Main" }).click()
+  await expect(page.getByRole("dialog")).toContainText("3 nodes and 2 edges")
+  await expect(page.getByRole("dialog")).toContainText("project-wide versioned publication")
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click()
+  expect(state.promotions).toBe(0)
+
+  await page.getByRole("button", { name: "Publish to Main" }).click()
+  const confirm = page.getByRole("dialog").getByRole("button", { name: "Publish to Main" })
+  await confirm.evaluate((button) => {
+    if (!(button instanceof HTMLButtonElement)) throw new Error("Expected a publish button")
+    button.click()
+    button.click()
+  })
+  await expect(confirm).toBeDisabled()
+  await expect.poll(() => state.promotions).toBe(1)
+  state.releasePromotion()
+
+  await expect(page.getByRole("button", { name: "Main", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByRole("region", { name: "Graph workflow cockpit" })).toBeVisible()
+  await expect(page.locator(".graph-task").filter({ hasText: "Released capability" })).toBeVisible()
+  await expect(page.getByText("Created version 7")).toBeVisible()
+  await page.getByRole("button", { name: "Plan", exact: true }).click()
+  await expect(page.getByText("Published version 7 · read-only")).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Interface" })).toBeVisible()
+  await expect(page.getByRole("button").filter({ hasText: "Build rail" })).toBeVisible()
+  await expect(page.getByText("1/1 verified")).toBeVisible()
+  await expect(page.getByText("Passed", { exact: true })).toBeVisible()
+  await expect(page.getByText("bun test", { exact: false })).toBeVisible()
+  await expect(page.getByText("src/rail.tsx", { exact: true })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Publish to Main" })).toHaveCount(0)
+
+  await page.reload()
+  await expect(page.getByText("Published version 7 · read-only")).toBeVisible()
+  await expect(page.getByRole("button").filter({ hasText: "Build rail" })).toBeVisible()
+  await expect(page.getByText("Passed", { exact: true })).toBeVisible()
+})
+
+test("failed publication refreshes authority and leaves Main empty", async ({ page }) => {
+  const state = await setup(page, false, "complete", { emptyMain: true, promotion: "failure" })
+  await page.goto(routeUrl("source"))
+  const reads = state.reads
+
+  await page.getByRole("button", { name: "Publish to Main" }).click()
+  await page.getByRole("dialog").getByRole("button", { name: "Publish to Main" }).click()
+
+  await expect(page.getByRole("button", { name: "Plan", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByRole("alert")).toContainText("Publication failed")
+  await expect(page.getByRole("alert")).toContainText("retry")
+  await expect.poll(() => state.reads.plan).toBeGreaterThan(reads.plan)
+  await expect.poll(() => state.reads.workflow).toBeGreaterThan(reads.workflow)
+  await expect.poll(() => state.reads.main).toBeGreaterThan(reads.main)
+  await page.getByRole("button", { name: "Main", exact: true }).click()
+  await expect(page.getByRole("status")).toContainText("No published topology")
+  await expect(page.getByRole("region", { name: "Graph workflow cockpit" })).toHaveCount(0)
+  expect(state.promotions).toBe(1)
+})
+
 function routeUrl(route: "source" | "embedded") {
   return route === "embedded"
     ? `/server/${base64Encode(server)}/session/${sessionID}/graph`
     : `/${base64Encode(directory)}/session/${sessionID}/graph`
 }
 
-async function setup(page: Page, embedded: boolean, initialView: WorkflowView = "checkpoint") {
+async function setup(
+  page: Page,
+  embedded: boolean,
+  initialView: WorkflowView = "checkpoint",
+  options: { emptyMain?: boolean; promotion?: "delayed" | "failure" } = {},
+) {
   let view = initialView
   let approvals = 0
+  let promotions = 0
+  let published = false
+  const reads = { plan: 0, workflow: 0, main: 0 }
   let releaseWorkflow = () => {}
+  let releasePromotion = () => {}
   const workflowReady = new Promise<void>((resolve) => {
     releaseWorkflow = resolve
+  })
+  const promotionReady = new Promise<void>((resolve) => {
+    releasePromotion = resolve
   })
   const state = {
     get approvals() {
       return approvals
     },
+    get promotions() {
+      return promotions
+    },
+    get reads() {
+      return { ...reads }
+    },
     set(next: WorkflowView) {
       view = next
     },
     releaseWorkflow,
+    releasePromotion,
   }
   await mockOpenCodeServer(page, {
     directory,
@@ -209,6 +298,7 @@ async function setup(page: Page, embedded: boolean, initialView: WorkflowView = 
       return route.fulfill(json({ _tag: "ProductMigrationUnavailable" }, 404))
     if (url.pathname === "/graph/workflow") {
       if (route.request().method() === "GET") {
+        reads.workflow++
         if (view === "loading") {
           await workflowReady
           view = "checkpoint"
@@ -227,9 +317,29 @@ async function setup(page: Page, embedded: boolean, initialView: WorkflowView = 
       view = "building"
       return route.fulfill(json(projection(view)))
     }
-    if (url.pathname === "/graph/current-plan")
-      return route.fulfill(json(view === "empty" ? { nodes: [], edges: [] } : graph))
-    if (url.pathname === "/graph/main") return route.fulfill(json(mainGraph))
+    if (url.pathname === "/graph/plan-view") {
+      reads.plan++
+      return route.fulfill(
+        json({
+          ...(view === "empty" ? { nodes: [], edges: [] } : graph),
+          source: published ? "version" : "currentPlan",
+          versionNumber: published ? 7 : null,
+          publishedAt: published ? 1700000001000 : null,
+        }),
+      )
+    }
+    if (url.pathname === "/graph/main") {
+      reads.main++
+      return route.fulfill(json(options.emptyMain && !published ? { nodes: [], edges: [] } : mainGraph))
+    }
+    if (url.pathname === "/graph/current-plan/promote" && route.request().method() === "POST") {
+      promotions++
+      if (options.promotion === "delayed") await promotionReady
+      if (options.promotion === "failure")
+        return route.fulfill(json({ _tag: "GraphPromotionBlocked", reason: "workflow_incomplete" }, 409))
+      published = true
+      return route.fulfill(json({ versionID: "ver_7", versionNumber: 7, nodes: 3, edges: 2 }))
+    }
     return route.fallback()
   })
   await page.addInitScript(
@@ -342,7 +452,11 @@ const task = {
   testStatus: "none",
   buildable: true,
   verification: { criteria: ["Rail remains visible at mobile width"], diagnostics: [{ name: "test" }] },
-  latestEvidence: null,
+  latestEvidence: {
+    artifactPaths: ["src/rail.tsx"],
+    passed: true,
+    commands: [{ name: "bun test graph", passed: true, excerpt: "1 passed" }],
+  },
 }
 
 const graph = {

@@ -1,7 +1,7 @@
 import { For, Show, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { GraphCanvas } from "./graph-canvas"
-import type { GraphView } from "./graph-helpers"
+import { canPublishToMain, type GraphView } from "./graph-helpers"
 
 export const COCKPIT_REGIONS = ["Task rail", "Workflow graph", "Task details"] as const
 export const MOBILE_TABS = ["tasks", "graph", "details"] as const
@@ -16,10 +16,11 @@ export function cockpitActions(
   pending?: "mode" | "continue" | "pause",
 ) {
   const checkpoint = workflow.checkpoint.status === "pending"
+  const terminal = workflow.phase === "complete" || workflow.phase === "failed"
   return {
-    continue: !!workflow.mode && checkpoint,
-    pause: !!workflow.mode && !checkpoint && workflow.phase !== "complete" && workflow.phase !== "failed",
-    mode: workflow.phase !== "complete" && workflow.phase !== "failed" && !workflow.activeOperationKind,
+    continue: !!workflow.mode && checkpoint && !terminal,
+    pause: !!workflow.mode && !checkpoint && !terminal,
+    mode: !terminal && !workflow.activeOperationKind,
     continuePending: pending === "continue",
     pausePending: pending === "pause",
   }
@@ -78,6 +79,16 @@ export function rollupWorkflowStatus(tasks: ReadonlyArray<{ status: string; test
   if (tasks.length > 0 && tasks.every((task) => task.status === "verified")) return "verified"
   if (tasks.some((task) => task.status !== "pending" || task.testStatus !== "none")) return "implemented"
   return "pending"
+}
+
+export function cockpitGraphID(input: {
+  source: "currentPlan" | "main"
+  planSource: "currentPlan" | "version"
+  versionNumber?: number | null
+  revision: number
+}) {
+  if (input.source === "main") return "main"
+  return `${input.source}-${input.planSource}-${input.planSource === "version" ? input.versionNumber : input.revision}`
 }
 
 type Task = {
@@ -201,6 +212,8 @@ export function enrichWorkflowNodes(input: {
 
 export function GraphCockpit(props: {
   source?: "currentPlan" | "main"
+  planSource?: "currentPlan" | "version"
+  planVersion?: number | null
   workflow: CockpitWorkflow
   graph: GraphView
   selectedNodeID: string | null
@@ -212,10 +225,12 @@ export function GraphCockpit(props: {
   onViewChanges?: () => void
   onCenterNode?: (id: string) => void
   onCenterRequest?: (id: string, token: number) => void
+  onPublish?: () => void
   projectName?: string
   sessionTitle?: string
   actionError?: string
   pendingAction?: "mode" | "continue" | "pause"
+  publishPending?: boolean
 }) {
   const [local, setLocal] = createStore({
     mobileTab: "tasks" as "tasks" | "graph" | "details",
@@ -223,6 +238,7 @@ export function GraphCockpit(props: {
     centerRequestToken: 0,
   })
   const isPlan = () => props.source !== "main"
+  const isLivePlan = () => isPlan() && props.planSource !== "version"
   const tasks = () =>
     isPlan()
       ? props.workflow.tasks
@@ -275,9 +291,16 @@ export function GraphCockpit(props: {
       .filter((name): name is string => !!name)
   const evidence = () => selectedTask()?.latestEvidence
   const actions = () =>
-    isPlan()
+    isLivePlan()
       ? cockpitActions(props.workflow, props.pendingAction)
       : { continue: false, pause: false, mode: false, continuePending: false, pausePending: false }
+  const canPublish = () =>
+    isPlan() &&
+    canPublishToMain({
+      phase: props.workflow.phase,
+      planSource: props.planSource ?? "currentPlan",
+      nodeCount: props.graph.nodes.length,
+    })
   const state = () => cockpitViewState({ workflow: props.workflow })
   const nodes = () => enrichWorkflowNodes({ graph: props.graph, workflow: model(), selectedNodeID: selectedID() })
   const canvas = () => ({ ...props.graph, nodes: nodes() })
@@ -299,13 +322,20 @@ export function GraphCockpit(props: {
 
   return (
     <section class="graph-cockpit flex h-full min-h-0 flex-col text-text-strong" aria-label="Graph workflow cockpit">
-      <header class="graph-glass flex min-h-16 flex-wrap items-center gap-3 border-b px-4 py-2">
+      <header
+        class="graph-glass flex min-h-16 flex-wrap items-center gap-3 border-b px-4 py-2"
+        style={{ "padding-right": "9rem" }}
+      >
         <button class="graph-action secondary" aria-label="Back to session" onClick={props.onBackToSession}>
           ← Session
         </button>
         <div class="mr-auto min-w-48">
           <div class="text-xs font-medium uppercase tracking-[0.16em] text-text-weak">
-            {isPlan() ? "Current Plan workflow" : "Main graph · read-only"}
+            {isPlan()
+              ? props.planSource === "version"
+                ? `Published version ${props.planVersion} · read-only`
+                : "Current Plan workflow"
+              : "Main graph · read-only"}
           </div>
           <div class="font-semibold">
             {isPlan() ? (props.workflow.currentTask?.name ?? "No current task") : "Released project topology"}
@@ -314,12 +344,12 @@ export function GraphCockpit(props: {
             {[props.projectName, props.sessionTitle].filter(Boolean).join(" · ")}
           </div>
         </div>
-        <Show when={isPlan()}>
+        <Show when={isLivePlan()}>
           <div class="rounded-full border border-border-weak-base px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em]">
             {workflowPhaseStep(props.workflow.phase)} phase
           </div>
         </Show>
-        <Show when={isPlan()}>
+        <Show when={isLivePlan()}>
           <label class="flex items-center gap-2 text-sm">
             <span class="text-text-weak">Mode</span>
             <select
@@ -342,7 +372,7 @@ export function GraphCockpit(props: {
           </label>
         </Show>
         <Show
-          when={isPlan() && !actions().mode && props.workflow.phase !== "complete" && props.workflow.phase !== "failed"}
+          when={isLivePlan() && !actions().mode && props.workflow.phase !== "complete" && props.workflow.phase !== "failed"}
         >
           <span class="max-w-40 text-xs text-text-weak">
             Pause or wait for active workflow changes before changing execution mode.
@@ -376,6 +406,11 @@ export function GraphCockpit(props: {
         <Show when={actions().continue}>
           <button class="graph-action primary" disabled={actions().continuePending} onClick={props.onContinue}>
             Continue
+          </button>
+        </Show>
+        <Show when={canPublish()}>
+          <button class="graph-action primary" disabled={props.publishPending} onClick={props.onPublish}>
+            Publish to Main
           </button>
         </Show>
       </header>
@@ -496,7 +531,12 @@ export function GraphCockpit(props: {
           aria-label={COCKPIT_REGIONS[1]}
         >
           <GraphCanvas
-            graphID={`${isPlan() ? "workflow" : "main"}-${props.workflow.revision}`}
+            graphID={cockpitGraphID({
+              source: props.source ?? "currentPlan",
+              planSource: props.planSource ?? "currentPlan",
+              versionNumber: props.planVersion,
+              revision: props.workflow.revision,
+            })}
             data={canvas()}
             selectedNodeID={selectedID()}
             currentNodeID={isPlan() ? (props.workflow.currentTask?.id ?? null) : null}
@@ -583,7 +623,9 @@ export function GraphCockpit(props: {
                   </Show>
                   <InspectorSection title="Next action">
                     <p>
-                      {isPlan() && actions().continue
+                      {props.planSource === "version"
+                        ? `Published version ${props.planVersion} is read-only.`
+                        : isPlan() && actions().continue
                         ? "Review the checkpoint and Continue to authorize the next scope."
                         : isPlan() && selectedTask()?.current
                           ? "Complete the current task and run its verification criteria."

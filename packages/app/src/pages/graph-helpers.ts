@@ -28,6 +28,14 @@ export type LevelFilter = "all" | "L1" | "L2"
 export const CURRENT_PLAN_EMPTY_MESSAGE =
   "No Current Plan nodes yet. Describe your goal in Graph Vibe to create a plan."
 
+export function canPublishToMain(input: {
+  phase: string
+  planSource: "currentPlan" | "version"
+  nodeCount: number
+}) {
+  return input.phase === "complete" && input.planSource === "currentPlan" && input.nodeCount > 0
+}
+
 export function prefersReducedTransparency(matchMedia: (query: string) => { matches: boolean }) {
   return matchMedia("(prefers-reduced-transparency: reduce)").matches
 }

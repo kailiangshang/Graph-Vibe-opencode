@@ -6,10 +6,14 @@ import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { Button } from "@opencode-ai/ui/button"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { Dialog } from "@opencode-ai/ui/dialog"
+import { showToast } from "@/utils/toast"
 import { GraphCockpit, cockpitViewState } from "./graph-cockpit"
 import {
   CURRENT_PLAN_EMPTY_MESSAGE,
   type GraphView,
+  canPublishToMain,
   normalizeWorkflow,
   reconcileSelection,
   prefersReducedTransparency,
@@ -25,14 +29,16 @@ export default function GraphPage() {
   const sync = useSync()
   const sessionLayout = useSessionLayout()
   const queryClient = useQueryClient()
+  const dialog = useDialog()
   const [state, setState] = createStore({
     selectedNodeID: null as string | null,
     source: "currentPlan" as "currentPlan" | "main",
     conflict: "" as string,
     actionError: "" as string,
+    publishPending: false,
   })
   const directory = () => sdk().directory
-  const queryKey = () => [directory(), params.id, "graph"] as const
+  const queryKey = () => [directory(), "graph"] as const
 
   onMount(() => {
     const stop = sdk().event.listen((event: { details: { type: string } }) => {
@@ -44,20 +50,26 @@ export default function GraphPage() {
     onCleanup(stop)
   })
 
-  const graphQuery = createQuery(() => ({
-    queryKey: [...queryKey(), state.source] as const,
+  const planQuery = createQuery(() => ({
+    queryKey: [...queryKey(), "plan", params.id] as const,
     queryFn: async () => {
-      const response =
-        state.source === "main"
-          ? await sdk().client.graph.main({ directory: directory() })
-          : await sdk().client.graph.currentPlan({ session: params.id!, directory: directory() })
+      const response = await sdk().client.graph.planView({ session: params.id!, directory: directory() })
+      if (response.error || !response.data) throw new Error("Unable to load the graph")
+      return response.data
+    },
+  }))
+
+  const mainQuery = createQuery(() => ({
+    queryKey: [...queryKey(), "main"] as const,
+    queryFn: async () => {
+      const response = await sdk().client.graph.main({ directory: directory() })
       if (response.error || !response.data) throw new Error("Unable to load the graph")
       return response.data as GraphView
     },
   }))
 
   const workflowQuery = createQuery(() => ({
-    queryKey: [...queryKey(), "workflow"] as const,
+    queryKey: [...queryKey(), "workflow", params.id] as const,
     queryFn: async () => {
       const response = await sdk().client.graph.workflow({ session: params.id!, directory: directory() })
       if (response.error || !response.data) throw new Error("Unable to load workflow state")
@@ -67,9 +79,12 @@ export default function GraphPage() {
 
   createEffect(() => {
     const workflow = workflowQuery.data
-    const graph = graphQuery.data
+    const graph = state.source === "main" ? mainQuery.data : planQuery.data
     if (!workflow || !graph) return
-    setState("selectedNodeID", reconcileSelection(state.selectedNodeID, graph.nodes, workflow.currentTask?.id))
+    setState(
+      "selectedNodeID",
+      reconcileSelection(state.selectedNodeID, graph.nodes, state.source === "currentPlan" ? workflow.currentTask?.id : null),
+    )
   })
 
   const refresh = async () => {
@@ -140,11 +155,96 @@ export default function GraphPage() {
     onError: (error) => mutationError("pause", error),
   }))
 
+  const promoteMutation = createMutation(() => ({
+    mutationFn: async () => {
+      const response = await sdk().client.graph.promote({
+        session: params.id!,
+        directory: directory(),
+        graphPromotePayload: { message: "Publish completed graph plan" },
+      })
+      if (response.error || !response.data) throw response.error ?? { _tag: "UnexpectedPromotionResponse" }
+      return response.data
+    },
+    onSuccess: async (result) => {
+      dialog.close()
+      await refresh()
+      setState({
+        selectedNodeID: null,
+        source: "main",
+        conflict: "",
+        actionError: "",
+        publishPending: false,
+      })
+      showToast({
+        variant: "success",
+        title: `Created version ${result.versionNumber}`,
+        description: `Published ${result.nodes} nodes and ${result.edges} edges to Main.`,
+      })
+    },
+    onError: async () => {
+      dialog.close()
+      setState({
+        selectedNodeID: null,
+        source: "currentPlan",
+        conflict: "",
+        actionError: "Publication failed. Authoritative graph state was refreshed; review the Plan and retry.",
+        publishPending: false,
+      })
+      await refresh()
+    },
+  }))
+
+  const publish = () => {
+    if (state.publishPending || promoteMutation.isPending) return
+    setState("publishPending", true)
+    promoteMutation.mutate()
+  }
+
+  const openPublish = () => {
+    const plan = planQuery.data
+    const workflow = workflowQuery.data
+    if (
+      !plan ||
+      !workflow ||
+      !canPublishToMain({ phase: workflow.phase, planSource: plan.source, nodeCount: plan.nodes.length })
+    )
+      return
+    void dialog.show(() => (
+      <PublishToMainDialog
+        nodeCount={plan.nodes.length}
+        edgeCount={plan.edges.length}
+        pending={() => state.publishPending}
+        onConfirm={publish}
+      />
+    ))
+  }
+
+  const graph = () => (state.source === "main" ? mainQuery.data : planQuery.data)
+  const selectedGraphQuery = () => (state.source === "main" ? mainQuery : planQuery)
+  const mainEmpty = () => state.source === "main" && !!mainQuery.data && mainQuery.data.nodes.length === 0
+  const publishablePlan = () => {
+    const plan = planQuery.data
+    const workflow = workflowQuery.data
+    return !!(
+      plan &&
+      workflow &&
+      canPublishToMain({ phase: workflow.phase, planSource: plan.source, nodeCount: plan.nodes.length })
+    )
+  }
+  const showSourceSwitch = () => {
+    if (workflowQuery.isLoading) return false
+    return (
+      !!workflowQuery.data &&
+      ((planQuery.data?.nodes.length ?? 0) > 0 || workflowQuery.data.tasks.length > 0 || state.source === "main")
+    )
+  }
+
   const viewState = () => {
-    if (graphQuery.isLoading || workflowQuery.isLoading) return "loading"
+    if (selectedGraphQuery().isLoading || workflowQuery.isLoading) return "loading"
+    if (state.source === "main" && (mainQuery.data?.nodes.length ?? 0) > 0) return "ready"
     return cockpitViewState({
-      disconnected: graphQuery.isPaused || workflowQuery.isPaused,
-      error: graphQuery.isError || workflowQuery.isError,
+      disconnected: selectedGraphQuery().isPaused || workflowQuery.isPaused,
+      error: selectedGraphQuery().isError || workflowQuery.isError,
       conflict: !!state.conflict,
       workflow: workflowQuery.data,
     })
@@ -194,42 +294,52 @@ export default function GraphPage() {
           </Button>
         </GraphState>
       </Show>
+      <Show when={showSourceSwitch()}>
+        <GraphSourceSwitch source={state.source} onChange={(source) => setState("source", source)} />
+      </Show>
+      <Show when={mainEmpty() && !["loading", "disconnected", "error", "conflict"].includes(viewState())}>
+        <GraphState
+          title="No published topology"
+          detail={
+            publishablePlan()
+              ? "The completed Plan is ready to publish as the next project-wide version."
+              : "Main appears after a completed Plan is published."
+          }
+        >
+          <Show when={publishablePlan()}>
+            <Button
+              variant="primary"
+              size="large"
+              class="graph-action primary"
+              onClick={() => setState({ source: "currentPlan", selectedNodeID: null })}
+            >
+              Return to Plan
+            </Button>
+          </Show>
+        </GraphState>
+      </Show>
       <Show
         when={
-          !["loading", "disconnected", "error", "conflict", "empty"].includes(viewState())
+          !mainEmpty() && !["loading", "disconnected", "error", "conflict", "empty"].includes(viewState())
             ? workflowQuery.data
             : undefined
         }
       >
         {(ready) => (
           <div class="flex h-full min-h-0 flex-col">
-            <div class="graph-source-switch absolute right-4 top-2 z-20 flex rounded-md border border-border-weak-base bg-background-base/90 p-0.5">
-              <button
-                class="min-h-11 rounded px-3 text-xs"
-                classList={{ "bg-surface-raised-base": state.source === "currentPlan" }}
-                aria-pressed={state.source === "currentPlan"}
-                onClick={() => setState("source", "currentPlan")}
-              >
-                Plan
-              </button>
-              <button
-                class="min-h-11 rounded px-3 text-xs"
-                classList={{ "bg-surface-raised-base": state.source === "main" }}
-                aria-pressed={state.source === "main"}
-                onClick={() => setState("source", "main")}
-              >
-                Main
-              </button>
-            </div>
             <GraphCockpit
               source={state.source}
+              planSource={planQuery.data?.source}
+              planVersion={typeof planQuery.data?.versionNumber === "number" ? planQuery.data.versionNumber : null}
               workflow={ready()}
-              graph={graphQuery.data!}
+              graph={graph()!}
               selectedNodeID={state.selectedNodeID}
               onSelectNode={(id) => setState("selectedNodeID", id)}
               onModeChange={(mode) => modeMutation.mutate(mode)}
               onContinue={() => continueMutation.mutate()}
               onPause={() => pauseMutation.mutate()}
+              onPublish={openPublish}
+              publishPending={state.publishPending}
               projectName={sync().project?.name ?? sync().project?.worktree}
               sessionTitle={params.id ? sync().session.get(params.id)?.title : undefined}
               actionError={state.actionError}
@@ -252,6 +362,61 @@ export default function GraphPage() {
         )}
       </Show>
     </div>
+  )
+}
+
+function GraphSourceSwitch(props: {
+  source: "currentPlan" | "main"
+  onChange: (source: "currentPlan" | "main") => void
+}) {
+  return (
+    <div class="graph-source-switch absolute right-4 top-2 z-20 flex rounded-md border border-border-weak-base bg-background-base/90 p-0.5">
+      <button
+        class="min-h-11 rounded px-3 text-xs"
+        classList={{ "bg-surface-raised-base": props.source === "currentPlan" }}
+        aria-pressed={props.source === "currentPlan"}
+        onClick={() => props.onChange("currentPlan")}
+      >
+        Plan
+      </button>
+      <button
+        class="min-h-11 rounded px-3 text-xs"
+        classList={{ "bg-surface-raised-base": props.source === "main" }}
+        aria-pressed={props.source === "main"}
+        onClick={() => props.onChange("main")}
+      >
+        Main
+      </button>
+    </div>
+  )
+}
+
+function PublishToMainDialog(props: {
+  nodeCount: number
+  edgeCount: number
+  pending: () => boolean
+  onConfirm: () => void
+}) {
+  const dialog = useDialog()
+  return (
+    <Dialog title="Publish to Main" fit>
+      <div class="flex flex-col gap-4 pl-6 pr-2.5 pb-3">
+        <p class="text-14-regular text-text-strong">
+          This will publish {props.nodeCount} nodes and {props.edgeCount} edges as a project-wide versioned publication.
+        </p>
+        <p class="text-12-regular text-text-weak">
+          Main will update from the authoritative published graph and this Plan will remain available as a read-only version.
+        </p>
+        <div class="flex justify-end gap-2">
+          <Button variant="ghost" size="large" disabled={props.pending()} onClick={() => dialog.close()}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="large" disabled={props.pending()} onClick={props.onConfirm}>
+            Publish to Main
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   )
 }
 

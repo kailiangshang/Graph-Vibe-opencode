@@ -160,6 +160,54 @@ test("Main derives its rail and inspector from visible graph nodes without plan 
   root.remove()
 })
 
+test("completed live Plan exposes publication while a version-backed Plan is read-only", () => {
+  const root = document.createElement("div")
+  document.body.append(root)
+  let published = 0
+  const disposeLive = render(
+    () =>
+      createComponent(GraphCockpit, {
+        planSource: "currentPlan",
+        planVersion: 7,
+        workflow: { ...workflow, phase: "complete", progress: { verified: 1, total: 1, failed: 0, percent: 100 } },
+        graph: graphWithTask(),
+        selectedNodeID: "task",
+        onSelectNode: () => {},
+        onPublish: () => published++,
+      }),
+    root,
+  )
+
+  const publish = () => [...root.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Publish to Main")
+  expect(publish()).toBeDefined()
+  publish()!.click()
+  expect(published).toBe(1)
+
+  disposeLive()
+  const disposeVersion = render(
+    () =>
+      createComponent(GraphCockpit, {
+        planSource: "version",
+        planVersion: 7,
+        workflow: { ...workflow, phase: "complete", progress: { verified: 1, total: 1, failed: 0, percent: 100 } },
+        graph: graphWithTask(),
+        selectedNodeID: "task",
+        onSelectNode: () => {},
+        onPublish: () => published++,
+      }),
+    root,
+  )
+  expect(root.textContent).toContain("Published version 7 · read-only")
+  expect(root.textContent).toContain("Build rail")
+  expect(root.textContent).toContain("1/1 verified")
+  expect(publish()).toBeUndefined()
+  expect(root.querySelector('[aria-label="Execution mode"]')).toBeNull()
+  expect(root.textContent).not.toContain("Continue")
+  expect(root.textContent).not.toContain("Pause")
+  disposeVersion()
+  root.remove()
+})
+
 test("renders Pause only for an active authorized workflow", () => {
   const root = document.createElement("div")
   document.body.append(root)
