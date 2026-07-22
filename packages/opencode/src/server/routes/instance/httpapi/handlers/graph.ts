@@ -16,6 +16,7 @@ import { InstanceHttpApi } from "../api"
 import { notFound } from "../errors"
 import {
   DiffQuery,
+  GraphPlanConflict,
   GraphWorkflowRevisionConflict,
   GraphWorkflowActiveOperation,
   PlanAdmitPayload,
@@ -77,6 +78,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
         source: view.source,
         versionNumber: view.versionNumber,
         publishedAt: view.publishedAt,
+        planHash: view.planHash,
         nodes: view.nodes,
         edges: view.edges,
       }
@@ -395,6 +397,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
           sessionID: session.id,
           message: ctx.payload?.message,
           expectedRevision: ctx.payload?.expectedRevision,
+          expectedPlanHash: ctx.payload?.expectedPlanHash,
         })
         .pipe(
           Effect.catchTag("GraphWorkflowState.PromotionBlocked", () => Effect.fail(new HttpApiError.BadRequest({}))),
@@ -404,6 +407,15 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
                 expectedRevision: error.expectedRevision,
                 actualRevision: error.actualRevision,
                 message: `Workflow revision conflict: expected ${error.expectedRevision}, actual ${error.actualRevision}`,
+              }),
+            ),
+          ),
+          Effect.catchTag("GraphWorkflowState.PlanConflict", (error) =>
+            Effect.fail(
+              new GraphPlanConflict({
+                expectedPlanHash: error.expectedPlanHash,
+                actualPlanHash: error.actualPlanHash,
+                message: "Current Plan changed after publication was reviewed.",
               }),
             ),
           ),

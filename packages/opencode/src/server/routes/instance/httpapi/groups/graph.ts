@@ -41,10 +41,13 @@ const GraphViewResponse = Schema.Struct({
   edges: Schema.Array(GraphEdgeResponse),
 }).annotate({ identifier: "GraphView" })
 
+const PlanHash = Schema.String.check(Schema.isPattern(/^sha256:[a-f0-9]{64}$/))
+
 const SessionPlanViewResponse = Schema.Struct({
   source: Schema.Literals(["currentPlan", "version"]),
   versionNumber: Schema.NullOr(Schema.Number),
   publishedAt: Schema.NullOr(Schema.Number),
+  planHash: PlanHash,
   nodes: Schema.Array(GraphNodeResponse),
   edges: Schema.Array(GraphEdgeResponse),
 }).annotate({ identifier: "SessionPlanView" })
@@ -82,6 +85,7 @@ export const PlanAdmitPayload = Schema.Struct({
 export const PromotePayload = Schema.Struct({
   message: Schema.optional(Schema.String),
   expectedRevision: Schema.optional(Schema.Number),
+  expectedPlanHash: Schema.optional(PlanHash),
 }).annotate({ identifier: "GraphPromotePayload" })
 
 export const WorkflowModePayload = Schema.Struct({
@@ -103,6 +107,16 @@ export class GraphWorkflowRevisionConflict extends Schema.TaggedErrorClass<Graph
   {
     expectedRevision: Schema.Number,
     actualRevision: Schema.Number,
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+
+export class GraphPlanConflict extends Schema.TaggedErrorClass<GraphPlanConflict>()(
+  "GraphPlanConflict",
+  {
+    expectedPlanHash: PlanHash,
+    actualPlanHash: PlanHash,
     message: Schema.String,
   },
   { httpApiStatus: 409 },
@@ -501,6 +515,7 @@ export const GraphApi = HttpApi.make("graph")
             HttpApiError.BadRequest,
             ApiNotFoundError,
             GraphWorkflowRevisionConflict,
+            GraphPlanConflict,
             ProductMigration.Required,
           ],
         }).annotateMerge(

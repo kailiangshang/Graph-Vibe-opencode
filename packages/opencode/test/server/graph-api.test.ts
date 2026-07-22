@@ -112,6 +112,7 @@ interface SessionPlanViewResponse extends GraphViewResponse {
   source: "currentPlan" | "version"
   versionNumber: number | null
   publishedAt: number | null
+  planHash: string
 }
 
 const verification = { criteria: ["observable result"], diagnostics: [{ name: "test" }] }
@@ -375,6 +376,7 @@ describe("graph HttpApi", () => {
         source: "currentPlan",
         versionNumber: null,
         publishedAt: null,
+        planHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         nodes: [],
         edges: [],
       })
@@ -1180,6 +1182,7 @@ describe("graph HttpApi", () => {
       expect(before.source).toBe("currentPlan")
       expect(before.versionNumber).toBeNull()
       expect(before.publishedAt).toBeNull()
+      expect(before.planHash).toMatch(/^sha256:[a-f0-9]{64}$/)
       expect(before.nodes.map((node) => node.name)).toEqual(["Done Task"])
 
       const stale = yield* send(
@@ -1196,10 +1199,28 @@ describe("graph HttpApi", () => {
       expect((yield* storage.currentPlan({ sessionID: session.id })).nodes).toHaveLength(1)
       expect(yield* storage.version.list({ projectID: session.projectID })).toHaveLength(0)
 
+      yield* storage.node.update(task.id, { name: "Changed after review" })
+      const changed = yield* requestJson<SessionPlanViewResponse>(
+        `/graph/plan-view?directory=${directory}&session=${session.id}`,
+      )
+      const topologyConflict = yield* send(
+        "POST",
+        `/graph/current-plan/promote?directory=${directory}&session=${session.id}`,
+        { expectedRevision: completed.revision, expectedPlanHash: before.planHash },
+      )
+      expect(topologyConflict.status).toBe(409)
+      expect(yield* topologyConflict.json).toMatchObject({
+        _tag: "GraphPlanConflict",
+        expectedPlanHash: before.planHash,
+        actualPlanHash: changed.planHash,
+      })
+      expect((yield* storage.currentPlan({ sessionID: session.id })).nodes).toHaveLength(1)
+      expect(yield* storage.version.list({ projectID: session.projectID })).toHaveLength(0)
+
       const result = yield* sendJson<{ versionNumber: number; nodes: number }>(
         "POST",
         `/graph/current-plan/promote?directory=${directory}&session=${session.id}`,
-        { message: "completed", expectedRevision: completed.revision },
+        { message: "completed", expectedRevision: completed.revision, expectedPlanHash: changed.planHash },
       )
       expect(result.status).toBe(200)
       expect(result.json).toMatchObject({ versionNumber: 1, nodes: 1 })
@@ -1212,14 +1233,15 @@ describe("graph HttpApi", () => {
       )
       const main = yield* requestJson<GraphViewResponse>(`/graph/main?directory=${directory}`)
       expect(currentPlan).toEqual({ nodes: [], edges: [] })
-      expect(Object.keys(planView).sort()).toEqual(["edges", "nodes", "publishedAt", "source", "versionNumber"])
+      expect(Object.keys(planView).sort()).toEqual(["edges", "nodes", "planHash", "publishedAt", "source", "versionNumber"])
       expect(planView.source).toBe("version")
       expect(planView.versionNumber).toBe(1)
       expect(planView.publishedAt).toBeNumber()
-      expect(planView.nodes).toEqual(before.nodes)
-      expect(planView.edges).toEqual(before.edges)
+      expect(planView.planHash).toBe(changed.planHash)
+      expect(planView.nodes).toEqual(changed.nodes)
+      expect(planView.edges).toEqual(changed.edges)
       expect(main.nodes.map((node) => ({ name: node.name, sessionID: node.sessionID }))).toEqual([
-        { name: "Done Task", sessionID: null },
+        { name: "Changed after review", sessionID: null },
       ])
 
       const repeated = yield* send(

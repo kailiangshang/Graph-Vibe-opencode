@@ -88,7 +88,8 @@ describe("PublicApi OpenAPI v2 errors", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
     const schema = spec.components.schemas.SessionPlanView
 
-    expect(schema?.required).toEqual(["source", "versionNumber", "publishedAt", "nodes", "edges"])
+    expect(schema?.required).toEqual(["source", "versionNumber", "publishedAt", "planHash", "nodes", "edges"])
+    expect(schema?.properties?.planHash).toMatchObject({ type: "string", pattern: "^sha256:[a-f0-9]{64}$" })
     expect(schema?.properties?.versionNumber?.anyOf).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "null" })]),
     )
@@ -102,9 +103,14 @@ describe("PublicApi OpenAPI v2 errors", () => {
     const payload = spec.components.schemas.GraphPromotePayload
 
     expect(payload?.properties?.expectedRevision?.anyOf).toContainEqual(expect.objectContaining({ type: "number" }))
+    expect(payload?.properties?.expectedPlanHash).toMatchObject({
+      type: "string",
+      pattern: "^sha256:[a-f0-9]{64}$",
+    })
     expect(payload?.required ?? []).not.toContain("expectedRevision")
-    expect(componentNames(spec.paths["/graph/current-plan/promote"]?.post?.responses?.["409"])).toContain(
-      "GraphWorkflowRevisionConflict",
+    expect(payload?.required ?? []).not.toContain("expectedPlanHash")
+    expect(componentNames(spec.paths["/graph/current-plan/promote"]?.post?.responses?.["409"])).toEqual(
+      expect.arrayContaining(["GraphPlanConflict", "GraphWorkflowRevisionConflict"]),
     )
   })
 

@@ -2523,6 +2523,7 @@ export type SessionPlanView = {
   source: "currentPlan" | "version"
   versionNumber: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | null
   publishedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | null
+  planHash: string
   nodes: Array<GraphNode>
   edges: Array<GraphEdge>
 }
@@ -2769,6 +2770,7 @@ export type GraphWorkflowPausePayload = {
 export type GraphPromotePayload = {
   message?: string
   expectedRevision?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  expectedPlanHash?: string
 }
 
 export type GraphPromoteResult = {
@@ -2776,6 +2778,13 @@ export type GraphPromoteResult = {
   versionNumber: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   nodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   edges: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type GraphPlanConflict = {
+  _tag: "GraphPlanConflict"
+  expectedPlanHash: string
+  actualPlanHash: string
+  message: string
 }
 
 export type Path = {
@@ -9613,9 +9622,9 @@ export type GraphPromoteErrors = {
    */
   404: NotFoundError | ProductMigrationRequired
   /**
-   * GraphWorkflowRevisionConflict
+   * GraphWorkflowRevisionConflict | GraphPlanConflict
    */
-  409: GraphWorkflowRevisionConflict
+  409: GraphWorkflowRevisionConflict | GraphPlanConflict
 }
 
 export type GraphPromoteError = GraphPromoteErrors[keyof GraphPromoteErrors]

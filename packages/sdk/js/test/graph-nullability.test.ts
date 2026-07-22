@@ -33,7 +33,8 @@ test("preserves nullable Graph response fields", () => {
   const planView = {
     versionNumber: null,
     publishedAt: null,
-  } satisfies Pick<SessionPlanView, "versionNumber" | "publishedAt">
+    planHash: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  } satisfies Pick<SessionPlanView, "versionNumber" | "publishedAt" | "planHash">
   const toolRun = {
     inputSummary: null,
     outputSummary: null,
@@ -81,7 +82,11 @@ test("preserves nullable Graph response fields", () => {
   expect(Object.values(node)).toEqual([null, null, null, null, null, null])
   expect(Object.values(task)).toEqual([null, null, null, null])
   expect(version.message).toBeNull()
-  expect(Object.values(planView)).toEqual([null, null])
+  expect(Object.values(planView)).toEqual([
+    null,
+    null,
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  ])
   expect(Object.values(toolRun)).toEqual([null, null, null, null])
   expect(evidence.commands[0].exitCode).toBeNull()
   expect(workflow).toEqual({
@@ -119,7 +124,9 @@ test("generates the optional Graph promotion revision guard and conflict", async
   )
 
   expect(payload).toContain("expectedRevision?:")
+  expect(payload).toContain("expectedPlanHash?:")
   expect(errors).toContain("GraphWorkflowRevisionConflict")
+  expect(errors).toContain("GraphPlanConflict")
 })
 
 test("strictly compiles nullable Graph fields and workflow methods", async () => {
