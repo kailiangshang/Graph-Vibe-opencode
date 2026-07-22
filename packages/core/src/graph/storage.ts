@@ -8,6 +8,7 @@ import { ProjectV2 } from "../project"
 import { SessionSchema } from "../session/schema"
 import { SessionTable } from "../session/sql"
 import { GraphNodeTable, GraphEdgeTable, GraphVersionTable } from "./sql"
+import { GraphHash } from "./hash"
 import { Graph } from "@opencode-ai/schema/graph"
 import type {
   NodeType,
@@ -32,10 +33,9 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Gra
   id: Schema.String,
 }) {}
 
-export class SnapshotDecodeError extends Schema.TaggedErrorClass<SnapshotDecodeError>()(
-  "GraphV2.SnapshotDecodeError",
-  { message: Schema.String },
-) {}
+export class SnapshotDecodeError extends Schema.TaggedErrorClass<SnapshotDecodeError>()("GraphV2.SnapshotDecodeError", {
+  message: Schema.String,
+}) {}
 
 export interface NodeRow {
   readonly id: NodeID
@@ -87,6 +87,7 @@ export interface SessionPlanView extends GraphView {
   readonly source: "currentPlan" | "version"
   readonly versionNumber: number | null
   readonly publishedAt: number | null
+  readonly planHash: string
 }
 
 export interface SessionVersion extends Omit<VersionRow, "snapshot"> {
@@ -246,6 +247,7 @@ export const PromoteInput = Schema.Struct({
   sessionID: Schema.String,
   message: Schema.String.pipe(Schema.optional),
   expectedRevision: Schema.Number.pipe(Schema.optional),
+  expectedPlanHash: Schema.String.pipe(Schema.optional),
 }).annotate({ identifier: "GraphStorage.PromoteInput" })
 export type PromoteInput = typeof PromoteInput.Type
 
@@ -272,11 +274,17 @@ export interface Interface {
   }
   readonly main: (input: { projectID: ProjectV2.ID }) => Effect.Effect<GraphView>
   readonly currentPlan: (input: { sessionID: string }) => Effect.Effect<GraphView>
-  readonly planView: (input: { projectID: ProjectV2.ID; sessionID: string }) => Effect.Effect<SessionPlanView, SnapshotDecodeError>
+  readonly planView: (input: {
+    projectID: ProjectV2.ID
+    sessionID: string
+  }) => Effect.Effect<SessionPlanView, SnapshotDecodeError>
   readonly promote: (input: PromoteInput) => Effect.Effect<PromoteResult>
   readonly version: {
     readonly list: (input: { projectID: ProjectV2.ID }) => Effect.Effect<ReadonlyArray<VersionRow>>
-    readonly get: (input: { projectID: ProjectV2.ID; versionNumber: number }) => Effect.Effect<VersionRow, NotFoundError>
+    readonly get: (input: {
+      projectID: ProjectV2.ID
+      versionNumber: number
+    }) => Effect.Effect<VersionRow, NotFoundError>
     readonly latestForSession: (input: {
       projectID: ProjectV2.ID
       sessionID: string
@@ -330,35 +338,45 @@ const versionRow = (r: typeof GraphVersionTable.$inferSelect): VersionRow => ({
 const decodeSnapshot = (input: unknown): Effect.Effect<GraphView, SnapshotDecodeError> =>
   Schema.decodeUnknownEffect(Snapshot)(input).pipe(
     Effect.map((snapshot) => ({
-      nodes: snapshot.nodes.map((row): NodeRow => "project_id" in row ? {
-        id: row.id,
-        projectID: row.project_id,
-        sessionID: row.session_id,
-        type: row.type,
-        name: row.name,
-        level: row.level,
-        priority: row.priority,
-        category: row.category,
-        status: row.status,
-        desc: row.desc,
-        content: row.content,
-        verification: row.verification,
-        codeHash: row.code_hash,
-        testStatus: row.test_status,
-        confidence: row.confidence,
-        timeCreated: row.time_created,
-        timeUpdated: row.time_updated,
-      } : row),
-      edges: snapshot.edges.map((row): EdgeRow => "project_id" in row ? {
-        id: row.id,
-        projectID: row.project_id,
-        sessionID: row.session_id,
-        sourceID: row.source_id,
-        targetID: row.target_id,
-        relation: row.relation,
-        confidence: row.confidence,
-        timeCreated: row.time_created,
-      } : row),
+      nodes: snapshot.nodes.map(
+        (row): NodeRow =>
+          "project_id" in row
+            ? {
+                id: row.id,
+                projectID: row.project_id,
+                sessionID: row.session_id,
+                type: row.type,
+                name: row.name,
+                level: row.level,
+                priority: row.priority,
+                category: row.category,
+                status: row.status,
+                desc: row.desc,
+                content: row.content,
+                verification: row.verification,
+                codeHash: row.code_hash,
+                testStatus: row.test_status,
+                confidence: row.confidence,
+                timeCreated: row.time_created,
+                timeUpdated: row.time_updated,
+              }
+            : row,
+      ),
+      edges: snapshot.edges.map(
+        (row): EdgeRow =>
+          "project_id" in row
+            ? {
+                id: row.id,
+                projectID: row.project_id,
+                sessionID: row.session_id,
+                sourceID: row.source_id,
+                targetID: row.target_id,
+                relation: row.relation,
+                confidence: row.confidence,
+                timeCreated: row.time_created,
+              }
+            : row,
+      ),
     })),
     Effect.mapError((cause) => new SnapshotDecodeError({ message: String(cause) })),
   )
@@ -431,7 +449,12 @@ export const layer = Layer.effect(
       if (filter.sessionID !== undefined) conds.push(eq(GraphNodeTable.session_id, filter.sessionID))
       if (filter.type !== undefined) conds.push(eq(GraphNodeTable.type, filter.type))
       if (filter.status !== undefined) conds.push(eq(GraphNodeTable.status, filter.status))
-      const rows = yield* db.select().from(GraphNodeTable).where(and(...conds)).all().pipe(Effect.orDie)
+      const rows = yield* db
+        .select()
+        .from(GraphNodeTable)
+        .where(and(...conds))
+        .all()
+        .pipe(Effect.orDie)
       return rows.map(nodeRow)
     })
 
@@ -469,7 +492,12 @@ export const layer = Layer.effect(
       if (filter.sourceID !== undefined) conds.push(eq(GraphEdgeTable.source_id, filter.sourceID))
       if (filter.targetID !== undefined) conds.push(eq(GraphEdgeTable.target_id, filter.targetID))
       if (filter.relation !== undefined) conds.push(eq(GraphEdgeTable.relation, filter.relation))
-      const rows = yield* db.select().from(GraphEdgeTable).where(and(...conds)).all().pipe(Effect.orDie)
+      const rows = yield* db
+        .select()
+        .from(GraphEdgeTable)
+        .where(and(...conds))
+        .all()
+        .pipe(Effect.orDie)
       return rows.map(edgeRow)
     })
 
@@ -513,13 +541,17 @@ export const layer = Layer.effect(
               const planNodes = yield* db
                 .select()
                 .from(GraphNodeTable)
-                .where(and(eq(GraphNodeTable.project_id, input.projectID), eq(GraphNodeTable.session_id, input.sessionID)))
+                .where(
+                  and(eq(GraphNodeTable.project_id, input.projectID), eq(GraphNodeTable.session_id, input.sessionID)),
+                )
                 .all()
                 .pipe(Effect.orDie)
               const planEdges = yield* db
                 .select()
                 .from(GraphEdgeTable)
-                .where(and(eq(GraphEdgeTable.project_id, input.projectID), eq(GraphEdgeTable.session_id, input.sessionID)))
+                .where(
+                  and(eq(GraphEdgeTable.project_id, input.projectID), eq(GraphEdgeTable.session_id, input.sessionID)),
+                )
                 .all()
                 .pipe(Effect.orDie)
 
@@ -590,7 +622,12 @@ export const layer = Layer.effect(
       const r = yield* db
         .select()
         .from(GraphVersionTable)
-        .where(and(eq(GraphVersionTable.project_id, input.projectID), eq(GraphVersionTable.version_number, input.versionNumber)))
+        .where(
+          and(
+            eq(GraphVersionTable.project_id, input.projectID),
+            eq(GraphVersionTable.version_number, input.versionNumber),
+          ),
+        )
         .get()
         .pipe(Effect.orDie)
       if (!r) return yield* new NotFoundError({ kind: "version", id: String(input.versionNumber) })
@@ -604,23 +641,27 @@ export const layer = Layer.effect(
       const session = yield* db
         .select({ metadata: SessionTable.metadata })
         .from(SessionTable)
-        .where(and(
-          eq(SessionTable.id, SessionSchema.ID.make(input.sessionID)),
-          eq(SessionTable.project_id, input.projectID),
-        ))
+        .where(
+          and(
+            eq(SessionTable.id, SessionSchema.ID.make(input.sessionID)),
+            eq(SessionTable.project_id, input.projectID),
+          ),
+        )
         .get()
         .pipe(Effect.orDie)
       const enhancementVersionID = migrationEnhancementVersionID(input.sessionID, session?.metadata)
       const r = yield* db
         .select()
         .from(GraphVersionTable)
-        .where(and(
-          eq(GraphVersionTable.project_id, input.projectID),
-          eq(GraphVersionTable.session_id, input.sessionID),
-          ...(enhancementVersionID
-            ? [or(ne(GraphVersionTable.id, enhancementVersionID), ne(GraphVersionTable.time_created, 0))]
-            : []),
-        ))
+        .where(
+          and(
+            eq(GraphVersionTable.project_id, input.projectID),
+            eq(GraphVersionTable.session_id, input.sessionID),
+            ...(enhancementVersionID
+              ? [or(ne(GraphVersionTable.id, enhancementVersionID), ne(GraphVersionTable.time_created, 0))]
+              : []),
+          ),
+        )
         .orderBy(desc(GraphVersionTable.version_number))
         .get()
         .pipe(Effect.orDie)
@@ -634,12 +675,14 @@ export const layer = Layer.effect(
     }) {
       const nodes = yield* nodeList({ projectID: input.projectID, sessionID: input.sessionID })
       if (nodes.length > 0) {
+        const edges = yield* edgeList({ projectID: input.projectID, sessionID: input.sessionID })
         return {
           nodes,
-          edges: yield* edgeList({ projectID: input.projectID, sessionID: input.sessionID }),
+          edges,
           source: "currentPlan" as const,
           versionNumber: null,
           publishedAt: null,
+          planHash: GraphHash.digest({ nodes, edges }),
         }
       }
       const version = yield* versionLatestForSession(input)
@@ -649,9 +692,17 @@ export const layer = Layer.effect(
           source: "version" as const,
           versionNumber: version.versionNumber,
           publishedAt: version.timeCreated,
+          planHash: GraphHash.digest(version.snapshot),
         }
       }
-      return { nodes: [], edges: [], source: "currentPlan" as const, versionNumber: null, publishedAt: null }
+      const graph = { nodes: [], edges: [] }
+      return {
+        ...graph,
+        source: "currentPlan" as const,
+        versionNumber: null,
+        publishedAt: null,
+        planHash: GraphHash.digest(graph),
+      }
     })
 
     return Service.of({
