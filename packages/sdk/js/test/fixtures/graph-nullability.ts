@@ -1,5 +1,6 @@
 import type {
   GraphNode,
+  GraphPlanViewErrors,
   GraphToolRun,
   GraphVersion,
   GraphWorkflow,
@@ -10,8 +11,9 @@ import type {
   GraphWorkflowModeErrors,
   GraphWorkflowPauseErrors,
   GraphWorkflowTask,
+  SessionPlanView,
 } from "../../src/v2/gen/types.gen.js"
-import type { Graph } from "../../src/v2/gen/sdk.gen.js"
+import type { Graph, OpencodeClient } from "../../src/v2/gen/sdk.gen.js"
 
 const node = {
   sessionID: null,
@@ -32,6 +34,11 @@ const task = {
 const version = {
   message: null,
 } satisfies Pick<GraphVersion, "message">
+
+const planView = {
+  versionNumber: null,
+  publishedAt: null,
+} satisfies Pick<SessionPlanView, "versionNumber" | "publishedAt">
 
 const toolRun = {
   inputSummary: null,
@@ -84,16 +91,21 @@ const workflowServerError: GraphWorkflowErrors[500] = internalServerError
 const modeServerError: GraphWorkflowModeErrors[500] = internalServerError
 const approveServerError: GraphWorkflowApproveErrors[500] = internalServerError
 const pauseServerError: GraphWorkflowPauseErrors[500] = internalServerError
+const planViewServerError: GraphPlanViewErrors[500] = internalServerError
 
 declare const graph: Graph
+declare const sdk: () => { client: OpencodeClient; directory: string }
 graph.workflow
+graph.planView
 graph.workflowMode
 graph.workflowApprove
 graph.workflowPause
+sdk().client.graph.planView({ session: "ses_test", directory: sdk().directory })
 
 void node
 void task
 void version
+void planView
 void toolRun
 void evidence
 void workflow
@@ -102,3 +114,4 @@ void workflowServerError
 void modeServerError
 void approveServerError
 void pauseServerError
+void planViewServerError

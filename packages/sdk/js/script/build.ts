@@ -130,7 +130,13 @@ const graphNodeTypesPatched = patchGeneratedType(formattedTypes, "GraphNode", (b
 const graphVersionTypesPatched = patchGeneratedType(graphNodeTypesPatched, "GraphVersion", (body) =>
   patchNullableScalarFields(body, [["  message", "string"]]),
 )
-const graphToolRunTypesPatched = patchGeneratedType(graphVersionTypesPatched, "GraphToolRun", (body) =>
+const sessionPlanViewTypesPatched = patchGeneratedType(graphVersionTypesPatched, "SessionPlanView", (body) =>
+  patchNullableScalarFields(body, [
+    ["  versionNumber", 'number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"'],
+    ["  publishedAt", 'number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"'],
+  ]),
+)
+const graphToolRunTypesPatched = patchGeneratedType(sessionPlanViewTypesPatched, "GraphToolRun", (body) =>
   patchNullableUnionField(
     patchNullableScalarFields(body, [
       ["  inputSummary", "string"],

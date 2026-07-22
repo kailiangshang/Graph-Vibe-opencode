@@ -62,6 +62,26 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       return { nodes: view.nodes, edges: view.edges }
     })
 
+    const planView = Effect.fn("GraphHttpApi.planView")(function* (ctx: {
+      query: typeof SessionRequiredQuery.Type
+    }) {
+      const session = yield* resolveSession(ctx.query.session)
+      const view = yield* domain
+        .planView({ projectID: session.projectID, sessionID: session.id })
+        .pipe(
+          Effect.catchTag("GraphV2.SnapshotDecodeError", () =>
+            Effect.fail(new HttpApiError.InternalServerError({})),
+          ),
+        )
+      return {
+        source: view.source,
+        versionNumber: view.versionNumber,
+        publishedAt: view.publishedAt,
+        nodes: view.nodes,
+        edges: view.edges,
+      }
+    })
+
     const node = Effect.fn("GraphHttpApi.node")(function* (ctx: { params: { nodeID: string } }) {
       return yield* domain.node
         .get(ctx.params.nodeID as Graph.NodeID)
@@ -385,6 +405,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
     return handlers
       .handle("main", main)
       .handle("currentPlan", currentPlan)
+      .handle("planView", planView)
       .handle("node", node)
       .handle("nodeReadiness", nodeReadiness)
       .handle("nodeAudit", nodeAudit)

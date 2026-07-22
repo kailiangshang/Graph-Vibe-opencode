@@ -2519,6 +2519,14 @@ export type NotFoundError = {
   }
 }
 
+export type SessionPlanView = {
+  source: "currentPlan" | "version"
+  versionNumber: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | null
+  publishedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | null
+  nodes: Array<GraphNode>
+  edges: Array<GraphEdge>
+}
+
 export type GraphNodeBlocker = {
   nodeID: string
   nodeName: string
@@ -9117,6 +9125,43 @@ export type GraphCurrentPlanResponses = {
 }
 
 export type GraphCurrentPlanResponse = GraphCurrentPlanResponses[keyof GraphCurrentPlanResponses]
+
+export type GraphPlanViewData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    session: string
+  }
+  url: "/graph/plan-view"
+}
+
+export type GraphPlanViewErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
+}
+
+export type GraphPlanViewError = GraphPlanViewErrors[keyof GraphPlanViewErrors]
+
+export type GraphPlanViewResponses = {
+  /**
+   * Session plan view
+   */
+  200: SessionPlanView
+}
+
+export type GraphPlanViewResponse = GraphPlanViewResponses[keyof GraphPlanViewResponses]
 
 export type GraphDeleteNodeData = {
   body?: never

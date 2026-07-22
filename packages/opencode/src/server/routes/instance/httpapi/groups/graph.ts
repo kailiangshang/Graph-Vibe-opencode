@@ -41,6 +41,14 @@ const GraphViewResponse = Schema.Struct({
   edges: Schema.Array(GraphEdgeResponse),
 }).annotate({ identifier: "GraphView" })
 
+const SessionPlanViewResponse = Schema.Struct({
+  source: Schema.Literals(["currentPlan", "version"]),
+  versionNumber: Schema.NullOr(Schema.Number),
+  publishedAt: Schema.NullOr(Schema.Number),
+  nodes: Schema.Array(GraphNodeResponse),
+  edges: Schema.Array(GraphEdgeResponse),
+}).annotate({ identifier: "SessionPlanView" })
+
 const PlanNodePayload = Schema.Struct({
   id: Schema.optional(Graph.NodeID),
   type: Graph.NodeType,
@@ -271,6 +279,7 @@ export const DiffQuery = Schema.Struct({
 export const GraphPaths = {
   main: "/graph/main",
   currentPlan: "/graph/current-plan",
+  planView: "/graph/plan-view",
   node: "/graph/node/:nodeID",
   nodeReadiness: "/graph/node/:nodeID/readiness",
   nodeAudit: "/graph/node/:nodeID/audit",
@@ -310,6 +319,17 @@ export const GraphApi = HttpApi.make("graph")
             identifier: "graph.currentPlan",
             summary: "Get session CurrentPlan",
             description: "Retrieve the session-scoped CurrentPlan graph (nodes and edges with session_id = session).",
+          }),
+        ),
+        HttpApiEndpoint.get("planView", GraphPaths.planView, {
+          query: SessionRequiredQuery,
+          success: described(SessionPlanViewResponse, "Session plan view"),
+          error: [ApiNotFoundError, HttpApiError.InternalServerError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "graph.planView",
+            summary: "Get session plan view",
+            description: "Retrieve the current session plan or its latest published version snapshot.",
           }),
         ),
         HttpApiEndpoint.get("node", GraphPaths.node, {

@@ -107,6 +107,8 @@ import type {
   GraphPlanAdmitErrors,
   GraphPlanAdmitPayload,
   GraphPlanAdmitResponses,
+  GraphPlanViewErrors,
+  GraphPlanViewResponses,
   GraphPromoteErrors,
   GraphPromotePayload,
   GraphPromoteResponses,
@@ -2305,6 +2307,38 @@ export class Graph extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<GraphCurrentPlanResponses, GraphCurrentPlanErrors, ThrowOnError>({
       url: "/graph/current-plan",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get session plan view
+   *
+   * Retrieve the current session plan or its latest published version snapshot.
+   */
+  public planView<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      session: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "session" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<GraphPlanViewResponses, GraphPlanViewErrors, ThrowOnError>({
+      url: "/graph/plan-view",
       ...options,
       ...params,
     })

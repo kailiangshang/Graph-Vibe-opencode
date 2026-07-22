@@ -2,12 +2,14 @@ import { expect, test } from "bun:test"
 import { Graph } from "../src/v2/gen/sdk.gen"
 import type {
   GraphNode,
+  GraphPlanViewErrors,
   GraphToolRun,
   GraphVersion,
   GraphWorkflow,
   GraphWorkflowActiveOperation,
   GraphWorkflowModeError,
   GraphWorkflowTask,
+  SessionPlanView,
 } from "../src/v2/gen/types.gen"
 
 test("preserves nullable Graph response fields", () => {
@@ -28,6 +30,10 @@ test("preserves nullable Graph response fields", () => {
   const version = {
     message: null,
   } satisfies Pick<GraphVersion, "message">
+  const planView = {
+    versionNumber: null,
+    publishedAt: null,
+  } satisfies Pick<SessionPlanView, "versionNumber" | "publishedAt">
   const toolRun = {
     inputSummary: null,
     outputSummary: null,
@@ -70,10 +76,12 @@ test("preserves nullable Graph response fields", () => {
     message: "Pause or wait",
   } satisfies GraphWorkflowActiveOperation
   const modeError: GraphWorkflowModeError = activeOperation
+  const planViewServerError: GraphPlanViewErrors[500] = { _tag: "InternalServerError" }
 
   expect(Object.values(node)).toEqual([null, null, null, null, null, null])
   expect(Object.values(task)).toEqual([null, null, null, null])
   expect(version.message).toBeNull()
+  expect(Object.values(planView)).toEqual([null, null])
   expect(Object.values(toolRun)).toEqual([null, null, null, null])
   expect(evidence.commands[0].exitCode).toBeNull()
   expect(workflow).toEqual({
@@ -89,12 +97,14 @@ test("preserves nullable Graph response fields", () => {
     currentTask: null,
   })
   expect(modeError._tag).toBe("GraphWorkflowActiveOperation")
+  expect(planViewServerError._tag).toBe("InternalServerError")
 })
 
 test("keeps generated Graph workflow methods", () => {
   const graph = new Graph()
 
   expect(typeof graph.workflow).toBe("function")
+  expect(typeof graph.planView).toBe("function")
   expect(typeof graph.workflowMode).toBe("function")
   expect(typeof graph.workflowApprove).toBe("function")
   expect(typeof graph.workflowPause).toBe("function")

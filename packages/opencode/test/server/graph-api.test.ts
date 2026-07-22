@@ -108,6 +108,12 @@ interface GraphViewResponse {
   edges: Array<{ id: string; sourceID: string; targetID: string; relation: string }>
 }
 
+interface SessionPlanViewResponse extends GraphViewResponse {
+  source: "currentPlan" | "version"
+  versionNumber: number | null
+  publishedAt: number | null
+}
+
 const verification = { criteria: ["observable result"], diagnostics: [{ name: "test" }] }
 
 describe("graph HttpApi", () => {
@@ -233,6 +239,10 @@ describe("graph HttpApi", () => {
 
       const read = yield* request(path)
       const readBody = yield* read.json
+      const planView = yield* request(
+        `/graph/plan-view?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+      )
+      const planViewBody = yield* planView.json
       const mutation = yield* send("PATCH", `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`, {
         mode: "atomic",
         expectedRevision: 0,
@@ -243,6 +253,8 @@ describe("graph HttpApi", () => {
       expect(state).toBeUndefined()
       expect(read.status).toBe(500)
       expect(readBody).toEqual({ _tag: "InternalServerError" })
+      expect(planView.status).toBe(500)
+      expect(planViewBody).toEqual({ _tag: "InternalServerError" })
       expect(mutation.status).toBe(500)
       expect(mutationBody).toEqual({ _tag: "InternalServerError" })
     }),
@@ -345,18 +357,40 @@ describe("graph HttpApi", () => {
     }),
   )
 
-  it.instance("returns empty CurrentPlan when session has no plan", () =>
+  it.instance("returns an empty unpublished plan view when session has no plan", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       yield* Project.use.fromDirectory(test.directory)
       const session = yield* Session.use.create()
 
-      const result = yield* requestJson<GraphViewResponse>(
+      const currentPlan = yield* requestJson<GraphViewResponse>(
         `/graph/current-plan?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
       )
+      const planView = yield* requestJson<SessionPlanViewResponse>(
+        `/graph/plan-view?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+      )
 
-      expect(result.nodes).toEqual([])
-      expect(result.edges).toEqual([])
+      expect(currentPlan).toEqual({ nodes: [], edges: [] })
+      expect(planView).toEqual({
+        source: "currentPlan",
+        versionNumber: null,
+        publishedAt: null,
+        nodes: [],
+        edges: [],
+      })
+    }),
+  )
+
+  it.instance("returns not found for a missing plan-view session", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+
+      const response = yield* request(
+        `/graph/plan-view?directory=${encodeURIComponent(test.directory)}&session=ses_missing`,
+      )
+
+      expect(response.status).toBe(404)
     }),
   )
 
@@ -1135,13 +1169,49 @@ describe("graph HttpApi", () => {
         },
       })
 
+      const directory = encodeURIComponent(test.directory)
+      const before = yield* requestJson<SessionPlanViewResponse>(
+        `/graph/plan-view?directory=${directory}&session=${session.id}`,
+      )
+      expect(before.source).toBe("currentPlan")
+      expect(before.versionNumber).toBeNull()
+      expect(before.publishedAt).toBeNull()
+      expect(before.nodes.map((node) => node.name)).toEqual(["Done Task"])
+
       const result = yield* sendJson<{ versionNumber: number; nodes: number }>(
         "POST",
-        `/graph/current-plan/promote?directory=${encodeURIComponent(test.directory)}&session=${session.id}`,
+        `/graph/current-plan/promote?directory=${directory}&session=${session.id}`,
         { message: "completed" },
       )
       expect(result.status).toBe(200)
       expect(result.json).toMatchObject({ versionNumber: 1, nodes: 1 })
+
+      const currentPlan = yield* requestJson<GraphViewResponse>(
+        `/graph/current-plan?directory=${directory}&session=${session.id}`,
+      )
+      const planView = yield* requestJson<SessionPlanViewResponse>(
+        `/graph/plan-view?directory=${directory}&session=${session.id}`,
+      )
+      const main = yield* requestJson<GraphViewResponse>(`/graph/main?directory=${directory}`)
+      expect(currentPlan).toEqual({ nodes: [], edges: [] })
+      expect(Object.keys(planView).sort()).toEqual(["edges", "nodes", "publishedAt", "source", "versionNumber"])
+      expect(planView.source).toBe("version")
+      expect(planView.versionNumber).toBe(1)
+      expect(planView.publishedAt).toBeNumber()
+      expect(planView.nodes).toEqual(before.nodes)
+      expect(planView.edges).toEqual(before.edges)
+      expect(main.nodes.map((node) => ({ name: node.name, sessionID: node.sessionID }))).toEqual([
+        { name: "Done Task", sessionID: null },
+      ])
+
+      const repeated = yield* send(
+        "POST",
+        `/graph/current-plan/promote?directory=${directory}&session=${session.id}`,
+        { message: "duplicate" },
+      )
+      const versions = yield* requestJson<Array<{ versionNumber: number }>>(`/graph/versions?directory=${directory}`)
+      expect(repeated.status).toBe(400)
+      expect(versions.map((version) => version.versionNumber)).toEqual([1])
     }),
   )
 })
