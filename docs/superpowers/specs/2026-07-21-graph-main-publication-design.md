@@ -211,8 +211,9 @@ viewing the exact scope being released.
   publication.
 
 After changing the public Server `HttpApi`, regenerate Client sources with
-`bun run generate` from `packages/client`, then typecheck the affected App,
-Client, Core, OpenCode, and SDK packages.
+`bun run generate` from `packages/client`. Graph App still consumes the legacy
+JavaScript SDK, so also run `./packages/sdk/js/script/build.ts` from the repo
+root. Then typecheck the affected App, Client, Core, OpenCode, and SDK packages.
 
 ## Acceptance
 
