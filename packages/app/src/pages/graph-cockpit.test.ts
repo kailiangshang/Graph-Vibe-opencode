@@ -53,6 +53,15 @@ describe("Graph cockpit view state", () => {
     ).toBe("failed")
   })
 
+  test("keeps Main authority failures ahead of cached populated topology", () => {
+    const main = { mode: "module", phase: "complete", tasks: [{}], checkpoint: { status: "none" } }
+    expect(cockpitViewState({ workflow: main, mainNodeCount: 1 })).toBe("ready")
+    expect(cockpitViewState({ workflow: main, mainNodeCount: 1, loading: true })).toBe("loading")
+    expect(cockpitViewState({ workflow: main, mainNodeCount: 1, disconnected: true })).toBe("disconnected")
+    expect(cockpitViewState({ workflow: main, mainNodeCount: 1, conflict: true })).toBe("conflict")
+    expect(cockpitViewState({ workflow: main, mainNodeCount: 1, error: true })).toBe("error")
+  })
+
   test("shows only state-valid actions with independent pending state", () => {
     expect(
       cockpitActions(

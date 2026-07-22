@@ -161,7 +161,22 @@ for (const route of ["source", "embedded"] as const) {
 
 test("publishes a completed Plan through confirmation and reloads its version-backed read model", async ({ page }) => {
   const state = await setup(page, false, "complete", { emptyMain: true, promotion: "delayed" })
+  await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(routeUrl("source"))
+
+  for (const action of [
+    page.getByRole("button", { name: "Plan", exact: true }),
+    page.getByRole("button", { name: "Main", exact: true }),
+    page.getByRole("button", { name: "Publish to Main" }),
+  ]) {
+    await expect(action).toBeVisible()
+    const box = await action.boundingBox()
+    expect(box?.height).toBeGreaterThanOrEqual(44)
+    expect(box?.x).toBeGreaterThanOrEqual(0)
+    expect((box?.x ?? 391) + (box?.width ?? 0)).toBeLessThanOrEqual(390)
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+  await page.setViewportSize({ width: 1440, height: 900 })
 
   await page.getByRole("button", { name: "Main", exact: true }).click()
   await expect(page.getByRole("status")).toContainText("No published topology")
@@ -171,9 +186,13 @@ test("publishes a completed Plan through confirmation and reloads its version-ba
   await page.getByRole("button", { name: "Return to Plan" }).click()
 
   await page.getByRole("button", { name: "Publish to Main" }).click()
-  await expect(page.getByRole("dialog")).toContainText("3 nodes and 2 edges")
-  await expect(page.getByRole("dialog")).toContainText("project-wide versioned publication")
-  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click()
+  const reviewDialog = page.getByRole("dialog")
+  await expect(reviewDialog).toContainText("3 nodes and 2 edges")
+  await expect(reviewDialog).toContainText("project-wide versioned publication")
+  const descriptionID = await reviewDialog.getAttribute("aria-describedby")
+  expect(descriptionID).not.toBeNull()
+  await expect(page.locator(`#${descriptionID}`)).toContainText("3 nodes and 2 edges")
+  await reviewDialog.getByRole("button", { name: "Cancel" }).click()
   expect(state.promotions).toBe(0)
 
   await page.getByRole("button", { name: "Publish to Main" }).click()
@@ -183,9 +202,11 @@ test("publishes a completed Plan through confirmation and reloads its version-ba
     button.click()
     button.click()
   })
-  await expect(confirm).toBeDisabled()
+  await expect(page.getByRole("dialog")).toHaveCount(0)
+  await expect(page.getByRole("status").filter({ hasText: "Publishing the reviewed Plan" })).toBeVisible()
   await expect.poll(() => state.promotions).toBe(1)
   expect(state.promotionMessages).toEqual(["Published from Graph workflow cockpit"])
+  expect(state.promotionExpectedRevisions).toEqual([2])
   await expect(page.locator(".graph-source-switch button").filter({ hasText: /^Plan$/ })).toHaveAttribute(
     "aria-pressed",
     "true",
@@ -215,6 +236,23 @@ test("publishes a completed Plan through confirmation and reloads its version-ba
   await expect(page.getByText("Published version 7 · read-only")).toBeVisible()
   await expect(page.getByRole("button").filter({ hasText: "Build rail" })).toBeVisible()
   await expect(page.getByText("Passed", { exact: true })).toBeVisible()
+})
+
+test("reconciles a concurrent publication without retrying or showing optimistic Main", async ({ page }) => {
+  const state = await setup(page, false, "complete", { emptyMain: true, promotion: "concurrent" })
+  await page.goto(routeUrl("source"))
+
+  await page.getByRole("button", { name: "Publish to Main" }).click()
+  await page.getByRole("dialog").getByRole("button", { name: "Publish to Main" }).click()
+
+  await expect.poll(() => state.promotions).toBe(1)
+  await expect(page.getByRole("button", { name: "Main", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.locator(".graph-task").filter({ hasText: "Released capability" })).toBeVisible()
+  await expect(page.getByRole("alert")).toHaveCount(0)
+  await expect(page.getByText("retry", { exact: false })).toHaveCount(0)
+  await expect(page.getByText("Already published as version 7")).toBeVisible()
+  await page.getByRole("button", { name: "Plan", exact: true }).click()
+  await expect(page.getByText("Published version 7 · read-only")).toBeVisible()
 })
 
 test("failed publication refreshes authority and leaves Main empty", async ({ page }) => {
@@ -247,12 +285,13 @@ async function setup(
   page: Page,
   embedded: boolean,
   initialView: WorkflowView = "checkpoint",
-  options: { emptyMain?: boolean; promotion?: "delayed" | "failure" } = {},
+  options: { emptyMain?: boolean; promotion?: "delayed" | "failure" | "concurrent" } = {},
 ) {
   let view = initialView
   let approvals = 0
   let promotions = 0
   const promotionMessages: Array<string | null> = []
+  const promotionExpectedRevisions: Array<number | null> = []
   let published = false
   const reads = { plan: 0, workflow: 0, main: 0 }
   let releaseWorkflow = () => {}
@@ -272,6 +311,9 @@ async function setup(
     },
     get promotionMessages() {
       return [...promotionMessages]
+    },
+    get promotionExpectedRevisions() {
+      return [...promotionExpectedRevisions]
     },
     get reads() {
       return { ...reads }
@@ -353,8 +395,27 @@ async function setup(
           ? body.message
           : null,
       )
+      promotionExpectedRevisions.push(
+        body && typeof body === "object" && "expectedRevision" in body && typeof body.expectedRevision === "number"
+          ? body.expectedRevision
+          : null,
+      )
       promotions++
       if (options.promotion === "delayed") await promotionReady
+      if (options.promotion === "concurrent") {
+        published = true
+        return route.fulfill(
+          json(
+            {
+              _tag: "GraphWorkflowRevisionConflict",
+              expectedRevision: 2,
+              actualRevision: 3,
+              message: "Workflow revision conflict: expected 2, actual 3",
+            },
+            409,
+          ),
+        )
+      }
       if (options.promotion === "failure")
         return route.fulfill(json({ _tag: "GraphPromotionBlocked", reason: "workflow_incomplete" }, 409))
       published = true

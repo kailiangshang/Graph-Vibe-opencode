@@ -13,11 +13,14 @@ import { GraphCockpit, cockpitViewState } from "./graph-cockpit"
 import {
   CURRENT_PLAN_EMPTY_MESSAGE,
   type GraphView,
+  type PublicationScope,
   canPublishToMain,
   normalizeWorkflow,
   reconcileSelection,
   prefersReducedTransparency,
+  publicationScope,
   workflowMutationFailure,
+  samePublicationScope,
 } from "./graph-helpers"
 import { useSessionLayout } from "./session/session-layout"
 
@@ -35,6 +38,7 @@ export default function GraphPage() {
     source: "currentPlan" as "currentPlan" | "main",
     conflict: "" as string,
     actionError: "" as string,
+    publicationStatus: "" as string,
     publishPending: false,
   })
   const directory = () => sdk().directory
@@ -156,24 +160,26 @@ export default function GraphPage() {
   }))
 
   const promoteMutation = createMutation(() => ({
-    mutationFn: async () => {
-      const sessionID = params.id!
+    mutationFn: async (scope: PublicationScope) => {
       const response = await sdk().client.graph.promote({
-        session: sessionID,
-        directory: directory(),
-        graphPromotePayload: { message: `Published from ${sync().session.get(sessionID)?.title ?? sessionID}` },
+        session: scope.sessionID,
+        directory: scope.directory,
+        graphPromotePayload: {
+          message: `Published from ${scope.sessionTitle}`,
+          expectedRevision: scope.revision,
+        },
       })
       if (response.error || !response.data) throw response.error ?? { _tag: "UnexpectedPromotionResponse" }
       return response.data
     },
     onSuccess: async (result) => {
-      dialog.close()
       await refresh()
       setState({
         selectedNodeID: null,
         source: "main",
         conflict: "",
         actionError: "",
+        publicationStatus: "",
         publishPending: false,
       })
       showToast({
@@ -183,39 +189,88 @@ export default function GraphPage() {
       })
     },
     onError: async () => {
-      dialog.close()
+      await refresh()
+      const plan = planQuery.data
+      const published = plan?.source === "version"
+      const version = typeof plan?.versionNumber === "number" ? plan.versionNumber : null
+      if (published) {
+        const mainReady = (mainQuery.data?.nodes.length ?? 0) > 0
+        setState({
+          selectedNodeID: null,
+          source: mainReady ? "main" : "currentPlan",
+          conflict: "",
+          actionError: "",
+          publicationStatus: mainReady ? "" : `Published version ${version} is available. Main is still refreshing.`,
+          publishPending: false,
+        })
+        showToast({
+          variant: "success",
+          title: `Already published as version ${version}`,
+          description: mainReady
+            ? "Main was refreshed from the concurrent publication."
+            : "The published Plan is read-only; Main has not returned topology yet.",
+        })
+        return
+      }
       setState({
         selectedNodeID: null,
         source: "currentPlan",
         conflict: "",
         actionError: "Publication failed. Authoritative graph state was refreshed; review the Plan and retry.",
+        publicationStatus: "",
         publishPending: false,
       })
-      await refresh()
     },
   }))
 
-  const publish = () => {
+  const currentPublicationScope = () => {
+    const sessionID = params.id
+    const plan = planQuery.data
+    const workflow = workflowQuery.data
+    if (!sessionID || !plan || !workflow) return
+    return publicationScope({
+      directory: directory(),
+      sessionID,
+      pathname: location.pathname,
+      revision: workflow.revision,
+      planSource: plan.source,
+      sessionTitle: sync().session.get(sessionID)?.title ?? sessionID,
+      nodes: plan.nodes,
+      edges: plan.edges,
+    })
+  }
+
+  const publish = (scope: PublicationScope) => {
     if (state.publishPending || promoteMutation.isPending) return
+    const current = currentPublicationScope()
+    if (!current || !samePublicationScope(scope, current)) {
+      setState({
+        selectedNodeID: null,
+        source: "currentPlan",
+        actionError: "The Plan changed after review. Authoritative state was refreshed; review publication again.",
+        publicationStatus: "",
+      })
+      void refresh()
+      return
+    }
     setState("publishPending", true)
-    promoteMutation.mutate()
+    setState("actionError", "")
+    setState("publicationStatus", "Publishing the reviewed Plan to Main...")
+    promoteMutation.mutate(scope)
   }
 
   const openPublish = () => {
-    const plan = planQuery.data
-    const workflow = workflowQuery.data
+    const scope = currentPublicationScope()
     if (
-      !plan ||
-      !workflow ||
-      !canPublishToMain({ phase: workflow.phase, planSource: plan.source, nodeCount: plan.nodes.length })
+      !scope ||
+      !canPublishToMain({ phase: workflowQuery.data?.phase ?? "", planSource: scope.planSource, nodeCount: scope.nodeCount })
     )
       return
     void dialog.show(() => (
       <PublishToMainDialog
-        nodeCount={plan.nodes.length}
-        edgeCount={plan.edges.length}
-        pending={() => state.publishPending}
-        onConfirm={publish}
+        nodeCount={scope.nodeCount}
+        edgeCount={scope.edgeCount}
+        onConfirm={() => publish(scope)}
       />
     ))
   }
@@ -241,12 +296,12 @@ export default function GraphPage() {
   }
 
   const viewState = () => {
-    if (selectedGraphQuery().isLoading || workflowQuery.isLoading) return "loading"
-    if (state.source === "main" && (mainQuery.data?.nodes.length ?? 0) > 0) return "ready"
+    if (selectedGraphQuery().isLoading || workflowQuery.isLoading) return cockpitViewState({ loading: true })
+    if (selectedGraphQuery().isPaused || workflowQuery.isPaused) return cockpitViewState({ disconnected: true })
+    if (state.conflict) return cockpitViewState({ conflict: true })
+    if (selectedGraphQuery().isError || workflowQuery.isError) return cockpitViewState({ error: true })
     return cockpitViewState({
-      disconnected: selectedGraphQuery().isPaused || workflowQuery.isPaused,
-      error: selectedGraphQuery().isError || workflowQuery.isError,
-      conflict: !!state.conflict,
+      mainNodeCount: state.source === "main" ? mainQuery.data?.nodes.length : undefined,
       workflow: workflowQuery.data,
     })
   }
@@ -344,6 +399,7 @@ export default function GraphPage() {
               projectName={sync().project?.name ?? sync().project?.worktree}
               sessionTitle={params.id ? sync().session.get(params.id)?.title : undefined}
               actionError={state.actionError}
+              actionStatus={state.publicationStatus}
               onBackToSession={() => navigate(location.pathname.replace(/\/graph\/?$/, ""))}
               onViewChanges={() => {
                 sessionLayout.view().reviewPanel.open("other")
@@ -395,24 +451,37 @@ function GraphSourceSwitch(props: {
 function PublishToMainDialog(props: {
   nodeCount: number
   edgeCount: number
-  pending: () => boolean
   onConfirm: () => void
 }) {
   const dialog = useDialog()
   return (
-    <Dialog title="Publish to Main" fit>
+    <Dialog
+      title="Publish to Main"
+      description={
+        <span class="flex flex-col gap-2">
+          <span class="text-14-regular text-text-strong">
+            This will publish {props.nodeCount} nodes and {props.edgeCount} edges as a project-wide versioned publication.
+          </span>
+          <span class="text-12-regular text-text-weak">
+            Main will update from the authoritative published graph and this Plan will remain available as a read-only version.
+          </span>
+        </span>
+      }
+      fit
+    >
       <div class="flex flex-col gap-4 pl-6 pr-2.5 pb-3">
-        <p class="text-14-regular text-text-strong">
-          This will publish {props.nodeCount} nodes and {props.edgeCount} edges as a project-wide versioned publication.
-        </p>
-        <p class="text-12-regular text-text-weak">
-          Main will update from the authoritative published graph and this Plan will remain available as a read-only version.
-        </p>
         <div class="flex justify-end gap-2">
-          <Button variant="ghost" size="large" disabled={props.pending()} onClick={() => dialog.close()}>
+          <Button variant="ghost" size="large" onClick={() => dialog.close()}>
             Cancel
           </Button>
-          <Button variant="primary" size="large" disabled={props.pending()} onClick={props.onConfirm}>
+          <Button
+            variant="primary"
+            size="large"
+            onClick={() => {
+              dialog.close()
+              props.onConfirm()
+            }}
+          >
             Publish to Main
           </Button>
         </div>

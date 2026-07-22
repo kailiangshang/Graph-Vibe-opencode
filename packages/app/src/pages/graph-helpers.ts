@@ -23,6 +23,58 @@ export interface GraphView {
   edges: GraphEdge[]
 }
 
+export interface PublicationScope {
+  readonly directory: string
+  readonly sessionID: string
+  readonly pathname: string
+  readonly revision: number
+  readonly planSource: "currentPlan" | "version"
+  readonly sessionTitle: string
+  readonly nodeCount: number
+  readonly edgeCount: number
+  readonly nodeIDs: readonly string[]
+  readonly edgeIDs: readonly string[]
+}
+
+export function publicationScope(input: {
+  directory: string
+  sessionID: string
+  pathname: string
+  revision: number
+  planSource: "currentPlan" | "version"
+  sessionTitle: string
+  nodes: ReadonlyArray<{ id: string }>
+  edges: ReadonlyArray<{ id: string }>
+}): PublicationScope {
+  return {
+    directory: input.directory,
+    sessionID: input.sessionID,
+    pathname: input.pathname,
+    revision: input.revision,
+    planSource: input.planSource,
+    sessionTitle: input.sessionTitle,
+    nodeCount: input.nodes.length,
+    edgeCount: input.edges.length,
+    nodeIDs: input.nodes.map((node) => node.id).sort(),
+    edgeIDs: input.edges.map((edge) => edge.id).sort(),
+  }
+}
+
+export function samePublicationScope(reviewed: PublicationScope, current: PublicationScope) {
+  return (
+    reviewed.directory === current.directory &&
+    reviewed.sessionID === current.sessionID &&
+    reviewed.pathname === current.pathname &&
+    reviewed.revision === current.revision &&
+    reviewed.planSource === current.planSource &&
+    reviewed.sessionTitle === current.sessionTitle &&
+    reviewed.nodeCount === current.nodeCount &&
+    reviewed.edgeCount === current.edgeCount &&
+    reviewed.nodeIDs.every((id, index) => id === current.nodeIDs[index]) &&
+    reviewed.edgeIDs.every((id, index) => id === current.edgeIDs[index])
+  )
+}
+
 export type LevelFilter = "all" | "L1" | "L2"
 
 export const CURRENT_PLAN_EMPTY_MESSAGE =

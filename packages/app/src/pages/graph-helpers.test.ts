@@ -8,10 +8,57 @@ import {
   filterByLevel,
   groupWorkflowTasks,
   normalizeWorkflow,
+  publicationScope,
+  samePublicationScope,
   reconcileSelection,
   workflowMutationFailure,
   prefersReducedTransparency,
 } from "./graph-helpers"
+
+describe("publication scope", () => {
+  const input = {
+    directory: "/workspace",
+    sessionID: "ses-1",
+    pathname: "/workspace/session/ses-1/graph",
+    revision: 4,
+    planSource: "currentPlan" as const,
+    sessionTitle: "Reviewed session",
+    nodes: [{ id: "node-b" }, { id: "node-a" }],
+    edges: [{ id: "edge-b" }, { id: "edge-a" }],
+  }
+
+  test("captures stable route, authority, title, counts, and topology identity", () => {
+    expect(publicationScope(input)).toEqual({
+      directory: "/workspace",
+      sessionID: "ses-1",
+      pathname: "/workspace/session/ses-1/graph",
+      revision: 4,
+      planSource: "currentPlan",
+      sessionTitle: "Reviewed session",
+      nodeCount: 2,
+      edgeCount: 2,
+      nodeIDs: ["node-a", "node-b"],
+      edgeIDs: ["edge-a", "edge-b"],
+    })
+  })
+
+  test("requires a new review when any captured publication authority changes", () => {
+    const reviewed = publicationScope(input)
+    expect(samePublicationScope(reviewed, publicationScope(input))).toBe(true)
+    for (const changed of [
+      { directory: "/other" },
+      { sessionID: "ses-2" },
+      { pathname: "/other" },
+      { revision: 5 },
+      { planSource: "version" as const },
+      { sessionTitle: "Renamed session" },
+      { nodes: [{ id: "node-a" }] },
+      { edges: [{ id: "edge-c" }, { id: "edge-a" }] },
+    ]) {
+      expect(samePublicationScope(reviewed, publicationScope({ ...input, ...changed }))).toBe(false)
+    }
+  })
+})
 
 describe("canPublishToMain", () => {
   test("allows only a non-empty completed live plan", () => {

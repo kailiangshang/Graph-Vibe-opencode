@@ -39,12 +39,14 @@ export function cockpitViewState(input: {
   disconnected?: boolean
   error?: boolean
   conflict?: boolean
+  mainNodeCount?: number
   workflow?: MinimalWorkflow
 }) {
   if (input.loading) return "loading"
   if (input.disconnected) return "disconnected"
   if (input.conflict) return "conflict"
   if (input.error) return "error"
+  if ((input.mainNodeCount ?? 0) > 0) return "ready"
   if (!input.workflow || input.workflow.tasks.length === 0) return "empty"
   if (!input.workflow.mode) return "mode-required"
   if (input.workflow.phase === "complete") return "complete"
@@ -229,6 +231,7 @@ export function GraphCockpit(props: {
   projectName?: string
   sessionTitle?: string
   actionError?: string
+  actionStatus?: string
   pendingAction?: "mode" | "continue" | "pause"
   publishPending?: boolean
 }) {
@@ -418,6 +421,12 @@ export function GraphCockpit(props: {
       <Show when={props.actionError}>
         <div class="graph-state-strip graph-glass border-b px-4 py-2 text-sm text-icon-critical-base" role="alert">
           {props.actionError}
+        </div>
+      </Show>
+
+      <Show when={props.actionStatus}>
+        <div class="graph-state-strip graph-glass border-b px-4 py-2 text-sm" role="status">
+          {props.actionStatus}
         </div>
       </Show>
 
