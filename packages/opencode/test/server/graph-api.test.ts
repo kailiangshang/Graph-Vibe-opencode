@@ -1156,7 +1156,7 @@ describe("graph HttpApi", () => {
         mode: "autopilot",
         expectedRevision: planned!.revision,
       })
-      yield* workflow.completeVerification({
+      const completed = yield* workflow.completeVerification({
         projectID: session.projectID,
         sessionID: session.id,
         nodeID: task.id,
@@ -1182,10 +1182,24 @@ describe("graph HttpApi", () => {
       expect(before.publishedAt).toBeNull()
       expect(before.nodes.map((node) => node.name)).toEqual(["Done Task"])
 
+      const stale = yield* send(
+        "POST",
+        `/graph/current-plan/promote?directory=${directory}&session=${session.id}`,
+        { message: "stale", expectedRevision: completed.revision - 1 },
+      )
+      expect(stale.status).toBe(409)
+      expect(yield* stale.json).toMatchObject({
+        _tag: "GraphWorkflowRevisionConflict",
+        expectedRevision: completed.revision - 1,
+        actualRevision: completed.revision,
+      })
+      expect((yield* storage.currentPlan({ sessionID: session.id })).nodes).toHaveLength(1)
+      expect(yield* storage.version.list({ projectID: session.projectID })).toHaveLength(0)
+
       const result = yield* sendJson<{ versionNumber: number; nodes: number }>(
         "POST",
         `/graph/current-plan/promote?directory=${directory}&session=${session.id}`,
-        { message: "completed" },
+        { message: "completed", expectedRevision: completed.revision },
       )
       expect(result.status).toBe(200)
       expect(result.json).toMatchObject({ versionNumber: 1, nodes: 1 })

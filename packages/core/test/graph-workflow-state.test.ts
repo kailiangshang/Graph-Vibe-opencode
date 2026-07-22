@@ -1059,4 +1059,42 @@ describe("GraphWorkflowState", () => {
       }),
     )
   })
+
+  test("rejects stale promotion revisions without creating a version or moving the Current Plan", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        const storage = yield* GraphStorage.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+        yield* storage.node.update(atomicA.id, { status: "verified", testStatus: "passed" })
+        yield* storage.node.update(atomicB.id, { status: "verified", testStatus: "passed" })
+        const completed = yield* workflow.resetPlan({
+          sessionID: SID,
+          projectID: PID,
+          graph: {
+            ...workflowGraph,
+            nodes: workflowGraph.nodes.map((item) =>
+              item.type === "atomic" ? { ...item, status: "verified" as const, testStatus: "passed" as const } : item,
+            ),
+          },
+        })
+        const conflict = yield* workflow
+          .promote({
+            projectID: PID,
+            sessionID: SID,
+            expectedRevision: completed.revision - 1,
+          })
+          .pipe(Effect.flip)
+
+        expect(conflict).toMatchObject({
+          _tag: "GraphWorkflowState.RevisionConflict",
+          expectedRevision: completed.revision - 1,
+          actualRevision: completed.revision,
+        })
+        expect((yield* storage.currentPlan({ sessionID: SID })).nodes).toHaveLength(4)
+        expect(yield* storage.version.list({ projectID: PID })).toHaveLength(0)
+        expect((yield* storage.main({ projectID: PID })).nodes).toHaveLength(0)
+      }),
+    )
+  })
 })

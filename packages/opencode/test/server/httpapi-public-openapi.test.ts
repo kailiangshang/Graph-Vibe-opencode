@@ -97,6 +97,17 @@ describe("PublicApi OpenAPI v2 errors", () => {
     )
   })
 
+  test("documents optional revision-guarded graph promotion conflicts", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const payload = spec.components.schemas.GraphPromotePayload
+
+    expect(payload?.properties?.expectedRevision?.anyOf).toContainEqual(expect.objectContaining({ type: "number" }))
+    expect(payload?.required ?? []).not.toContain("expectedRevision")
+    expect(componentNames(spec.paths["/graph/current-plan/promote"]?.post?.responses?.["409"])).toContain(
+      "GraphWorkflowRevisionConflict",
+    )
+  })
+
   test("documents nested legacy global sync events", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
     const schema = spec.components.schemas.SyncEventSessionCreated

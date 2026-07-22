@@ -1,6 +1,8 @@
 import type {
   GraphNode,
   GraphPlanViewErrors,
+  GraphPromoteErrors,
+  GraphPromotePayload,
   GraphToolRun,
   GraphVersion,
   GraphWorkflow,
@@ -92,6 +94,13 @@ const modeServerError: GraphWorkflowModeErrors[500] = internalServerError
 const approveServerError: GraphWorkflowApproveErrors[500] = internalServerError
 const pauseServerError: GraphWorkflowPauseErrors[500] = internalServerError
 const planViewServerError: GraphPlanViewErrors[500] = internalServerError
+const promotePayload = { expectedRevision: 3 } satisfies GraphPromotePayload
+const promoteConflict: GraphPromoteErrors[409] = {
+  _tag: "GraphWorkflowRevisionConflict",
+  expectedRevision: 3,
+  actualRevision: 4,
+  message: "stale",
+}
 
 declare const graph: Graph
 declare const sdk: () => { client: OpencodeClient; directory: string }
@@ -101,6 +110,11 @@ graph.workflowMode
 graph.workflowApprove
 graph.workflowPause
 sdk().client.graph.planView({ session: "ses_test", directory: sdk().directory })
+sdk().client.graph.promote({
+  session: "ses_test",
+  directory: sdk().directory,
+  graphPromotePayload: promotePayload,
+})
 
 void node
 void task
@@ -115,3 +129,4 @@ void modeServerError
 void approveServerError
 void pauseServerError
 void planViewServerError
+void promoteConflict

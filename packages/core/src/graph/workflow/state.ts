@@ -146,7 +146,9 @@ export interface Interface {
     readonly nodeID: NodeID
     readonly reason: string
   }) => Effect.Effect<State>
-  readonly promote: (input: GraphStorage.PromoteInput) => Effect.Effect<GraphStorage.PromoteResult, PromotionBlocked>
+  readonly promote: (
+    input: GraphStorage.PromoteInput,
+  ) => Effect.Effect<GraphStorage.PromoteResult, PromotionBlocked | RevisionConflict>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/GraphWorkflowState") {}
@@ -801,6 +803,12 @@ export const layer = Layer.effect(
         .transaction(() =>
           Effect.gen(function* () {
             const current = yield* get(input.sessionID)
+            if (input.expectedRevision !== undefined && current?.revision !== input.expectedRevision) {
+              return yield* new RevisionConflict({
+                expectedRevision: input.expectedRevision,
+                actualRevision: current?.revision ?? 0,
+              })
+            }
             if (current?.checkpointStatus === "pending") {
               return yield* new PromotionBlocked({ reason: "checkpoint_pending" })
             }

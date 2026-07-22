@@ -394,9 +394,19 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
           projectID: session.projectID,
           sessionID: session.id,
           message: ctx.payload?.message,
+          expectedRevision: ctx.payload?.expectedRevision,
         })
         .pipe(
           Effect.catchTag("GraphWorkflowState.PromotionBlocked", () => Effect.fail(new HttpApiError.BadRequest({}))),
+          Effect.catchTag("GraphWorkflowState.RevisionConflict", (error) =>
+            Effect.fail(
+              new GraphWorkflowRevisionConflict({
+                expectedRevision: error.expectedRevision,
+                actualRevision: error.actualRevision,
+                message: `Workflow revision conflict: expected ${error.expectedRevision}, actual ${error.actualRevision}`,
+              }),
+            ),
+          ),
         )
       yield* events.publish(Graph.Event.MainUpdated, { projectID: session.projectID })
       return result

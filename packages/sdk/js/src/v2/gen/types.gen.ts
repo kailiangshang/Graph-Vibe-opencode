@@ -2768,6 +2768,7 @@ export type GraphWorkflowPausePayload = {
 
 export type GraphPromotePayload = {
   message?: string
+  expectedRevision?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type GraphPromoteResult = {
@@ -9611,6 +9612,10 @@ export type GraphPromoteErrors = {
    * NotFoundError | ProductMigrationRequired
    */
   404: NotFoundError | ProductMigrationRequired
+  /**
+   * GraphWorkflowRevisionConflict
+   */
+  409: GraphWorkflowRevisionConflict
 }
 
 export type GraphPromoteError = GraphPromoteErrors[keyof GraphPromoteErrors]

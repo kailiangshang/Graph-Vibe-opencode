@@ -81,6 +81,7 @@ export const PlanAdmitPayload = Schema.Struct({
 
 export const PromotePayload = Schema.Struct({
   message: Schema.optional(Schema.String),
+  expectedRevision: Schema.optional(Schema.Number),
 }).annotate({ identifier: "GraphPromotePayload" })
 
 export const WorkflowModePayload = Schema.Struct({
@@ -496,7 +497,12 @@ export const GraphApi = HttpApi.make("graph")
           query: SessionRequiredQuery,
           payload: [HttpApiSchema.NoContent, PromotePayload],
           success: described(PromoteResultResponse, "CurrentPlan promotion result"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, ProductMigration.Required],
+          error: [
+            HttpApiError.BadRequest,
+            ApiNotFoundError,
+            GraphWorkflowRevisionConflict,
+            ProductMigration.Required,
+          ],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.promote",

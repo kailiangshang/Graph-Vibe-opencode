@@ -245,6 +245,7 @@ export const PromoteInput = Schema.Struct({
   projectID: ProjectV2.ID,
   sessionID: Schema.String,
   message: Schema.String.pipe(Schema.optional),
+  expectedRevision: Schema.Number.pipe(Schema.optional),
 }).annotate({ identifier: "GraphStorage.PromoteInput" })
 export type PromoteInput = typeof PromoteInput.Type
 

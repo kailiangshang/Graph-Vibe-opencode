@@ -110,6 +110,18 @@ test("keeps generated Graph workflow methods", () => {
   expect(typeof graph.workflowPause).toBe("function")
 })
 
+test("generates the optional Graph promotion revision guard and conflict", async () => {
+  const source = await Bun.file(new URL("../src/v2/gen/types.gen.ts", import.meta.url)).text()
+  const payload = source.slice(source.indexOf("export type GraphPromotePayload"), source.indexOf("export type GraphPromoteResult"))
+  const errors = source.slice(
+    source.indexOf("export type GraphPromoteErrors"),
+    source.indexOf("export type GraphPromoteResponses"),
+  )
+
+  expect(payload).toContain("expectedRevision?:")
+  expect(errors).toContain("GraphWorkflowRevisionConflict")
+})
+
 test("strictly compiles nullable Graph fields and workflow methods", async () => {
   const check = Bun.spawn([
     "bunx",
