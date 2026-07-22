@@ -1,10 +1,12 @@
 export * as GraphStorage from "./storage"
 
-import { and, desc, eq, isNull, notLike, or } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { and, desc, eq, isNull, ne } from "drizzle-orm"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../database/database"
 import { LayerNode } from "../effect/layer-node"
 import { ProjectV2 } from "../project"
+import { SessionSchema } from "../session/schema"
+import { SessionTable } from "../session/sql"
 import { GraphNodeTable, GraphEdgeTable, GraphVersionTable } from "./sql"
 import { Graph } from "@opencode-ai/schema/graph"
 import type {
@@ -157,6 +159,13 @@ const Snapshot = Schema.Struct({
   nodes: Schema.Array(Schema.Union([CanonicalNodeRow, PersistedNodeRow])),
   edges: Schema.Array(Schema.Union([CanonicalEdgeRow, PersistedEdgeRow])),
 })
+
+const SessionEnhancementMetadata = Schema.Struct({
+  productMigration: Schema.Struct({
+    graphEnhancement: Schema.Struct({ versionID: VersionID }),
+  }),
+})
+const sessionEnhancementMetadata = Schema.decodeUnknownOption(SessionEnhancementMetadata)
 
 export const NodeCreate = Schema.Struct({
   projectID: ProjectV2.ID,
@@ -578,16 +587,25 @@ export const layer = Layer.effect(
       projectID: ProjectV2.ID
       sessionID: string
     }) {
+      const session = yield* db
+        .select({ metadata: SessionTable.metadata })
+        .from(SessionTable)
+        .where(and(
+          eq(SessionTable.id, SessionSchema.ID.make(input.sessionID)),
+          eq(SessionTable.project_id, input.projectID),
+        ))
+        .get()
+        .pipe(Effect.orDie)
+      const enhancement = sessionEnhancementMetadata(session?.metadata)
       const r = yield* db
         .select()
         .from(GraphVersionTable)
         .where(and(
           eq(GraphVersionTable.project_id, input.projectID),
           eq(GraphVersionTable.session_id, input.sessionID),
-          or(
-            isNull(GraphVersionTable.message),
-            notLike(GraphVersionTable.message, "product-migration:enhancement:%"),
-          ),
+          ...(Option.isSome(enhancement)
+            ? [ne(GraphVersionTable.id, enhancement.value.productMigration.graphEnhancement.versionID)]
+            : []),
         ))
         .orderBy(desc(GraphVersionTable.version_number))
         .get()

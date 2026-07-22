@@ -262,6 +262,9 @@ describe("GraphStorage.promote + version", () => {
         const second = canonicalNode("gnd_canonical_second", "Second")
         const linked = canonicalEdge("ged_canonical", first.id, second.id)
         const enhancement = canonicalNode("gnd_enhancement", "Enhancement")
+        yield* database.db.update(SessionTable).set({
+          metadata: { productMigration: { graphEnhancement: { versionID: "gvr_enhancement" } } },
+        }).where(eq(SessionTable.id, SID)).run().pipe(Effect.orDie)
         yield* database.db.insert(GraphVersionTable).values([
           {
             id: "gvr_malformed_old" as GraphStorage.VersionID,
@@ -282,7 +285,7 @@ describe("GraphStorage.promote + version", () => {
             project_id: PID,
             session_id: SID,
             version_number: 3,
-            message: "product-migration:enhancement:geh_test",
+            message: "generated enhancement",
             snapshot: { nodes: [enhancement], edges: [] },
           },
           {
@@ -298,6 +301,30 @@ describe("GraphStorage.promote + version", () => {
         expect(version?.versionNumber).toBe(2)
         expect(version?.snapshot.nodes).toEqual([first, second])
         expect(version?.snapshot.edges).toEqual([linked])
+      }),
+    )
+  })
+
+  test("latestForSession selects a promotion whose message uses the enhancement prefix", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const nodeID = yield* g.node.create({
+          projectID: PID,
+          sessionID: SID,
+          type: "atomic",
+          name: "Legitimate publication",
+          level: "L2",
+        })
+        yield* g.promote({
+          projectID: PID,
+          sessionID: SID,
+          message: "product-migration:enhancement:user-authored publication",
+        })
+
+        const version = yield* g.version.latestForSession({ projectID: PID, sessionID: SID })
+        expect(version?.versionNumber).toBe(1)
+        expect(version?.snapshot.nodes.map((node) => node.id)).toEqual([nodeID])
       }),
     )
   })

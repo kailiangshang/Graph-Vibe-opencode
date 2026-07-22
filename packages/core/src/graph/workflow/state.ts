@@ -72,7 +72,7 @@ export interface Interface {
     readonly projectID: ProjectV2.ID
     readonly mode: ExecutionMode
     readonly expectedRevision: number
-  }) => Effect.Effect<State, RevisionConflict | ActiveWorkflowError | ModuleScopeError>
+  }) => Effect.Effect<State, RevisionConflict | ActiveWorkflowError | ModuleScopeError | GraphStorage.SnapshotDecodeError>
   readonly resetPlan: (input: {
     readonly sessionID: string
     readonly projectID: ProjectV2.ID
@@ -225,9 +225,11 @@ export const layer = Layer.effect(
                 activeOperationKind: current.activeOperationKind,
               })
             }
-            const graph = current?.currentNodeID
-              ? yield* storage.currentPlan({ sessionID: input.sessionID })
-              : undefined
+            const graph = input.mode === "module"
+              ? yield* storage.planView({ projectID: input.projectID, sessionID: input.sessionID })
+              : current?.currentNodeID
+                ? yield* storage.currentPlan({ sessionID: input.sessionID })
+                : undefined
             if (input.mode === "module" && graph) {
               yield* Effect.forEach(orderedAtomicNodes(graph), (node) => requireModule(graph, node.id), { discard: true })
             }

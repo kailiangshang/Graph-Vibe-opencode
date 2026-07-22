@@ -208,6 +208,42 @@ describe("GraphWorkflowState", () => {
     )
   })
 
+  test("rejects module mode for a completed promoted graph with ambiguous membership without writing state", async () => {
+    await run(
+      Effect.gen(function* () {
+        const storage = yield* GraphStorage.Service
+        const workflow = yield* GraphWorkflowState.Service
+        yield* storage.node.update(atomicA.id, { status: "verified", testStatus: "passed" })
+        yield* storage.node.update(atomicB.id, { status: "verified", testStatus: "passed" })
+        yield* storage.edge.create({
+          projectID: PID,
+          sessionID: SID,
+          sourceID: moduleB.id,
+          targetID: atomicA.id,
+          relation: "contains",
+        })
+        yield* storage.promote({ projectID: PID, sessionID: SID })
+        const selected = yield* workflow.setMode({
+          sessionID: SID,
+          projectID: PID,
+          mode: "atomic",
+          expectedRevision: 0,
+        })
+
+        const outcome = yield* workflow
+          .setMode({ sessionID: SID, projectID: PID, mode: "module", expectedRevision: selected.revision })
+          .pipe(
+            Effect.as("committed" as const),
+            Effect.catchTag("GraphWorkflowState.ModuleScopeError", () => Effect.succeed("module-error" as const)),
+          )
+        const persisted = yield* workflow.get(SID)
+
+        expect(outcome).toBe("module-error")
+        expect(persisted).toMatchObject({ mode: "atomic", revision: selected.revision })
+      }),
+    )
+  })
+
   test("resets a plan while preserving the selected mode", async () => {
     await run(
       Effect.gen(function* () {
@@ -385,6 +421,14 @@ describe("GraphWorkflowState", () => {
           name: atomicA2.name,
           level: "L2",
         }).run().pipe(Effect.orDie)
+        yield* database.db.insert(GraphEdgeTable).values({
+          id: "edge-module-a2" as EdgeID,
+          project_id: PID,
+          session_id: SID,
+          source_id: moduleA.id,
+          target_id: atomicA2.id,
+          relation: "contains",
+        }).run().pipe(Effect.orDie)
         const workflow = yield* GraphWorkflowState.Service
         yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "module", expectedRevision: 0 })
         const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph })
@@ -429,6 +473,10 @@ describe("GraphWorkflowState", () => {
           { id: taskZ.id, project_id: PID, session_id: SID, type: "atomic", name: taskZ.name, level: "L2" },
           { id: taskB.id, project_id: PID, session_id: SID, type: "atomic", name: taskB.name, level: "L2" },
         ]).run().pipe(Effect.orDie)
+        yield* database.db.insert(GraphEdgeTable).values([
+          { id: "edge-module-task-z" as EdgeID, project_id: PID, session_id: SID, source_id: moduleA.id, target_id: taskZ.id, relation: "contains" },
+          { id: "edge-module-task-b" as EdgeID, project_id: PID, session_id: SID, source_id: moduleB.id, target_id: taskB.id, relation: "contains" },
+        ]).run().pipe(Effect.orDie)
         const workflow = yield* GraphWorkflowState.Service
         yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "module", expectedRevision: 0 })
         const planned = yield* workflow.resetPlan({ sessionID: SID, projectID: PID, graph })
@@ -469,6 +517,10 @@ describe("GraphWorkflowState", () => {
         yield* database.db.insert(GraphNodeTable).values([
           { id: prerequisite.id, project_id: PID, session_id: SID, type: "atomic", name: prerequisite.name, level: "L2" },
           { id: blocked.id, project_id: PID, session_id: SID, type: "atomic", name: blocked.name, level: "L2" },
+        ]).run().pipe(Effect.orDie)
+        yield* database.db.insert(GraphEdgeTable).values([
+          { id: "edge-module-prerequisite" as EdgeID, project_id: PID, session_id: SID, source_id: moduleB.id, target_id: prerequisite.id, relation: "contains" },
+          { id: "edge-module-blocked" as EdgeID, project_id: PID, session_id: SID, source_id: moduleA.id, target_id: blocked.id, relation: "contains" },
         ]).run().pipe(Effect.orDie)
         const workflow = yield* GraphWorkflowState.Service
         yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "module", expectedRevision: 0 })

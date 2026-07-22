@@ -294,6 +294,9 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
             ),
           ),
           Effect.catchTag("GraphWorkflowState.ModuleScopeError", () => Effect.fail(new HttpApiError.BadRequest({}))),
+          Effect.catchTag("GraphV2.SnapshotDecodeError", () =>
+            Effect.fail(new HttpApiError.InternalServerError({})),
+          ),
         )
       const result = yield* workflowProjection({ projectID: session.projectID, sessionID: session.id })
       yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
