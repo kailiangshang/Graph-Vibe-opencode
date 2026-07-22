@@ -1,12 +1,33 @@
 import { describe, expect, test } from "bun:test"
+import { Effect, Layer } from "effect"
+import { Database } from "@opencode-ai/core/database/database"
 import { ProjectV2 } from "@opencode-ai/core/project"
+import { ProjectTable } from "@opencode-ai/core/project/sql"
+import { AbsolutePath } from "@opencode-ai/core/schema"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
+import { SessionTable } from "@opencode-ai/core/session/sql"
+import { GraphStorage } from "@opencode-ai/core/graph/storage"
+import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import type { EdgeID, EdgeRow, GraphView, NodeID, NodeRow } from "@opencode-ai/core/graph/storage"
 import { GraphWorkflowProjection } from "@opencode-ai/core/graph/workflow/projection"
-import type { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
+import { GraphWorkflowState } from "@opencode-ai/core/graph/workflow/state"
 import type { VerificationEvidence } from "@opencode-ai/schema/graph"
 
 const PID = ProjectV2.ID.make("proj_projection")
-const SID = "ses_projection"
+const SID = SessionSchema.ID.make("ses_projection")
+
+const storageLayer = GraphStorage.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:"))) as Layer.Layer<
+  Database.Service | GraphStorage.Service
+>
+const auditLayer = GraphAudit.layer.pipe(Layer.provideMerge(storageLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphAudit.Service
+>
+const workflowLayer = GraphWorkflowState.layer.pipe(Layer.provideMerge(auditLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphAudit.Service | GraphWorkflowState.Service
+>
+const projectionLayer = GraphWorkflowProjection.layer.pipe(Layer.provideMerge(workflowLayer)) as Layer.Layer<
+  Database.Service | GraphStorage.Service | GraphAudit.Service | GraphWorkflowState.Service | GraphWorkflowProjection.Service
+>
 
 function node(id: string, patch: Partial<NodeRow> = {}): NodeRow {
   return {
@@ -131,6 +152,81 @@ describe("Graph workflow projection", () => {
     }
 
     expect(() => GraphWorkflowProjection.projectWorkflow(ambiguous, state, [])).toThrow("ambiguous")
+  })
+
+  test("service preserves published tasks, modules, progress, and session evidence", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const database = yield* Database.Service
+        yield* database.db.insert(ProjectTable).values({
+          id: PID,
+          worktree: AbsolutePath.make("/tmp/projection"),
+          vcs: "git",
+          sandboxes: [],
+          time_created: 0,
+          time_updated: 0,
+        }).run().pipe(Effect.orDie)
+        yield* database.db.insert(SessionTable).values({
+          id: SID,
+          project_id: PID,
+          slug: "projection",
+          directory: "/tmp/projection",
+          title: "projection",
+          version: "0",
+          time_created: 0,
+          time_updated: 0,
+        }).run().pipe(Effect.orDie)
+        const storage = yield* GraphStorage.Service
+        const audit = yield* GraphAudit.Service
+        const workflow = yield* GraphWorkflowState.Service
+        const projection = yield* GraphWorkflowProjection.Service
+        const moduleID = yield* storage.node.create({
+          projectID: PID,
+          sessionID: SID,
+          type: "composite",
+          name: "Published Module",
+          level: "L1",
+        })
+        const taskID = yield* storage.node.create({
+          projectID: PID,
+          sessionID: SID,
+          type: "atomic",
+          name: "Published Task",
+          level: "L2",
+          status: "verified",
+          testStatus: "passed",
+        })
+        yield* storage.edge.create({
+          projectID: PID,
+          sessionID: SID,
+          sourceID: moduleID,
+          targetID: taskID,
+          relation: "contains",
+        })
+        yield* workflow.resetPlan({
+          projectID: PID,
+          sessionID: SID,
+          graph: yield* storage.currentPlan({ sessionID: SID }),
+        })
+        yield* audit.tool.record({
+          projectID: PID,
+          sessionID: SID,
+          nodeID: taskID,
+          toolName: "graph.diagnostics.run",
+          toolType: "diagnostics",
+          status: "succeeded",
+          evidence: evidence(taskID, "published evidence"),
+        })
+        yield* storage.promote({ projectID: PID, sessionID: SID })
+
+        expect((yield* storage.currentPlan({ sessionID: SID })).nodes).toEqual([])
+        const result = yield* projection.get({ projectID: PID, sessionID: SID })
+        expect(result.tasks.map((task) => task.name)).toEqual(["Published Task"])
+        expect(result.modules.map((module) => module.name)).toEqual(["Published Module"])
+        expect(result.progress).toEqual({ total: 1, verified: 1, failed: 0, percent: 100 })
+        expect(result.tasks[0]?.latestEvidence?.commands[0]?.excerpt).toBe("published evidence")
+      }).pipe(Effect.provide(projectionLayer), Effect.scoped),
+    )
   })
 })
 

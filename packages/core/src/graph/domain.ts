@@ -2,7 +2,7 @@ export * as GraphDomain from "./domain"
 
 import { Context, Effect, Layer, Schema } from "effect"
 import { LayerNode } from "../effect/layer-node"
-import * as GraphStorage from "./storage"
+import { GraphStorage } from "./storage"
 import type { NodeRow, EdgeRow, NodeID, EdgeID } from "./storage"
 import { validateNode, validateEdge, validateSubgraph } from "./validation"
 import type { ValidationIssue } from "./validation"
@@ -35,6 +35,10 @@ export interface Interface {
   }
   readonly main: (input: { projectID: NodeRow["projectID"] }) => Effect.Effect<GraphStorage.GraphView>
   readonly currentPlan: (input: { sessionID: string }) => Effect.Effect<GraphStorage.GraphView>
+  readonly planView: (input: {
+    projectID: NodeRow["projectID"]
+    sessionID: string
+  }) => Effect.Effect<GraphStorage.SessionPlanView, GraphStorage.SnapshotDecodeError>
   readonly promote: (input: GraphStorage.PromoteInput) => Effect.Effect<GraphStorage.PromoteResult>
   readonly version: {
     readonly list: (input: { projectID: NodeRow["projectID"] }) => Effect.Effect<ReadonlyArray<GraphStorage.VersionRow>>
@@ -116,6 +120,7 @@ export const layer = Layer.effect(
       edge: { create: edgeCreate, get: storage.edge.get, delete: storage.edge.delete, list: storage.edge.list },
       main: storage.main,
       currentPlan: storage.currentPlan,
+      planView: storage.planView,
       promote: storage.promote,
       version: storage.version,
       detectConflicts: detectConflictsFn,

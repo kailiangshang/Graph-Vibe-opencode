@@ -129,7 +129,7 @@ describe("GraphDomain queries", () => {
 })
 
 describe("GraphDomain pass-through", () => {
-  test("main/currentPlan/promote/version delegate to storage", async () => {
+  test("main/currentPlan/planView/promote/version delegate to storage", async () => {
     await run(Effect.gen(function* () {
       const d = yield* GraphDomain.Service
       yield* d.storage.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "P", level: "L2" })
@@ -137,6 +137,11 @@ describe("GraphDomain pass-through", () => {
       expect(cp.nodes.length).toBe(1)
       const res = yield* d.promote({ projectID: PID, sessionID: SID, message: "test" })
       expect(res.versionNumber).toBe(1)
+      const strict = yield* d.currentPlan({ sessionID: SID })
+      expect(strict.nodes.length).toBe(0)
+      const plan = yield* d.planView({ projectID: PID, sessionID: SID })
+      expect(plan).toMatchObject({ source: "version", versionNumber: 1 })
+      expect(plan.nodes.map((node) => node.name)).toEqual(["P"])
       const m = yield* d.main({ projectID: PID })
       expect(m.nodes.length).toBe(1)
       const vs = yield* d.version.list({ projectID: PID })

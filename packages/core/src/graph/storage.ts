@@ -1,12 +1,12 @@
 export * as GraphStorage from "./storage"
 
-import { and, eq, isNull } from "drizzle-orm"
+import { and, desc, eq, isNull } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { LayerNode } from "../effect/layer-node"
 import { ProjectV2 } from "../project"
 import { GraphNodeTable, GraphEdgeTable, GraphVersionTable } from "./sql"
-import * as Graph from "@opencode-ai/schema/graph"
+import { Graph } from "@opencode-ai/schema/graph"
 import type {
   NodeType,
   Level,
@@ -29,6 +29,11 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Gra
   kind: Schema.Literals(["node", "edge", "version"]),
   id: Schema.String,
 }) {}
+
+export class SnapshotDecodeError extends Schema.TaggedErrorClass<SnapshotDecodeError>()(
+  "GraphV2.SnapshotDecodeError",
+  { message: Schema.String },
+) {}
 
 export interface NodeRow {
   readonly id: NodeID
@@ -75,6 +80,83 @@ export interface GraphView {
   readonly nodes: ReadonlyArray<NodeRow>
   readonly edges: ReadonlyArray<EdgeRow>
 }
+
+export interface SessionPlanView extends GraphView {
+  readonly source: "currentPlan" | "version"
+  readonly versionNumber: number | null
+  readonly publishedAt: number | null
+}
+
+export interface SessionVersion extends Omit<VersionRow, "snapshot"> {
+  readonly snapshot: GraphView
+}
+
+const CanonicalNodeRow = Schema.Struct({
+  id: NodeID,
+  projectID: ProjectV2.ID,
+  sessionID: Schema.NullOr(Schema.String),
+  type: Graph.NodeType,
+  name: Schema.String,
+  level: Graph.Level,
+  priority: Schema.NullOr(Graph.Priority),
+  category: Schema.NullOr(Schema.String),
+  status: Graph.NodeStatus,
+  desc: Schema.NullOr(Schema.String),
+  content: Schema.NullOr(Graph.NodeContent),
+  verification: Schema.NullOr(Graph.VerificationSpec),
+  codeHash: Schema.NullOr(Schema.String),
+  testStatus: Graph.TestStatus,
+  confidence: Schema.Number,
+  timeCreated: Schema.Number,
+  timeUpdated: Schema.Number,
+})
+
+const PersistedNodeRow = Schema.Struct({
+  id: NodeID,
+  project_id: ProjectV2.ID,
+  session_id: Schema.NullOr(Schema.String),
+  type: Graph.NodeType,
+  name: Schema.String,
+  level: Graph.Level,
+  priority: Schema.NullOr(Graph.Priority),
+  category: Schema.NullOr(Schema.String),
+  status: Graph.NodeStatus,
+  desc: Schema.NullOr(Schema.String),
+  content: Schema.NullOr(Graph.NodeContent),
+  verification: Schema.NullOr(Graph.VerificationSpec),
+  code_hash: Schema.NullOr(Schema.String),
+  test_status: Graph.TestStatus,
+  confidence: Schema.Number,
+  time_created: Schema.Number,
+  time_updated: Schema.Number,
+})
+
+const CanonicalEdgeRow = Schema.Struct({
+  id: EdgeID,
+  projectID: ProjectV2.ID,
+  sessionID: Schema.NullOr(Schema.String),
+  sourceID: NodeID,
+  targetID: NodeID,
+  relation: Graph.EdgeRelation,
+  confidence: Schema.Number,
+  timeCreated: Schema.Number,
+})
+
+const PersistedEdgeRow = Schema.Struct({
+  id: EdgeID,
+  project_id: ProjectV2.ID,
+  session_id: Schema.NullOr(Schema.String),
+  source_id: NodeID,
+  target_id: NodeID,
+  relation: Graph.EdgeRelation,
+  confidence: Schema.Number,
+  time_created: Schema.Number,
+})
+
+const Snapshot = Schema.Struct({
+  nodes: Schema.Array(Schema.Union([CanonicalNodeRow, PersistedNodeRow])),
+  edges: Schema.Array(Schema.Union([CanonicalEdgeRow, PersistedEdgeRow])),
+})
 
 export const NodeCreate = Schema.Struct({
   projectID: ProjectV2.ID,
@@ -167,10 +249,15 @@ export interface Interface {
   }
   readonly main: (input: { projectID: ProjectV2.ID }) => Effect.Effect<GraphView>
   readonly currentPlan: (input: { sessionID: string }) => Effect.Effect<GraphView>
+  readonly planView: (input: { projectID: ProjectV2.ID; sessionID: string }) => Effect.Effect<SessionPlanView, SnapshotDecodeError>
   readonly promote: (input: PromoteInput) => Effect.Effect<PromoteResult>
   readonly version: {
     readonly list: (input: { projectID: ProjectV2.ID }) => Effect.Effect<ReadonlyArray<VersionRow>>
     readonly get: (input: { projectID: ProjectV2.ID; versionNumber: number }) => Effect.Effect<VersionRow, NotFoundError>
+    readonly latestForSession: (input: {
+      projectID: ProjectV2.ID
+      sessionID: string
+    }) => Effect.Effect<SessionVersion | undefined, SnapshotDecodeError>
   }
 }
 
@@ -216,6 +303,42 @@ const versionRow = (r: typeof GraphVersionTable.$inferSelect): VersionRow => ({
   snapshot: r.snapshot,
   timeCreated: r.time_created,
 })
+
+const decodeSnapshot = (input: unknown): Effect.Effect<GraphView, SnapshotDecodeError> =>
+  Schema.decodeUnknownEffect(Snapshot)(input).pipe(
+    Effect.map((snapshot) => ({
+      nodes: snapshot.nodes.map((row): NodeRow => "project_id" in row ? {
+        id: row.id,
+        projectID: row.project_id,
+        sessionID: row.session_id,
+        type: row.type,
+        name: row.name,
+        level: row.level,
+        priority: row.priority,
+        category: row.category,
+        status: row.status,
+        desc: row.desc,
+        content: row.content,
+        verification: row.verification,
+        codeHash: row.code_hash,
+        testStatus: row.test_status,
+        confidence: row.confidence,
+        timeCreated: row.time_created,
+        timeUpdated: row.time_updated,
+      } : row),
+      edges: snapshot.edges.map((row): EdgeRow => "project_id" in row ? {
+        id: row.id,
+        projectID: row.project_id,
+        sessionID: row.session_id,
+        sourceID: row.source_id,
+        targetID: row.target_id,
+        relation: row.relation,
+        confidence: row.confidence,
+        timeCreated: row.time_created,
+      } : row),
+    })),
+    Effect.mapError((cause) => new SnapshotDecodeError({ message: String(cause) })),
+  )
 
 export const layer = Layer.effect(
   Service,
@@ -451,13 +574,55 @@ export const layer = Layer.effect(
       return versionRow(r)
     })
 
+    const versionLatestForSession = Effect.fn("GraphStorage.version.latestForSession")(function* (input: {
+      projectID: ProjectV2.ID
+      sessionID: string
+    }) {
+      const r = yield* db
+        .select()
+        .from(GraphVersionTable)
+        .where(and(eq(GraphVersionTable.project_id, input.projectID), eq(GraphVersionTable.session_id, input.sessionID)))
+        .orderBy(desc(GraphVersionTable.version_number))
+        .get()
+        .pipe(Effect.orDie)
+      if (!r) return undefined
+      return { ...versionRow(r), snapshot: yield* decodeSnapshot(r.snapshot) }
+    })
+
+    const planView = Effect.fn("GraphStorage.planView")(function* (input: {
+      projectID: ProjectV2.ID
+      sessionID: string
+    }) {
+      const nodes = yield* nodeList({ projectID: input.projectID, sessionID: input.sessionID })
+      if (nodes.length > 0) {
+        return {
+          nodes,
+          edges: yield* edgeList({ projectID: input.projectID, sessionID: input.sessionID }),
+          source: "currentPlan" as const,
+          versionNumber: null,
+          publishedAt: null,
+        }
+      }
+      const version = yield* versionLatestForSession(input)
+      if (version) {
+        return {
+          ...version.snapshot,
+          source: "version" as const,
+          versionNumber: version.versionNumber,
+          publishedAt: version.timeCreated,
+        }
+      }
+      return { nodes: [], edges: [], source: "currentPlan" as const, versionNumber: null, publishedAt: null }
+    })
+
     return Service.of({
       node: { create: nodeCreate, get: nodeGet, update: nodeUpdate, delete: nodeDelete, list: nodeList },
       edge: { create: edgeCreate, get: edgeGet, delete: edgeDelete, list: edgeList },
       main,
       currentPlan,
+      planView,
       promote,
-      version: { list: versionList, get: versionGet },
+      version: { list: versionList, get: versionGet, latestForSession: versionLatestForSession },
     })
   }),
 )

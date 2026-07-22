@@ -5,11 +5,11 @@ import { Context, Effect, Layer } from "effect"
 import type { VerificationEvidence, VerificationSpec } from "@opencode-ai/schema/graph"
 import { LayerNode } from "../../effect/layer-node"
 import type { ProjectV2 } from "../../project"
-import * as GraphStorage from "../storage"
+import { GraphStorage } from "../storage"
 import type { GraphView, NodeID, NodeRow } from "../storage"
-import * as GraphAudit from "./audit"
+import { GraphAudit } from "./audit"
 import { nearestCompositeIDs, orderedAtomicNodes } from "./order"
-import * as GraphWorkflowState from "./state"
+import { GraphWorkflowState } from "./state"
 import type { State } from "./state"
 import { Database } from "../../database/database"
 
@@ -68,7 +68,10 @@ export interface Projection {
 }
 
 export interface Interface {
-  readonly get: (input: { readonly projectID: ProjectV2.ID; readonly sessionID: string }) => Effect.Effect<Projection>
+  readonly get: (input: {
+    readonly projectID: ProjectV2.ID
+    readonly sessionID: string
+  }) => Effect.Effect<Projection, GraphStorage.SnapshotDecodeError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/GraphWorkflow") {}
@@ -83,7 +86,7 @@ export const layer = Layer.effect(
       readonly projectID: ProjectV2.ID
       readonly sessionID: string
     }) {
-      const graph = yield* storage.currentPlan({ sessionID: input.sessionID })
+      const graph = yield* storage.planView(input)
       const state = yield* workflow.get(input.sessionID)
       const records = yield* audit.tool.list({ projectID: input.projectID, sessionID: input.sessionID })
       return projectWorkflow(

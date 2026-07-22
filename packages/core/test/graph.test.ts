@@ -4,7 +4,9 @@ import { Effect, Exit, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
 import * as GraphStorage from "@opencode-ai/core/graph/storage"
+import { GraphVersionTable } from "@opencode-ai/core/graph/sql"
 
 // layerFromPath(":memory:") provides an in-memory sqlite DB (test/preload.ts sets OPENCODE_DB=:memory:).
 // provideMerge keeps Database.Service in the output while feeding it to GraphStorage.
@@ -194,6 +196,12 @@ describe("GraphStorage.promote + version", () => {
         expect(m.edges.length).toBe(1)
         const cp = yield* g.currentPlan({ sessionID: SID })
         expect(cp.nodes.length).toBe(0)
+        const plan = yield* g.planView({ projectID: PID, sessionID: SID })
+        expect(plan.source).toBe("version")
+        expect(plan.versionNumber).toBe(1)
+        expect(plan.publishedAt).toBeNumber()
+        expect(plan.nodes.map((node) => node.id)).toEqual([n1, n2])
+        expect(plan.edges[0]).toMatchObject({ sourceID: n1, targetID: n2, relation: "uses" })
         const vs = yield* g.version.list({ projectID: PID })
         expect(vs.length).toBe(1)
         const v1 = yield* g.version.get({ projectID: PID, versionNumber: 1 })
@@ -218,6 +226,107 @@ describe("GraphStorage.promote + version", () => {
       }),
     )
   })
+
+  test("planView prefers a non-empty live plan over the latest published version", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "Published", level: "L2" })
+        yield* g.promote({ projectID: PID, sessionID: SID })
+        const liveID = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "Live", level: "L2" })
+
+        const plan = yield* g.planView({ projectID: PID, sessionID: SID })
+        expect(plan).toMatchObject({ source: "currentPlan", versionNumber: null, publishedAt: null })
+        expect(plan.nodes.map((node) => node.id)).toEqual([liveID])
+      }),
+    )
+  })
+
+  test("latestForSession decodes the newest matching canonical snapshot only", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const database = yield* Database.Service
+        const otherSID = SessionSchema.ID.make("ses_other")
+        yield* database.db.insert(SessionTable).values({
+          id: otherSID,
+          project_id: PID,
+          slug: "other",
+          directory: "/tmp/other",
+          title: "other",
+          version: "0",
+          time_created: 0,
+          time_updated: 0,
+        }).run().pipe(Effect.orDie)
+        const first = canonicalNode("gnd_canonical_first", "First")
+        const second = canonicalNode("gnd_canonical_second", "Second")
+        const linked = canonicalEdge("ged_canonical", first.id, second.id)
+        yield* database.db.insert(GraphVersionTable).values([
+          {
+            id: "gvr_malformed_old" as GraphStorage.VersionID,
+            project_id: PID,
+            session_id: SID,
+            version_number: 1,
+            snapshot: { nodes: [{ id: "incomplete" }], edges: [] },
+          },
+          {
+            id: "gvr_canonical" as GraphStorage.VersionID,
+            project_id: PID,
+            session_id: SID,
+            version_number: 2,
+            snapshot: { nodes: [first, second], edges: [linked] },
+          },
+          {
+            id: "gvr_other_session" as GraphStorage.VersionID,
+            project_id: PID,
+            session_id: otherSID,
+            version_number: 3,
+            snapshot: { nodes: [{ id: "also-incomplete" }], edges: [] },
+          },
+        ]).run().pipe(Effect.orDie)
+
+        const version = yield* g.version.latestForSession({ projectID: PID, sessionID: SID })
+        expect(version?.versionNumber).toBe(2)
+        expect(version?.snapshot.nodes).toEqual([first, second])
+        expect(version?.snapshot.edges).toEqual([linked])
+      }),
+    )
+  })
+
+  test("latestForSession fails with SnapshotDecodeError for a malformed selected snapshot", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const database = yield* Database.Service
+        yield* database.db.insert(GraphVersionTable).values({
+          id: "gvr_malformed" as GraphStorage.VersionID,
+          project_id: PID,
+          session_id: SID,
+          version_number: 1,
+          snapshot: { nodes: [{ id: "incomplete" }], edges: [] },
+        }).run().pipe(Effect.orDie)
+
+        const error = yield* g.version.latestForSession({ projectID: PID, sessionID: SID }).pipe(Effect.flip)
+        expect(error._tag).toBe("GraphV2.SnapshotDecodeError")
+        expect(error.message.length).toBeGreaterThan(0)
+      }),
+    )
+  })
+
+  test("planView returns an empty currentPlan view when no live or published plan exists", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        expect(yield* g.planView({ projectID: PID, sessionID: SID })).toEqual({
+          nodes: [],
+          edges: [],
+          source: "currentPlan",
+          versionNumber: null,
+          publishedAt: null,
+        })
+      }),
+    )
+  })
 })
 
 describe("GraphStorage.cascade", () => {
@@ -237,3 +346,38 @@ describe("GraphStorage.cascade", () => {
     )
   })
 })
+
+function canonicalNode(id: string, name: string): GraphStorage.NodeRow {
+  return {
+    id: id as GraphStorage.NodeID,
+    projectID: PID,
+    sessionID: SID,
+    type: "atomic",
+    name,
+    level: "L2",
+    priority: null,
+    category: null,
+    status: "pending",
+    desc: null,
+    content: null,
+    verification: null,
+    codeHash: null,
+    testStatus: "none",
+    confidence: 1,
+    timeCreated: 1,
+    timeUpdated: 2,
+  }
+}
+
+function canonicalEdge(id: string, sourceID: GraphStorage.NodeID, targetID: GraphStorage.NodeID): GraphStorage.EdgeRow {
+  return {
+    id: id as GraphStorage.EdgeID,
+    projectID: PID,
+    sessionID: SID,
+    sourceID,
+    targetID,
+    relation: "contains",
+    confidence: 1,
+    timeCreated: 3,
+  }
+}
