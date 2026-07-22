@@ -217,6 +217,11 @@ describe("Graph workflow projection", () => {
           status: "succeeded",
           evidence: evidence(taskID, "published evidence"),
         })
+        const live = yield* projection.get({ projectID: PID, sessionID: SID })
+        expect(live.tasks.map((task) => task.name)).toEqual(["Published Task"])
+        expect(live.modules.map((module) => module.name)).toEqual(["Published Module"])
+        expect(live.progress).toEqual({ total: 1, verified: 1, failed: 0, percent: 100 })
+        expect(live.tasks[0]?.latestEvidence?.commands[0]?.excerpt).toBe("published evidence")
         yield* storage.promote({ projectID: PID, sessionID: SID })
 
         expect((yield* storage.currentPlan({ sessionID: SID })).nodes).toEqual([])

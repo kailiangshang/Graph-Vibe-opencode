@@ -1,5 +1,6 @@
 import { GraphDomain } from "@opencode-ai/core/graph/domain"
 import { GraphPlan } from "@opencode-ai/core/graph/workflow/plan"
+import type { Projection } from "@opencode-ai/core/graph/workflow/projection"
 import { GraphAudit } from "@opencode-ai/core/graph/workflow/audit"
 import { graphDiff } from "@opencode-ai/core/graph/diff"
 import { ProductMigrationState } from "@opencode-ai/core/product-migration/state"
@@ -245,9 +246,18 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
       return result
     })
 
+    const workflowProjection: (input: {
+      projectID: ProjectV2.ID
+      sessionID: string
+    }) => Effect.Effect<Projection, HttpApiError.InternalServerError> = Effect.fn("GraphHttpApi.workflowProjection")(
+      (input) => plan.workflow.get(input).pipe(
+        Effect.mapError(() => new HttpApiError.InternalServerError({})),
+      ),
+    )
+
     const workflow = Effect.fn("GraphHttpApi.workflow")(function* (ctx: { query: typeof SessionRequiredQuery.Type }) {
       const session = yield* resolveSession(ctx.query.session)
-      return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
+      return yield* workflowProjection({ projectID: session.projectID, sessionID: session.id })
     })
 
     const workflowMode = Effect.fn("GraphHttpApi.workflowMode")(function* (ctx: {
@@ -256,6 +266,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
     }) {
       yield* migration.requireCompleted()
       const session = yield* resolveSession(ctx.query.session)
+      yield* workflowProjection({ projectID: session.projectID, sessionID: session.id })
       yield* plan.workflow
         .setMode({
           projectID: session.projectID,
@@ -284,8 +295,9 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
           ),
           Effect.catchTag("GraphWorkflowState.ModuleScopeError", () => Effect.fail(new HttpApiError.BadRequest({}))),
         )
+      const result = yield* workflowProjection({ projectID: session.projectID, sessionID: session.id })
       yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
-      return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
+      return result
     })
 
     const workflowApprove = Effect.fn("GraphHttpApi.workflowApprove")(function* (ctx: {
@@ -294,6 +306,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
     }) {
       yield* migration.requireCompleted()
       const session = yield* resolveSession(ctx.query.session)
+      yield* workflowProjection({ projectID: session.projectID, sessionID: session.id })
       yield* plan.workflow
         .approve({
           sessionID: session.id,
@@ -313,8 +326,9 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
             Effect.fail(new HttpApiError.BadRequest({})),
           ),
         )
+      const result = yield* workflowProjection({ projectID: session.projectID, sessionID: session.id })
       yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
-      return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
+      return result
     })
 
     const workflowPause = Effect.fn("GraphHttpApi.workflowPause")(function* (ctx: {
@@ -323,6 +337,7 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
     }) {
       yield* migration.requireCompleted()
       const session = yield* resolveSession(ctx.query.session)
+      yield* workflowProjection({ projectID: session.projectID, sessionID: session.id })
       yield* plan.workflow
         .pause({
           sessionID: session.id,
@@ -340,8 +355,9 @@ export const graphHandlers = HttpApiBuilder.group(InstanceHttpApi, "graph", (han
             ),
           ),
         )
+      const result = yield* workflowProjection({ projectID: session.projectID, sessionID: session.id })
       yield* events.publish(Graph.Event.PlanUpdated, { projectID: session.projectID })
-      return yield* plan.workflow.get({ projectID: session.projectID, sessionID: session.id })
+      return result
     })
 
     const promote = Effect.fn("GraphHttpApi.promote")(function* (ctx: {

@@ -1,6 +1,6 @@
 export * as GraphStorage from "./storage"
 
-import { and, desc, eq, isNull } from "drizzle-orm"
+import { and, desc, eq, isNull, notLike, or } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { LayerNode } from "../effect/layer-node"
@@ -581,7 +581,14 @@ export const layer = Layer.effect(
       const r = yield* db
         .select()
         .from(GraphVersionTable)
-        .where(and(eq(GraphVersionTable.project_id, input.projectID), eq(GraphVersionTable.session_id, input.sessionID)))
+        .where(and(
+          eq(GraphVersionTable.project_id, input.projectID),
+          eq(GraphVersionTable.session_id, input.sessionID),
+          or(
+            isNull(GraphVersionTable.message),
+            notLike(GraphVersionTable.message, "product-migration:enhancement:%"),
+          ),
+        ))
         .orderBy(desc(GraphVersionTable.version_number))
         .get()
         .pipe(Effect.orDie)

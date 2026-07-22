@@ -261,6 +261,7 @@ describe("GraphStorage.promote + version", () => {
         const first = canonicalNode("gnd_canonical_first", "First")
         const second = canonicalNode("gnd_canonical_second", "Second")
         const linked = canonicalEdge("ged_canonical", first.id, second.id)
+        const enhancement = canonicalNode("gnd_enhancement", "Enhancement")
         yield* database.db.insert(GraphVersionTable).values([
           {
             id: "gvr_malformed_old" as GraphStorage.VersionID,
@@ -277,10 +278,18 @@ describe("GraphStorage.promote + version", () => {
             snapshot: { nodes: [first, second], edges: [linked] },
           },
           {
+            id: "gvr_enhancement" as GraphStorage.VersionID,
+            project_id: PID,
+            session_id: SID,
+            version_number: 3,
+            message: "product-migration:enhancement:geh_test",
+            snapshot: { nodes: [enhancement], edges: [] },
+          },
+          {
             id: "gvr_other_session" as GraphStorage.VersionID,
             project_id: PID,
             session_id: otherSID,
-            version_number: 3,
+            version_number: 4,
             snapshot: { nodes: [{ id: "also-incomplete" }], edges: [] },
           },
         ]).run().pipe(Effect.orDie)

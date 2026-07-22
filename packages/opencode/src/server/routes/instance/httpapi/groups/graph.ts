@@ -409,7 +409,7 @@ export const GraphApi = HttpApi.make("graph")
         HttpApiEndpoint.get("workflow", GraphPaths.workflow, {
           query: SessionRequiredQuery,
           success: described(WorkflowResponse, "Session workflow projection"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, HttpApiError.InternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "graph.workflow",
@@ -426,6 +426,7 @@ export const GraphApi = HttpApi.make("graph")
             ApiNotFoundError,
             GraphWorkflowRevisionConflict,
             GraphWorkflowActiveOperation,
+            HttpApiError.InternalServerError,
             ProductMigration.Required,
           ],
         }).annotateMerge(
@@ -443,6 +444,7 @@ export const GraphApi = HttpApi.make("graph")
             HttpApiError.BadRequest,
             ApiNotFoundError,
             GraphWorkflowRevisionConflict,
+            HttpApiError.InternalServerError,
             ProductMigration.Required,
           ],
         }).annotateMerge(
@@ -460,6 +462,7 @@ export const GraphApi = HttpApi.make("graph")
             HttpApiError.BadRequest,
             ApiNotFoundError,
             GraphWorkflowRevisionConflict,
+            HttpApiError.InternalServerError,
             ProductMigration.Required,
           ],
         }).annotateMerge(

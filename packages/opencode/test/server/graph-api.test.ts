@@ -215,6 +215,38 @@ describe("graph HttpApi", () => {
       expect((yield* Fiber.join(event)).payload.type).toBe("graph.plan.updated")
     }),
   )
+  it.instance("returns a stable workflow error without mutating state for a malformed published plan", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Project.use.fromDirectory(test.directory)
+      const session = yield* Session.use.create()
+      const database = yield* Database.Service
+      const workflow = yield* GraphWorkflowState.Service
+      yield* database.db.run(sql`
+        INSERT INTO graph_version
+          (id, project_id, session_id, version_number, message, snapshot, time_created)
+        VALUES
+          ('gvr_malformed_api', ${session.projectID}, ${session.id}, 1, 'published',
+           ${JSON.stringify({ nodes: [{ id: "incomplete" }], edges: [] })}, 1)
+      `)
+      const path = `/graph/workflow?directory=${encodeURIComponent(test.directory)}&session=${session.id}`
+
+      const read = yield* request(path)
+      const readBody = yield* read.json
+      const mutation = yield* send("PATCH", `/graph/workflow/mode?directory=${encodeURIComponent(test.directory)}&session=${session.id}`, {
+        mode: "atomic",
+        expectedRevision: 0,
+      })
+      const mutationBody = yield* mutation.json
+      const state = yield* workflow.get(session.id)
+
+      expect(state).toBeUndefined()
+      expect(read.status).toBe(500)
+      expect(readBody).toEqual({ _tag: "InternalServerError" })
+      expect(mutation.status).toBe(500)
+      expect(mutationBody).toEqual({ _tag: "InternalServerError" })
+    }),
+  )
   it.instance("publishes plan invalidation after workflow pause and approval", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
