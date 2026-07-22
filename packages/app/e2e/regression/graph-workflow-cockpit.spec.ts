@@ -207,6 +207,7 @@ test("publishes a completed Plan through confirmation and reloads its version-ba
   await expect.poll(() => state.promotions).toBe(1)
   expect(state.promotionMessages).toEqual(["Published from Graph workflow cockpit"])
   expect(state.promotionExpectedRevisions).toEqual([2])
+  expect(state.promotionExpectedPlanHashes).toEqual([`sha256:${"1".repeat(64)}`])
   await expect(page.locator(".graph-source-switch button").filter({ hasText: /^Plan$/ })).toHaveAttribute(
     "aria-pressed",
     "true",
@@ -255,6 +256,20 @@ test("reconciles a concurrent publication without retrying or showing optimistic
   await expect(page.getByText("Published version 7 · read-only")).toBeVisible()
 })
 
+test("opens Main when its topology arrives after a concurrent publication", async ({ page }) => {
+  const state = await setup(page, false, "complete", { emptyMain: true, promotion: "concurrent-delayed-main" })
+  await page.goto(routeUrl("source"))
+
+  await page.getByRole("button", { name: "Publish to Main" }).click()
+  await page.getByRole("dialog").getByRole("button", { name: "Publish to Main" }).click()
+
+  await expect(page.getByRole("button", { name: "Plan", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByRole("status").filter({ hasText: "Main is still refreshing" })).toBeVisible()
+  await state.publishMain()
+  await expect(page.getByRole("button", { name: "Main", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.locator(".graph-task").filter({ hasText: "Released capability" })).toBeVisible()
+})
+
 test("failed publication refreshes authority and leaves Main empty", async ({ page }) => {
   const state = await setup(page, false, "complete", { emptyMain: true, promotion: "failure" })
   await page.goto(routeUrl("source"))
@@ -285,14 +300,17 @@ async function setup(
   page: Page,
   embedded: boolean,
   initialView: WorkflowView = "checkpoint",
-  options: { emptyMain?: boolean; promotion?: "delayed" | "failure" | "concurrent" } = {},
+  options: { emptyMain?: boolean; promotion?: "delayed" | "failure" | "concurrent" | "concurrent-delayed-main" } = {},
 ) {
   let view = initialView
   let approvals = 0
   let promotions = 0
   const promotionMessages: Array<string | null> = []
   const promotionExpectedRevisions: Array<number | null> = []
+  const promotionExpectedPlanHashes: Array<string | null> = []
   let published = false
+  let mainReady = options.promotion !== "concurrent-delayed-main"
+  const events: Array<{ directory: string; payload: Record<string, unknown> }> = []
   const reads = { plan: 0, workflow: 0, main: 0 }
   let releaseWorkflow = () => {}
   let releasePromotion = () => {}
@@ -315,6 +333,9 @@ async function setup(
     get promotionExpectedRevisions() {
       return [...promotionExpectedRevisions]
     },
+    get promotionExpectedPlanHashes() {
+      return [...promotionExpectedPlanHashes]
+    },
     get reads() {
       return { ...reads }
     },
@@ -323,6 +344,13 @@ async function setup(
     },
     releaseWorkflow,
     releasePromotion,
+    publishMain: () => {
+      mainReady = true
+      events.push({
+        directory,
+        payload: { type: "graph.main.updated", properties: {} },
+      })
+    },
   }
   await mockOpenCodeServer(page, {
     directory,
@@ -347,6 +375,8 @@ async function setup(
       },
     ],
     pageMessages: () => ({ items: [] }),
+    events: () => events.splice(0),
+    eventRetry: 20,
   })
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url())
@@ -381,12 +411,13 @@ async function setup(
           source: published ? "version" : "currentPlan",
           versionNumber: published ? 7 : null,
           publishedAt: published ? 1700000001000 : null,
+          planHash: `sha256:${"1".repeat(64)}`,
         }),
       )
     }
     if (url.pathname === "/graph/main") {
       reads.main++
-      return route.fulfill(json(options.emptyMain && !published ? { nodes: [], edges: [] } : mainGraph))
+      return route.fulfill(json((options.emptyMain && !published) || !mainReady ? { nodes: [], edges: [] } : mainGraph))
     }
     if (url.pathname === "/graph/current-plan/promote" && route.request().method() === "POST") {
       const body: unknown = route.request().postDataJSON()
@@ -400,21 +431,16 @@ async function setup(
           ? body.expectedRevision
           : null,
       )
+      promotionExpectedPlanHashes.push(
+        body && typeof body === "object" && "expectedPlanHash" in body && typeof body.expectedPlanHash === "string"
+          ? body.expectedPlanHash
+          : null,
+      )
       promotions++
       if (options.promotion === "delayed") await promotionReady
-      if (options.promotion === "concurrent") {
+      if (options.promotion === "concurrent" || options.promotion === "concurrent-delayed-main") {
         published = true
-        return route.fulfill(
-          json(
-            {
-              _tag: "GraphWorkflowRevisionConflict",
-              expectedRevision: 2,
-              actualRevision: 3,
-              message: "Workflow revision conflict: expected 2, actual 3",
-            },
-            409,
-          ),
-        )
+        return route.fulfill(json({ _tag: "BadRequest" }, 400))
       }
       if (options.promotion === "failure")
         return route.fulfill(json({ _tag: "GraphPromotionBlocked", reason: "workflow_incomplete" }, 409))

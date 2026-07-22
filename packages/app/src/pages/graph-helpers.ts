@@ -28,6 +28,7 @@ export interface PublicationScope {
   readonly sessionID: string
   readonly pathname: string
   readonly revision: number
+  readonly planHash: string
   readonly planSource: "currentPlan" | "version"
   readonly sessionTitle: string
   readonly nodeCount: number
@@ -41,6 +42,7 @@ export function publicationScope(input: {
   sessionID: string
   pathname: string
   revision: number
+  planHash: string
   planSource: "currentPlan" | "version"
   sessionTitle: string
   nodes: ReadonlyArray<{ id: string }>
@@ -51,6 +53,7 @@ export function publicationScope(input: {
     sessionID: input.sessionID,
     pathname: input.pathname,
     revision: input.revision,
+    planHash: input.planHash,
     planSource: input.planSource,
     sessionTitle: input.sessionTitle,
     nodeCount: input.nodes.length,
@@ -66,6 +69,7 @@ export function samePublicationScope(reviewed: PublicationScope, current: Public
     reviewed.sessionID === current.sessionID &&
     reviewed.pathname === current.pathname &&
     reviewed.revision === current.revision &&
+    reviewed.planHash === current.planHash &&
     reviewed.planSource === current.planSource &&
     reviewed.sessionTitle === current.sessionTitle &&
     reviewed.nodeCount === current.nodeCount &&

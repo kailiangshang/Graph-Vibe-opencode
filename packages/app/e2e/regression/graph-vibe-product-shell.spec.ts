@@ -352,6 +352,7 @@ test("mixed-server home opens Graph using its focused Graph Vibe server", async 
     }
     if (url.pathname === `/session/${graphSessionID}`)
       return json(route, graphSession(remoteDirectory, "project-remote"))
+    if (url.pathname === "/graph/plan-view") return json(route, emptyPlanView)
     if (url.pathname === "/graph/current-plan" || url.pathname === "/graph/main")
       return json(route, { nodes: [], edges: [] })
     if (url.pathname === "/graph/workflow") return json(route, emptyWorkflow)
@@ -750,6 +751,7 @@ async function setupGraphLaunch(
         return json(route, { message: "Target session temporarily unavailable" }, 503)
       return json(route, session)
     }
+    if (url.pathname === "/graph/plan-view") return json(route, emptyPlanView)
     if (url.pathname === "/graph/current-plan" || url.pathname === "/graph/main")
       return json(route, { nodes: [], edges: [] })
     if (url.pathname === "/graph/workflow") return json(route, emptyWorkflow)
@@ -790,6 +792,15 @@ const emptyWorkflow = {
   tasks: [],
   modules: [],
   rollups: [],
+}
+
+const emptyPlanView = {
+  source: "currentPlan",
+  versionNumber: null,
+  publishedAt: null,
+  planHash: `sha256:${"0".repeat(64)}`,
+  nodes: [],
+  edges: [],
 }
 
 function unavailable(route: Route) {
@@ -891,6 +902,7 @@ async function setupMixedServers(
     if (!local && options.remoteSession && url.pathname === `/session/${graphSessionID}/message`) return json(route, [])
     if (!local && options.remoteSession && /^\/session\/[^/]+\/(children|todo|diff)$/.test(url.pathname))
       return json(route, [])
+    if (!local && options.remoteSession && url.pathname === "/graph/plan-view") return json(route, emptyPlanView)
     if (!local && options.remoteSession && (url.pathname === "/graph/current-plan" || url.pathname === "/graph/main"))
       return json(route, { nodes: [], edges: [] })
     if (!local && options.remoteSession && url.pathname === "/graph/workflow") return json(route, emptyWorkflow)

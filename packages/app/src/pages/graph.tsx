@@ -91,6 +91,15 @@ export default function GraphPage() {
     )
   })
 
+  createEffect(() => {
+    if (!state.publicationStatus || planQuery.data?.source !== "version" || !mainQuery.data?.nodes.length) return
+    setState({
+      selectedNodeID: null,
+      source: "main",
+      publicationStatus: "",
+    })
+  })
+
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: queryKey() })
   }
@@ -167,6 +176,7 @@ export default function GraphPage() {
         graphPromotePayload: {
           message: `Published from ${scope.sessionTitle}`,
           expectedRevision: scope.revision,
+          expectedPlanHash: scope.planHash,
         },
       })
       if (response.error || !response.data) throw response.error ?? { _tag: "UnexpectedPromotionResponse" }
@@ -233,6 +243,7 @@ export default function GraphPage() {
       sessionID,
       pathname: location.pathname,
       revision: workflow.revision,
+      planHash: plan.planHash,
       planSource: plan.source,
       sessionTitle: sync().session.get(sessionID)?.title ?? sessionID,
       nodes: plan.nodes,
