@@ -391,6 +391,10 @@ describe("graph HttpApi", () => {
       )
 
       expect(response.status).toBe(404)
+      expect(yield* response.json).toEqual({
+        name: "NotFoundError",
+        data: { message: "Session not found: ses_missing" },
+      })
     }),
   )
 

@@ -84,6 +84,19 @@ describe("PublicApi OpenAPI v2 errors", () => {
     )
   })
 
+  test("preserves nullable required metadata on session plan views", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const schema = spec.components.schemas.SessionPlanView
+
+    expect(schema?.required).toEqual(["source", "versionNumber", "publishedAt", "nodes", "edges"])
+    expect(schema?.properties?.versionNumber?.anyOf).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "null" })]),
+    )
+    expect(schema?.properties?.publishedAt?.anyOf).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "null" })]),
+    )
+  })
+
   test("documents nested legacy global sync events", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
     const schema = spec.components.schemas.SyncEventSessionCreated

@@ -292,6 +292,11 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
     migrationItem.targetID = nullable(migrationItem.targetID)
     migrationItem.error = nullable(migrationItem.error)
   }
+  const sessionPlanView = schemas.SessionPlanView?.properties
+  if (sessionPlanView) {
+    sessionPlanView.versionNumber = nullable(sessionPlanView.versionNumber)
+    sessionPlanView.publishedAt = nullable(sessionPlanView.publishedAt)
+  }
 }
 
 function normalizeComponentDescriptions(spec: OpenApiSpec) {
