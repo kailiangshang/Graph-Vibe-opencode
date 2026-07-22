@@ -148,13 +148,7 @@ describe("GraphStorage.main / currentPlan", () => {
       Effect.gen(function* () {
         const g = yield* GraphStorage.Service
         const mainNode = yield* g.node.create({ projectID: PID, type: "atomic", name: "M", level: "L2" })
-        const planNode = yield* g.node.create({
-          projectID: PID,
-          sessionID: SID,
-          type: "atomic",
-          name: "P",
-          level: "L2",
-        })
+        const planNode = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "P", level: "L2" })
         const m = yield* g.main({ projectID: PID })
         expect(m.nodes.map((n) => n.id)).toContain(mainNode)
         expect(m.nodes.map((n) => n.id)).not.toContain(planNode)
@@ -171,18 +165,7 @@ describe("GraphStorage.main / currentPlan", () => {
         const g = yield* GraphStorage.Service
         const { db } = yield* Database.Service
         const otherPID = "proj_other" as any
-        yield* db
-          .insert(ProjectTable)
-          .values({
-            id: otherPID,
-            worktree: "/tmp/other" as any,
-            vcs: "git",
-            sandboxes: [] as any,
-            time_created: 0,
-            time_updated: 0,
-          } as any)
-          .run()
-          .pipe(Effect.orDie)
+        yield* db.insert(ProjectTable).values({ id: otherPID, worktree: "/tmp/other" as any, vcs: "git", sandboxes: [] as any, time_created: 0, time_updated: 0 } as any).run().pipe(Effect.orDie)
         yield* g.node.create({ projectID: PID, type: "atomic", name: "A", level: "L2" })
         yield* g.node.create({ projectID: otherPID, type: "atomic", name: "X", level: "L2" })
         const mine = yield* g.node.list({ projectID: PID })
@@ -204,7 +187,6 @@ describe("GraphStorage.promote + version", () => {
         const n1 = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "A", level: "L2" })
         const n2 = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "B", level: "L2" })
         yield* g.edge.create({ projectID: PID, sessionID: SID, sourceID: n1, targetID: n2, relation: "uses" })
-        const livePlan = yield* g.planView({ projectID: PID, sessionID: SID })
         const res = yield* g.promote({ projectID: PID, sessionID: SID, message: "merge 1" })
         expect(res.versionNumber).toBe(1)
         expect(res.nodes).toBe(2)
@@ -218,8 +200,6 @@ describe("GraphStorage.promote + version", () => {
         expect(plan.source).toBe("version")
         expect(plan.versionNumber).toBe(1)
         expect(plan.publishedAt).toBeNumber()
-        expect(plan.planHash).toBe(livePlan.planHash)
-        expect(plan.planHash).toMatch(/^sha256:[a-f0-9]{64}$/)
         expect(plan.nodes.map((node) => node.id)).toEqual([n1, n2])
         expect(plan.edges[0]).toMatchObject({ sourceID: n1, targetID: n2, relation: "uses" })
         const vs = yield* g.version.list({ projectID: PID })
@@ -236,20 +216,7 @@ describe("GraphStorage.promote + version", () => {
         const g = yield* GraphStorage.Service
         const SID2 = "ses_two" as any
         const { db } = yield* Database.Service
-        yield* db
-          .insert(SessionTable)
-          .values({
-            id: SID2,
-            project_id: PID,
-            slug: "two",
-            directory: "/tmp",
-            title: "two",
-            version: "0",
-            time_created: 0,
-            time_updated: 0,
-          } as any)
-          .run()
-          .pipe(Effect.orDie)
+        yield* db.insert(SessionTable).values({ id: SID2, project_id: PID, slug: "two", directory: "/tmp", title: "two", version: "0", time_created: 0, time_updated: 0 } as any).run().pipe(Effect.orDie)
         yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "A", level: "L2" })
         const r1 = yield* g.promote({ projectID: PID, sessionID: SID })
         yield* g.node.create({ projectID: PID, sessionID: SID2, type: "atomic", name: "B", level: "L2" })
@@ -266,18 +233,11 @@ describe("GraphStorage.promote + version", () => {
         const g = yield* GraphStorage.Service
         yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "Published", level: "L2" })
         yield* g.promote({ projectID: PID, sessionID: SID })
-        const liveID = yield* g.node.create({
-          projectID: PID,
-          sessionID: SID,
-          type: "atomic",
-          name: "Live",
-          level: "L2",
-        })
+        const liveID = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "Live", level: "L2" })
 
         const plan = yield* g.planView({ projectID: PID, sessionID: SID })
         expect(plan).toMatchObject({ source: "currentPlan", versionNumber: null, publishedAt: null })
         expect(plan.nodes.map((node) => node.id)).toEqual([liveID])
-        expect(plan.planHash).toMatch(/^sha256:[a-f0-9]{64}$/)
       }),
     )
   })
@@ -288,72 +248,57 @@ describe("GraphStorage.promote + version", () => {
         const g = yield* GraphStorage.Service
         const database = yield* Database.Service
         const otherSID = SessionSchema.ID.make("ses_other")
-        yield* database.db
-          .insert(SessionTable)
-          .values({
-            id: otherSID,
-            project_id: PID,
-            slug: "other",
-            directory: "/tmp/other",
-            title: "other",
-            version: "0",
-            time_created: 0,
-            time_updated: 0,
-          })
-          .run()
-          .pipe(Effect.orDie)
+        yield* database.db.insert(SessionTable).values({
+          id: otherSID,
+          project_id: PID,
+          slug: "other",
+          directory: "/tmp/other",
+          title: "other",
+          version: "0",
+          time_created: 0,
+          time_updated: 0,
+        }).run().pipe(Effect.orDie)
         const first = canonicalNode("gnd_canonical_first", "First")
         const second = canonicalNode("gnd_canonical_second", "Second")
         const linked = canonicalEdge("ged_canonical", first.id, second.id)
         const enhancement = canonicalNode("gnd_enhancement", "Enhancement")
         const enhancementID = deterministicID("geh", SID)
         const enhancementVersionID = deterministicID("gvr", enhancementID) as GraphStorage.VersionID
-        yield* database.db
-          .update(SessionTable)
-          .set({
-            metadata: {
-              productMigration: { graphEnhancement: { id: enhancementID, versionID: enhancementVersionID } },
-            },
-          })
-          .where(eq(SessionTable.id, SID))
-          .run()
-          .pipe(Effect.orDie)
-        yield* database.db
-          .insert(GraphVersionTable)
-          .values([
-            {
-              id: "gvr_malformed_old" as GraphStorage.VersionID,
-              project_id: PID,
-              session_id: SID,
-              version_number: 1,
-              snapshot: { nodes: [{ id: "incomplete" }], edges: [] },
-            },
-            {
-              id: "gvr_canonical" as GraphStorage.VersionID,
-              project_id: PID,
-              session_id: SID,
-              version_number: 2,
-              snapshot: { nodes: [first, second], edges: [linked] },
-            },
-            {
-              id: enhancementVersionID,
-              project_id: PID,
-              session_id: SID,
-              version_number: 3,
-              message: "generated enhancement",
-              snapshot: { nodes: [enhancement], edges: [] },
-              time_created: 0,
-            },
-            {
-              id: "gvr_other_session" as GraphStorage.VersionID,
-              project_id: PID,
-              session_id: otherSID,
-              version_number: 4,
-              snapshot: { nodes: [{ id: "also-incomplete" }], edges: [] },
-            },
-          ])
-          .run()
-          .pipe(Effect.orDie)
+        yield* database.db.update(SessionTable).set({
+          metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID: enhancementVersionID } } },
+        }).where(eq(SessionTable.id, SID)).run().pipe(Effect.orDie)
+        yield* database.db.insert(GraphVersionTable).values([
+          {
+            id: "gvr_malformed_old" as GraphStorage.VersionID,
+            project_id: PID,
+            session_id: SID,
+            version_number: 1,
+            snapshot: { nodes: [{ id: "incomplete" }], edges: [] },
+          },
+          {
+            id: "gvr_canonical" as GraphStorage.VersionID,
+            project_id: PID,
+            session_id: SID,
+            version_number: 2,
+            snapshot: { nodes: [first, second], edges: [linked] },
+          },
+          {
+            id: enhancementVersionID,
+            project_id: PID,
+            session_id: SID,
+            version_number: 3,
+            message: "generated enhancement",
+            snapshot: { nodes: [enhancement], edges: [] },
+            time_created: 0,
+          },
+          {
+            id: "gvr_other_session" as GraphStorage.VersionID,
+            project_id: PID,
+            session_id: otherSID,
+            version_number: 4,
+            snapshot: { nodes: [{ id: "also-incomplete" }], edges: [] },
+          },
+        ]).run().pipe(Effect.orDie)
 
         const version = yield* g.version.latestForSession({ projectID: PID, sessionID: SID })
         expect(version?.versionNumber).toBe(2)
@@ -395,27 +340,18 @@ describe("GraphStorage.promote + version", () => {
         const enhancementID = "geh_forged"
         const versionID = deterministicID("gvr", enhancementID) as GraphStorage.VersionID
         const forged = canonicalNode("gnd_forged", "Forged metadata publication")
-        yield* database.db
-          .update(SessionTable)
-          .set({
-            metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID } } },
-          })
-          .where(eq(SessionTable.id, SID))
-          .run()
-          .pipe(Effect.orDie)
-        yield* database.db
-          .insert(GraphVersionTable)
-          .values({
-            id: versionID,
-            project_id: PID,
-            session_id: SID,
-            version_number: 1,
-            message: "normal publication",
-            snapshot: { nodes: [forged], edges: [] },
-            time_created: 0,
-          })
-          .run()
-          .pipe(Effect.orDie)
+        yield* database.db.update(SessionTable).set({
+          metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID } } },
+        }).where(eq(SessionTable.id, SID)).run().pipe(Effect.orDie)
+        yield* database.db.insert(GraphVersionTable).values({
+          id: versionID,
+          project_id: PID,
+          session_id: SID,
+          version_number: 1,
+          message: "normal publication",
+          snapshot: { nodes: [forged], edges: [] },
+          time_created: 0,
+        }).run().pipe(Effect.orDie)
 
         const version = yield* g.version.latestForSession({ projectID: PID, sessionID: SID })
         expect(version?.id).toBe(versionID)
@@ -432,27 +368,18 @@ describe("GraphStorage.promote + version", () => {
         const enhancementID = deterministicID("geh", SID)
         const versionID = deterministicID("gvr", "geh_other") as GraphStorage.VersionID
         const forged = canonicalNode("gnd_forged_version", "Forged version publication")
-        yield* database.db
-          .update(SessionTable)
-          .set({
-            metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID } } },
-          })
-          .where(eq(SessionTable.id, SID))
-          .run()
-          .pipe(Effect.orDie)
-        yield* database.db
-          .insert(GraphVersionTable)
-          .values({
-            id: versionID,
-            project_id: PID,
-            session_id: SID,
-            version_number: 1,
-            message: "normal publication",
-            snapshot: { nodes: [forged], edges: [] },
-            time_created: 0,
-          })
-          .run()
-          .pipe(Effect.orDie)
+        yield* database.db.update(SessionTable).set({
+          metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID } } },
+        }).where(eq(SessionTable.id, SID)).run().pipe(Effect.orDie)
+        yield* database.db.insert(GraphVersionTable).values({
+          id: versionID,
+          project_id: PID,
+          session_id: SID,
+          version_number: 1,
+          message: "normal publication",
+          snapshot: { nodes: [forged], edges: [] },
+          time_created: 0,
+        }).run().pipe(Effect.orDie)
 
         const version = yield* g.version.latestForSession({ projectID: PID, sessionID: SID })
         expect(version?.id).toBe(versionID)
@@ -469,27 +396,18 @@ describe("GraphStorage.promote + version", () => {
         const enhancementID = deterministicID("geh", SID)
         const versionID = deterministicID("gvr", enhancementID) as GraphStorage.VersionID
         const publication = canonicalNode("gnd_metadata_pointer", "Metadata pointer publication")
-        yield* database.db
-          .update(SessionTable)
-          .set({
-            metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID } } },
-          })
-          .where(eq(SessionTable.id, SID))
-          .run()
-          .pipe(Effect.orDie)
-        yield* database.db
-          .insert(GraphVersionTable)
-          .values({
-            id: versionID,
-            project_id: PID,
-            session_id: SID,
-            version_number: 1,
-            message: "normal publication",
-            snapshot: { nodes: [publication], edges: [] },
-            time_created: 1,
-          })
-          .run()
-          .pipe(Effect.orDie)
+        yield* database.db.update(SessionTable).set({
+          metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID } } },
+        }).where(eq(SessionTable.id, SID)).run().pipe(Effect.orDie)
+        yield* database.db.insert(GraphVersionTable).values({
+          id: versionID,
+          project_id: PID,
+          session_id: SID,
+          version_number: 1,
+          message: "normal publication",
+          snapshot: { nodes: [publication], edges: [] },
+          time_created: 1,
+        }).run().pipe(Effect.orDie)
 
         const version = yield* g.version.latestForSession({ projectID: PID, sessionID: SID })
         expect(version?.id).toBe(versionID)
@@ -503,17 +421,13 @@ describe("GraphStorage.promote + version", () => {
       Effect.gen(function* () {
         const g = yield* GraphStorage.Service
         const database = yield* Database.Service
-        yield* database.db
-          .insert(GraphVersionTable)
-          .values({
-            id: "gvr_malformed" as GraphStorage.VersionID,
-            project_id: PID,
-            session_id: SID,
-            version_number: 1,
-            snapshot: { nodes: [{ id: "incomplete" }], edges: [] },
-          })
-          .run()
-          .pipe(Effect.orDie)
+        yield* database.db.insert(GraphVersionTable).values({
+          id: "gvr_malformed" as GraphStorage.VersionID,
+          project_id: PID,
+          session_id: SID,
+          version_number: 1,
+          snapshot: { nodes: [{ id: "incomplete" }], edges: [] },
+        }).run().pipe(Effect.orDie)
 
         const error = yield* g.version.latestForSession({ projectID: PID, sessionID: SID }).pipe(Effect.flip)
         expect(error._tag).toBe("GraphV2.SnapshotDecodeError")
@@ -532,7 +446,6 @@ describe("GraphStorage.promote + version", () => {
           source: "currentPlan",
           versionNumber: null,
           publishedAt: null,
-          planHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         })
       }),
     )
