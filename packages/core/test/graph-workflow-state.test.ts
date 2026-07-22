@@ -1097,4 +1097,42 @@ describe("GraphWorkflowState", () => {
       }),
     )
   })
+
+  test("rejects promotion when the Plan topology changes without a workflow revision", async () => {
+    await run(
+      Effect.gen(function* () {
+        const workflow = yield* GraphWorkflowState.Service
+        const storage = yield* GraphStorage.Service
+        yield* workflow.setMode({ sessionID: SID, projectID: PID, mode: "autopilot", expectedRevision: 0 })
+        yield* storage.node.update(atomicA.id, { status: "verified", testStatus: "passed" })
+        yield* storage.node.update(atomicB.id, { status: "verified", testStatus: "passed" })
+        const completed = yield* workflow.resetPlan({
+          sessionID: SID,
+          projectID: PID,
+          graph: {
+            ...workflowGraph,
+            nodes: workflowGraph.nodes.map((item) =>
+              item.type === "atomic" ? { ...item, status: "verified" as const, testStatus: "passed" as const } : item,
+            ),
+          },
+        })
+        const expectedPlanHash = (yield* storage.planView({ projectID: PID, sessionID: SID })).planHash
+        yield* storage.edge.delete("edge-module-a" as EdgeID)
+        const actualPlanHash = (yield* storage.planView({ projectID: PID, sessionID: SID })).planHash
+
+        const conflict = yield* workflow
+          .promote({ projectID: PID, sessionID: SID, expectedRevision: completed.revision, expectedPlanHash })
+          .pipe(Effect.flip)
+
+        expect(conflict).toMatchObject({
+          _tag: "GraphWorkflowState.PlanConflict",
+          expectedPlanHash,
+          actualPlanHash,
+        })
+        expect((yield* workflow.get(SID))?.revision).toBe(completed.revision)
+        expect(yield* storage.version.list({ projectID: PID })).toHaveLength(0)
+        expect((yield* storage.main({ projectID: PID })).nodes).toHaveLength(0)
+      }),
+    )
+  })
 })

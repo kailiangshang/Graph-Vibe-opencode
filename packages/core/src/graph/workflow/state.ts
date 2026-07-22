@@ -8,6 +8,7 @@ import { LayerNode } from "../../effect/layer-node"
 import type { ProjectV2 } from "../../project"
 import * as GraphStorage from "../storage"
 import type { GraphView, NodeID } from "../storage"
+import { GraphHash } from "../hash"
 import { GraphNodeTable } from "../sql"
 import { nearestCompositeIDs, orderedAtomicNodes } from "./order"
 import { GraphWorkflowStateTable } from "./state.sql"
@@ -63,6 +64,11 @@ export class CheckpointNotPending extends Schema.TaggedErrorClass<CheckpointNotP
 export class PromotionBlocked extends Schema.TaggedErrorClass<PromotionBlocked>()(
   "GraphWorkflowState.PromotionBlocked",
   { reason: Schema.Literals(["mode_required", "checkpoint_pending", "workflow_incomplete"]) },
+) {}
+
+export class PlanConflict extends Schema.TaggedErrorClass<PlanConflict>()(
+  "GraphWorkflowState.PlanConflict",
+  { expectedPlanHash: Schema.String, actualPlanHash: Schema.String },
 ) {}
 
 export interface Interface {
@@ -148,7 +154,7 @@ export interface Interface {
   }) => Effect.Effect<State>
   readonly promote: (
     input: GraphStorage.PromoteInput,
-  ) => Effect.Effect<GraphStorage.PromoteResult, PromotionBlocked | RevisionConflict>
+  ) => Effect.Effect<GraphStorage.PromoteResult, PromotionBlocked | RevisionConflict | PlanConflict>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/GraphWorkflowState") {}
@@ -814,6 +820,12 @@ export const layer = Layer.effect(
             }
             if (!current?.mode) return yield* new PromotionBlocked({ reason: "mode_required" })
             const graph = yield* storage.currentPlan({ sessionID: input.sessionID })
+            if (input.expectedPlanHash !== undefined) {
+              const actualPlanHash = GraphHash.digest(graph)
+              if (actualPlanHash !== input.expectedPlanHash) {
+                return yield* new PlanConflict({ expectedPlanHash: input.expectedPlanHash, actualPlanHash })
+              }
+            }
             const tasks = orderedAtomicNodes(graph)
             if (
               current.currentNodeID !== null ||

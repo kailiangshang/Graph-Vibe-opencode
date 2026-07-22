@@ -187,6 +187,7 @@ describe("GraphStorage.promote + version", () => {
         const n1 = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "A", level: "L2" })
         const n2 = yield* g.node.create({ projectID: PID, sessionID: SID, type: "atomic", name: "B", level: "L2" })
         yield* g.edge.create({ projectID: PID, sessionID: SID, sourceID: n1, targetID: n2, relation: "uses" })
+        const livePlan = yield* g.planView({ projectID: PID, sessionID: SID })
         const res = yield* g.promote({ projectID: PID, sessionID: SID, message: "merge 1" })
         expect(res.versionNumber).toBe(1)
         expect(res.nodes).toBe(2)
@@ -200,6 +201,8 @@ describe("GraphStorage.promote + version", () => {
         expect(plan.source).toBe("version")
         expect(plan.versionNumber).toBe(1)
         expect(plan.publishedAt).toBeNumber()
+        expect(plan.planHash).toBe(livePlan.planHash)
+        expect(plan.planHash).toMatch(/^sha256:[a-f0-9]{64}$/)
         expect(plan.nodes.map((node) => node.id)).toEqual([n1, n2])
         expect(plan.edges[0]).toMatchObject({ sourceID: n1, targetID: n2, relation: "uses" })
         const vs = yield* g.version.list({ projectID: PID })
@@ -238,6 +241,7 @@ describe("GraphStorage.promote + version", () => {
         const plan = yield* g.planView({ projectID: PID, sessionID: SID })
         expect(plan).toMatchObject({ source: "currentPlan", versionNumber: null, publishedAt: null })
         expect(plan.nodes.map((node) => node.id)).toEqual([liveID])
+        expect(plan.planHash).toMatch(/^sha256:[a-f0-9]{64}$/)
       }),
     )
   })
@@ -446,6 +450,7 @@ describe("GraphStorage.promote + version", () => {
           source: "currentPlan",
           versionNumber: null,
           publishedAt: null,
+          planHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         })
       }),
     )

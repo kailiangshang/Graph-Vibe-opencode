@@ -8,6 +8,7 @@ import { ProjectV2 } from "../project"
 import { SessionSchema } from "../session/schema"
 import { SessionTable } from "../session/sql"
 import { GraphNodeTable, GraphEdgeTable, GraphVersionTable } from "./sql"
+import { GraphHash } from "./hash"
 import { Graph } from "@opencode-ai/schema/graph"
 import type {
   NodeType,
@@ -87,6 +88,7 @@ export interface SessionPlanView extends GraphView {
   readonly source: "currentPlan" | "version"
   readonly versionNumber: number | null
   readonly publishedAt: number | null
+  readonly planHash: string
 }
 
 export interface SessionVersion extends Omit<VersionRow, "snapshot"> {
@@ -246,6 +248,7 @@ export const PromoteInput = Schema.Struct({
   sessionID: Schema.String,
   message: Schema.String.pipe(Schema.optional),
   expectedRevision: Schema.Number.pipe(Schema.optional),
+  expectedPlanHash: Schema.String.pipe(Schema.optional),
 }).annotate({ identifier: "GraphStorage.PromoteInput" })
 export type PromoteInput = typeof PromoteInput.Type
 
@@ -634,12 +637,14 @@ export const layer = Layer.effect(
     }) {
       const nodes = yield* nodeList({ projectID: input.projectID, sessionID: input.sessionID })
       if (nodes.length > 0) {
+        const edges = yield* edgeList({ projectID: input.projectID, sessionID: input.sessionID })
         return {
           nodes,
-          edges: yield* edgeList({ projectID: input.projectID, sessionID: input.sessionID }),
+          edges,
           source: "currentPlan" as const,
           versionNumber: null,
           publishedAt: null,
+          planHash: GraphHash.digest({ nodes, edges }),
         }
       }
       const version = yield* versionLatestForSession(input)
@@ -649,9 +654,17 @@ export const layer = Layer.effect(
           source: "version" as const,
           versionNumber: version.versionNumber,
           publishedAt: version.timeCreated,
+          planHash: GraphHash.digest(version.snapshot),
         }
       }
-      return { nodes: [], edges: [], source: "currentPlan" as const, versionNumber: null, publishedAt: null }
+      const graph = { nodes: [], edges: [] }
+      return {
+        ...graph,
+        source: "currentPlan" as const,
+        versionNumber: null,
+        publishedAt: null,
+        planHash: GraphHash.digest(graph),
+      }
     })
 
     return Service.of({
