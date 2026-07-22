@@ -1,6 +1,6 @@
 export * as GraphStorage from "./storage"
 
-import { and, desc, eq, isNull, ne } from "drizzle-orm"
+import { and, desc, eq, isNull, ne, or } from "drizzle-orm"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../database/database"
 import { LayerNode } from "../effect/layer-node"
@@ -162,10 +162,23 @@ const Snapshot = Schema.Struct({
 
 const SessionEnhancementMetadata = Schema.Struct({
   productMigration: Schema.Struct({
-    graphEnhancement: Schema.Struct({ versionID: VersionID }),
+    graphEnhancement: Schema.Struct({ id: Schema.String, versionID: VersionID }),
   }),
 })
 const sessionEnhancementMetadata = Schema.decodeUnknownOption(SessionEnhancementMetadata)
+
+function migrationEnhancementVersionID(sessionID: string, metadata: unknown) {
+  const decoded = sessionEnhancementMetadata(metadata)
+  if (Option.isNone(decoded)) return undefined
+  const enhancement = decoded.value.productMigration.graphEnhancement
+  if (enhancement.id !== deterministicMigrationID("geh", sessionID)) return undefined
+  if (enhancement.versionID !== deterministicMigrationID("gvr", enhancement.id)) return undefined
+  return enhancement.versionID
+}
+
+function deterministicMigrationID(prefix: "geh" | "gvr", identity: string) {
+  return `${prefix}_${new Bun.CryptoHasher("sha256").update(`${prefix}\0${identity}`).digest("hex")}`
+}
 
 export const NodeCreate = Schema.Struct({
   projectID: ProjectV2.ID,
@@ -596,15 +609,15 @@ export const layer = Layer.effect(
         ))
         .get()
         .pipe(Effect.orDie)
-      const enhancement = sessionEnhancementMetadata(session?.metadata)
+      const enhancementVersionID = migrationEnhancementVersionID(input.sessionID, session?.metadata)
       const r = yield* db
         .select()
         .from(GraphVersionTable)
         .where(and(
           eq(GraphVersionTable.project_id, input.projectID),
           eq(GraphVersionTable.session_id, input.sessionID),
-          ...(Option.isSome(enhancement)
-            ? [ne(GraphVersionTable.id, enhancement.value.productMigration.graphEnhancement.versionID)]
+          ...(enhancementVersionID
+            ? [or(ne(GraphVersionTable.id, enhancementVersionID), ne(GraphVersionTable.time_created, 0))]
             : []),
         ))
         .orderBy(desc(GraphVersionTable.version_number))

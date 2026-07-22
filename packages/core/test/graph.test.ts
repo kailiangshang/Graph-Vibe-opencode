@@ -262,8 +262,10 @@ describe("GraphStorage.promote + version", () => {
         const second = canonicalNode("gnd_canonical_second", "Second")
         const linked = canonicalEdge("ged_canonical", first.id, second.id)
         const enhancement = canonicalNode("gnd_enhancement", "Enhancement")
+        const enhancementID = deterministicID("geh", SID)
+        const enhancementVersionID = deterministicID("gvr", enhancementID) as GraphStorage.VersionID
         yield* database.db.update(SessionTable).set({
-          metadata: { productMigration: { graphEnhancement: { versionID: "gvr_enhancement" } } },
+          metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID: enhancementVersionID } } },
         }).where(eq(SessionTable.id, SID)).run().pipe(Effect.orDie)
         yield* database.db.insert(GraphVersionTable).values([
           {
@@ -281,12 +283,13 @@ describe("GraphStorage.promote + version", () => {
             snapshot: { nodes: [first, second], edges: [linked] },
           },
           {
-            id: "gvr_enhancement" as GraphStorage.VersionID,
+            id: enhancementVersionID,
             project_id: PID,
             session_id: SID,
             version_number: 3,
             message: "generated enhancement",
             snapshot: { nodes: [enhancement], edges: [] },
+            time_created: 0,
           },
           {
             id: "gvr_other_session" as GraphStorage.VersionID,
@@ -325,6 +328,90 @@ describe("GraphStorage.promote + version", () => {
         const version = yield* g.version.latestForSession({ projectID: PID, sessionID: SID })
         expect(version?.versionNumber).toBe(1)
         expect(version?.snapshot.nodes.map((node) => node.id)).toEqual([nodeID])
+      }),
+    )
+  })
+
+  test("latestForSession does not trust a forged enhancement identity", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const database = yield* Database.Service
+        const enhancementID = "geh_forged"
+        const versionID = deterministicID("gvr", enhancementID) as GraphStorage.VersionID
+        const forged = canonicalNode("gnd_forged", "Forged metadata publication")
+        yield* database.db.update(SessionTable).set({
+          metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID } } },
+        }).where(eq(SessionTable.id, SID)).run().pipe(Effect.orDie)
+        yield* database.db.insert(GraphVersionTable).values({
+          id: versionID,
+          project_id: PID,
+          session_id: SID,
+          version_number: 1,
+          message: "normal publication",
+          snapshot: { nodes: [forged], edges: [] },
+          time_created: 0,
+        }).run().pipe(Effect.orDie)
+
+        const version = yield* g.version.latestForSession({ projectID: PID, sessionID: SID })
+        expect(version?.id).toBe(versionID)
+        expect(version?.snapshot.nodes.map((node) => node.id)).toEqual([forged.id])
+      }),
+    )
+  })
+
+  test("latestForSession does not trust a mismatched enhancement version ID", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const database = yield* Database.Service
+        const enhancementID = deterministicID("geh", SID)
+        const versionID = deterministicID("gvr", "geh_other") as GraphStorage.VersionID
+        const forged = canonicalNode("gnd_forged_version", "Forged version publication")
+        yield* database.db.update(SessionTable).set({
+          metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID } } },
+        }).where(eq(SessionTable.id, SID)).run().pipe(Effect.orDie)
+        yield* database.db.insert(GraphVersionTable).values({
+          id: versionID,
+          project_id: PID,
+          session_id: SID,
+          version_number: 1,
+          message: "normal publication",
+          snapshot: { nodes: [forged], edges: [] },
+          time_created: 0,
+        }).run().pipe(Effect.orDie)
+
+        const version = yield* g.version.latestForSession({ projectID: PID, sessionID: SID })
+        expect(version?.id).toBe(versionID)
+        expect(version?.snapshot.nodes.map((node) => node.id)).toEqual([forged.id])
+      }),
+    )
+  })
+
+  test("latestForSession does not hide a non-enhancement version referenced by valid metadata", async () => {
+    await run(
+      Effect.gen(function* () {
+        const g = yield* GraphStorage.Service
+        const database = yield* Database.Service
+        const enhancementID = deterministicID("geh", SID)
+        const versionID = deterministicID("gvr", enhancementID) as GraphStorage.VersionID
+        const publication = canonicalNode("gnd_metadata_pointer", "Metadata pointer publication")
+        yield* database.db.update(SessionTable).set({
+          metadata: { productMigration: { graphEnhancement: { id: enhancementID, versionID } } },
+        }).where(eq(SessionTable.id, SID)).run().pipe(Effect.orDie)
+        yield* database.db.insert(GraphVersionTable).values({
+          id: versionID,
+          project_id: PID,
+          session_id: SID,
+          version_number: 1,
+          message: "normal publication",
+          snapshot: { nodes: [publication], edges: [] },
+          time_created: 1,
+        }).run().pipe(Effect.orDie)
+
+        const version = yield* g.version.latestForSession({ projectID: PID, sessionID: SID })
+        expect(version?.id).toBe(versionID)
+        expect(version?.snapshot.nodes.map((node) => node.id)).toEqual([publication.id])
       }),
     )
   })
@@ -416,4 +503,8 @@ function canonicalEdge(id: string, sourceID: GraphStorage.NodeID, targetID: Grap
     confidence: 1,
     timeCreated: 3,
   }
+}
+
+function deterministicID(prefix: "geh" | "gvr", identity: string) {
+  return `${prefix}_${new Bun.CryptoHasher("sha256").update(`${prefix}\0${identity}`).digest("hex")}`
 }

@@ -3,8 +3,12 @@ import type {
   GraphToolRun,
   GraphVersion,
   GraphWorkflow,
+  GraphWorkflowApproveErrors,
   GraphWorkflowActiveOperation,
+  GraphWorkflowErrors,
   GraphWorkflowModeError,
+  GraphWorkflowModeErrors,
+  GraphWorkflowPauseErrors,
   GraphWorkflowTask,
 } from "../../src/v2/gen/types.gen.js"
 import type { Graph } from "../../src/v2/gen/sdk.gen.js"
@@ -75,6 +79,11 @@ const activeOperation = {
 } satisfies GraphWorkflowActiveOperation
 
 const modeError: GraphWorkflowModeError = activeOperation
+const internalServerError = { _tag: "InternalServerError" } as const
+const workflowServerError: GraphWorkflowErrors[500] = internalServerError
+const modeServerError: GraphWorkflowModeErrors[500] = internalServerError
+const approveServerError: GraphWorkflowApproveErrors[500] = internalServerError
+const pauseServerError: GraphWorkflowPauseErrors[500] = internalServerError
 
 declare const graph: Graph
 graph.workflow
@@ -89,3 +98,7 @@ void toolRun
 void evidence
 void workflow
 void modeError
+void workflowServerError
+void modeServerError
+void approveServerError
+void pauseServerError

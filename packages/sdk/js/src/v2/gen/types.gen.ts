@@ -9406,6 +9406,10 @@ export type GraphWorkflowErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type GraphWorkflowError = GraphWorkflowErrors[keyof GraphWorkflowErrors]
@@ -9443,6 +9447,10 @@ export type GraphWorkflowModeErrors = {
    * GraphWorkflowRevisionConflict | GraphWorkflowActiveOperation
    */
   409: GraphWorkflowRevisionConflict | GraphWorkflowActiveOperation
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type GraphWorkflowModeError = GraphWorkflowModeErrors[keyof GraphWorkflowModeErrors]
@@ -9480,6 +9488,10 @@ export type GraphWorkflowApproveErrors = {
    * GraphWorkflowRevisionConflict
    */
   409: GraphWorkflowRevisionConflict
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type GraphWorkflowApproveError = GraphWorkflowApproveErrors[keyof GraphWorkflowApproveErrors]
@@ -9517,6 +9529,10 @@ export type GraphWorkflowPauseErrors = {
    * GraphWorkflowRevisionConflict
    */
   409: GraphWorkflowRevisionConflict
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type GraphWorkflowPauseError = GraphWorkflowPauseErrors[keyof GraphWorkflowPauseErrors]
