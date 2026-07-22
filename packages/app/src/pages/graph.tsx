@@ -157,10 +157,11 @@ export default function GraphPage() {
 
   const promoteMutation = createMutation(() => ({
     mutationFn: async () => {
+      const sessionID = params.id!
       const response = await sdk().client.graph.promote({
-        session: params.id!,
+        session: sessionID,
         directory: directory(),
-        graphPromotePayload: { message: "Publish completed graph plan" },
+        graphPromotePayload: { message: `Published from ${sync().session.get(sessionID)?.title ?? sessionID}` },
       })
       if (response.error || !response.data) throw response.error ?? { _tag: "UnexpectedPromotionResponse" }
       return response.data

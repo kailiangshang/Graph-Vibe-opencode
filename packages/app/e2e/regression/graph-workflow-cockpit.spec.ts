@@ -185,6 +185,16 @@ test("publishes a completed Plan through confirmation and reloads its version-ba
   })
   await expect(confirm).toBeDisabled()
   await expect.poll(() => state.promotions).toBe(1)
+  expect(state.promotionMessages).toEqual(["Published from Graph workflow cockpit"])
+  await expect(page.locator(".graph-source-switch button").filter({ hasText: /^Plan$/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  )
+  await expect(page.locator(".graph-source-switch button").filter({ hasText: /^Main$/ })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  )
+  await expect(page.getByText("Released capability")).toHaveCount(0)
   state.releasePromotion()
 
   await expect(page.getByRole("button", { name: "Main", exact: true })).toHaveAttribute("aria-pressed", "true")
@@ -242,6 +252,7 @@ async function setup(
   let view = initialView
   let approvals = 0
   let promotions = 0
+  const promotionMessages: Array<string | null> = []
   let published = false
   const reads = { plan: 0, workflow: 0, main: 0 }
   let releaseWorkflow = () => {}
@@ -258,6 +269,9 @@ async function setup(
     },
     get promotions() {
       return promotions
+    },
+    get promotionMessages() {
+      return [...promotionMessages]
     },
     get reads() {
       return { ...reads }
@@ -333,6 +347,12 @@ async function setup(
       return route.fulfill(json(options.emptyMain && !published ? { nodes: [], edges: [] } : mainGraph))
     }
     if (url.pathname === "/graph/current-plan/promote" && route.request().method() === "POST") {
+      const body: unknown = route.request().postDataJSON()
+      promotionMessages.push(
+        body && typeof body === "object" && "message" in body && typeof body.message === "string"
+          ? body.message
+          : null,
+      )
       promotions++
       if (options.promotion === "delayed") await promotionReady
       if (options.promotion === "failure")
