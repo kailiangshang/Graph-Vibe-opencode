@@ -265,7 +265,7 @@ test("opens Main when its topology arrives after a concurrent publication", asyn
 
   await expect(page.getByRole("button", { name: "Plan", exact: true })).toHaveAttribute("aria-pressed", "true")
   await expect(page.getByRole("status").filter({ hasText: "Main is still refreshing" })).toBeVisible()
-  await state.publishMain()
+  state.publishMain()
   await expect(page.getByRole("button", { name: "Main", exact: true })).toHaveAttribute("aria-pressed", "true")
   await expect(page.locator(".graph-task").filter({ hasText: "Released capability" })).toBeVisible()
 })
